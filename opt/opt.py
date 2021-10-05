@@ -213,7 +213,7 @@ for epoch_id in range(args.n_epochs):
     def train_step():
         print('Train step')
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
-        stats = {"mse" : 0.0, "psnr" : 0.0}
+        stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         dset.shuffle_rays()
         for iter_id, batch_begin in pbar:
             batch_end = min(batch_begin + args.batch_size, epoch_size)
@@ -230,7 +230,7 @@ for epoch_id in range(args.n_epochs):
             psnr = -10.0 * math.log10(mse_num)
             stats['mse'] += mse_num
             stats['psnr'] += psnr
-            #  stats['invsqr_mse'] += 1.0 / mse_num ** 2
+            stats['invsqr_mse'] += 1.0 / mse_num ** 2
 
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
@@ -253,13 +253,11 @@ for epoch_id in range(args.n_epochs):
     train_step()
     gc.collect()
 
-    #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npy')
+    #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
     # Overwrite prev checkpoints since they are very huge
-    ckpt_path = path.join(args.train_dir, f'ckpt.npy')
+    ckpt_path = path.join(args.train_dir, 'ckpt.npz')
     print('Saving', ckpt_path)
-    np.savez(ckpt_path,
-             links=grid.links.cpu().numpy(),
-             data=grid.data.data.cpu().numpy())
+    grid.save(ckpt_path)
 
     #  if epoch_id == 0:
     #      print('Upsampling!!!')

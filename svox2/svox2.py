@@ -1,4 +1,4 @@
-from .utils import isqrt, eval_sh_bases, gen_morton, is_pow2, _get_c_extension
+from .utils import isqrt, eval_sh_bases, gen_morton, is_pow2, MAX_SH_BASIS, _get_c_extension
 import torch
 from torch import nn, autograd
 import torch.nn.functional as F
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from warnings import warn
 from functools import reduce
 from tqdm import tqdm
+import numpy as np
 _C = _get_c_extension()
 
 @dataclass
@@ -152,7 +153,8 @@ class SparseGrid(nn.Module):
         super().__init__()
 
         assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
-        assert basis_dim >= 1 and basis_dim <= 16, "basis_dim 1-16 supported"
+        assert basis_dim >= 1 and basis_dim <= MAX_SH_BASIS, \
+                f"basis_dim 1-{MAX_SH_BASIS} supported"
         self.basis_dim = basis_dim
 
         if isinstance(reso, int):
@@ -477,11 +479,11 @@ class SparseGrid(nn.Module):
                 return self._volume_render_gradcheck_nn(rays)
 
     def resample(self,
-                 reso : Union[int, List[int]]=128,
+                 reso : Union[int, List[int]],
                  sigma_thresh : float = 5.0,
                  dilate : bool = True):
         """
-        Resample and sparsify the grid
+        Resample and sparsify the grid; used to increase the resolution
         :param reso: int or List[int, int, int], resolution for resampled grid, as in the constructor
         :param sigma_thresh: float, threshold to apply on the sigma
         :param dilate: bool, if true applies dilation of size 1 to the 3D mask for nodes to keep in the grid
@@ -533,6 +535,43 @@ class SparseGrid(nn.Module):
         self.data = nn.Parameter(sample_vals.to(device=device))
         self.links = init_links.view(reso).to(device=device)
 
+    def resize(self, basis_dim : int):
+        """
+        Modify the size of the data stored in the voxels. Called expand/shrink in svox 1.
+
+        :param basis_dim: new basis dimension, must be square number
+        """
+        assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
+        assert basis_dim >= 1 and basis_dim <= MAX_SH_BASIS, \
+                f"basis_dim 1-{MAX_SH_BASIS} supported"
+        old_basis_dim = self.basis_dim
+        self.basis_dim = basis_dim
+        device = self.data.device
+        old_data = self.data.data.cpu()
+
+        shrinking = basis_dim < old_basis_dim
+        data_dim = 3 * basis_dim + 1
+        old_data_dim = 3 * old_basis_dim + 1
+        sigma_arr = torch.tensor([0])
+        if shrinking:
+            shift = old_basis_dim
+            arr = torch.arange(basis_dim) + 1
+            remap = torch.cat([sigma_arr, arr, shift + arr, 2 * shift + arr])
+        else:
+            shift = basis_dim
+            arr = torch.arange(old_basis_dim) + 1
+            remap = torch.cat([sigma_arr, arr, shift + arr, 2 * shift + arr])
+
+        del self.data
+        new_data = torch.zeros((old_data.size(0), 3 * basis_dim + 1), device='cpu')
+        if shrinking:
+            new_data[:] = old_data[..., remap]
+        else:
+            new_data[..., remap] = old_data
+        new_data = new_data.to(device=device)
+        self.data = nn.Parameter(new_data)
+
+
     def world2grid(self, points):
         """
         World coordinates to grid coordinates. Grid coordinates are
@@ -562,6 +601,94 @@ class SparseGrid(nn.Module):
         return torch.addcmul(roffset.to(device=points.device),
                              points,
                              rscaling.to(device=points.device))
+
+    def save(self, path : str, compress : bool = False):
+        """
+        Save to a path
+        """
+        save_fn = np.savez_compressed if compress else np.savez
+        save_fn(path,
+                radius=self.radius.numpy(),
+                center=self.center.numpy(),
+                links=self.links.cpu().numpy(),
+                data=self.data.data.cpu().numpy().astype(np.float16))
+
+    @classmethod
+    def load(cls, path : str, device : Union[torch.device, str]="cpu"):
+        """
+        Load from path
+        """
+        z = np.load(path)
+        data = z.f.data
+        links = z.f.links
+        basis_dim = (data.shape[1] - 1) // 3
+        radius = z.f.radius.tolist() if 'radius' in z.files else [1.0, 1.0, 1.0]
+        center = z.f.center.tolist() if 'center' in z.files else [0.0, 0.0, 0.0]
+        grid = cls(1,
+            radius=radius,
+            center=center,
+            basis_dim = basis_dim,
+            use_z_order = False,
+            device='cpu')
+        if data.dtype != np.float32:
+            data = data.astype(np.float32)
+        data = torch.from_numpy(data).to(device=device)
+        grid.data = nn.Parameter(data)
+        grid.links = torch.from_numpy(links).to(device=device)
+        grid.capacity = grid.data.size(0)
+        return grid
+
+    def to_svox1(self, device : Union[torch.device, str, None]=None):
+        """
+        Convert the grid to a svox 1 octree. Requires svox (pip install svox)
+
+        :param device: device to put the octree. None = grid data's device
+        """
+        assert self.is_cubic_pow2, \
+               "Grid must be cubic and power-of-2 to be compatible with svox octree"
+        if device is None:
+            device = self.data.device
+        import svox
+        n_refine = int(np.log2(self.links.size(0))) - 1
+
+        t = svox.N3Tree(data_format=f'SH{self.basis_dim}',
+                        init_refine=0,
+                        radius=self.radius.tolist(),
+                        center=self.center.tolist(),
+                        device=device)
+
+        curr_reso = self.links.shape
+        dtype = torch.float32
+        X = (torch.arange(curr_reso[0], dtype=dtype, device=device) + 0.5) / curr_reso[0]
+        Y = (torch.arange(curr_reso[1], dtype=dtype, device=device) + 0.5) / curr_reso[0]
+        Z = (torch.arange(curr_reso[2], dtype=dtype, device=device) + 0.5) / curr_reso[0]
+        X, Y, Z = torch.meshgrid(X, Y, Z)
+        points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
+
+        mask = self.links.view(-1) >= 0
+        points = points[mask.to(device=device)]
+        index = svox.LocalIndex(points)
+        print('n_refine', n_refine)
+        for i in tqdm(range(n_refine)):
+            t[index].refine()
+
+        t[index, :-1] = self.data.data[:, 1:].to(device=device)
+        t[index, -1] = self.data.data[:, 0].to(device=device)
+        return t
+
+
+    def __repr__(self):
+        return (f"svox2.SparseGrid(basis_dim={self.basis_dim}, " +
+                f"reso={list(self.links.shape)}, " +
+                f"capacity:{self.data.size(0)})")
+
+    def is_cubic_pow2(self):
+        """
+        Check if the current grid is cubic (same in all dims) with power-of-2 size.
+        This allows for conversion to svox 1 and Z-order curve (Morton code)
+        """
+        reso = self.links.shape
+        return (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0]))
 
     def _to_cpp(self, grid_coords : bool = False):
         """

@@ -106,6 +106,7 @@ C4 = [
     0.6258357354491761,
 ]
 
+MAX_SH_BASIS = 16
 def eval_sh_bases(basis_dim : int, dirs : torch.Tensor):
     """
     Evaluate spherical harmonics bases at unit directions,
