@@ -111,7 +111,7 @@ def eval_sh_bases(basis_dim : int, dirs : torch.Tensor):
     """
     Evaluate spherical harmonics bases at unit directions,
     without taking linear combination.
-    At each point, the final result may the be 
+    At each point, the final result may the be
     obtained through simple multiplication.
 
     :param basis_dim: int SH basis dim. Currently, 1-25 square numbers supported
@@ -155,4 +155,75 @@ def eval_sh_bases(basis_dim : int, dirs : torch.Tensor):
                     result[..., 23] = C4[7] * xz * (xx - 3 * yy);
                     result[..., 24] = C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy));
     return result
+
+# Cubemaps
+def cubemap2xyz(index : torch.Tensor, uv : torch.Tensor):
+    """
+    Cubemap coords to directional vector (nor normalized, max dim=1)
+
+    :param index: integer Tensor (B,), 0-5 for face (x+, x-, y+, y-, z+, z-)
+    :param uv: float Tensor (B, 2), [-1, 1]^2 xy coord in each face
+
+    :return: float tensor (B, 3), directions
+    """
+    xyz = torch.empty((uv.size(0), 3), dtype=uv.dtype, device=uv.device)
+    ones = torch.ones_like(uv[:, 0])
+    m = index == 0
+    xyz[m] = torch.stack([ones[m], uv[m, 1], -uv[m, 0]], dim=-1)
+    m = index == 1
+    xyz[m] = torch.stack([-ones[m], uv[m, 1], uv[m, 0]], dim=-1)
+    m = index == 2
+    xyz[m] = torch.stack([uv[m, 0], ones[m], -uv[m, 1]], dim=-1)
+    m = index == 3
+    xyz[m] = torch.stack([uv[m, 0], -ones[m], uv[m, 1]], dim=-1)
+    m = index == 4
+    xyz[m] = torch.stack([uv[m, 0], uv[m, 1], ones[m]], dim=-1)
+    m = index == 5
+    xyz[m] = torch.stack([-uv[m, 0], uv[m, 1], -ones[m]], dim=-1)
+    return xyz
+
+def xyz2cubemap(xyz :  torch.Tensor):
+    """
+    Vector (not necessarily normalized) to cubemap coords
+
+    :param xyz: float tensor (B, 3), directions
+
+    :return: index, long Tensor (B,), 0-5 for face (x+, x-, y+, y-, z+, z-);
+             uv, float Tensor (B, 2), [-1, 1]^2 xy coord in each face
+    """
+    x, y, z = xyz.unbind(-1)
+    abs_x = torch.abs(x)
+    abs_y = torch.abs(y)
+    abs_z = torch.abs(z)
+    x_pos = x > 0
+    y_pos = y > 0
+    z_pos = z > 0
+
+    max_axis = torch.max(torch.max(abs_x, abs_y), abs_z)
+    x_max_mask = (abs_x >= abs_y) & (abs_x >= abs_z)
+    y_max_mask = (~x_max_mask) & (abs_y >= abs_z)
+    z_max_mask = (~x_max_mask) & (~y_max_mask)
+
+    index = torch.empty(x.shape, dtype=torch.long, device=xyz.device)
+    uv = torch.empty_like(xyz[:, :2])
+    uv[x_max_mask, 0] = z[x_max_mask]
+    uv[x_max_mask & x_pos, 0] *= -1
+    uv[x_max_mask, 1] = y[x_max_mask]
+    index[x_max_mask & x_pos] = 0
+    index[x_max_mask & ~x_pos] = 1
+
+    uv[y_max_mask, 0] = x[y_max_mask]
+    uv[y_max_mask, 1] = z[y_max_mask]
+    uv[y_max_mask & y_pos, 1] *= -1
+    index[y_max_mask & y_pos] = 2
+    index[y_max_mask & ~y_pos] = 3
+
+    uv[z_max_mask, 0] = x[z_max_mask]
+    uv[z_max_mask & ~z_pos, 0] *= -1
+    uv[z_max_mask, 1] = y[z_max_mask]
+    index[z_max_mask & z_pos] = 4
+    index[z_max_mask & ~z_pos] = 5
+
+    uv = uv / max_axis.unsqueeze(-1)
+    return index, uv
 

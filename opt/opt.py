@@ -2,6 +2,7 @@
 # Then, python opt.py <path_to>/nerf_synthetic/<scene> -t ckpt/<some_name>
 # or use launching script:   sh launch.sh <EXP_NAME> <GPU> <DATA_DIR>
 import torch
+import torch.cuda
 import torch.nn.functional as F
 import svox2
 import json
@@ -12,6 +13,8 @@ import gc
 import numpy as np
 import math
 import argparse
+from util.dataset import Dataset
+from util.util import Timing
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -58,114 +61,6 @@ args = parser.parse_args()
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
-class Rays(NamedTuple):
-    origins: torch.Tensor
-    dirs: torch.Tensor
-    gt: torch.Tensor
-
-class Dataset():
-    """
-    NeRF dataset loader
-    """
-    focal: float
-    c2w: torch.Tensor # (n_images, 4, 4)
-    gt: torch.Tensor  # (n_images, h, w, 3)
-    h: int
-    w: int
-    n_images: int
-    rays: Optional[Rays]
-    split: str
-
-    def __init__(self, root, split,
-                 device : Union[str, torch.device]='cpu',
-                 scene_scale : float = 1.0/1.5,
-                 permutation : bool = False):
-        self.device = device
-        self.permutation = permutation
-        all_c2w = []
-        all_gt = []
-
-        data_path = path.join(root, split)
-        data_json = path.join(root, 'transforms_' + split + '.json')
-        print('LOAD DATA', data_path)
-        j = json.load(open(data_json, 'r'))
-
-        for frame in tqdm(j['frames']):
-            fpath = path.join(data_path, path.basename(frame['file_path']) + '.png')
-            c2w = torch.tensor(frame['transform_matrix'], dtype=torch.float32)
-
-            im_gt = imageio.imread(fpath).astype(np.float32) / 255.0
-            im_gt = im_gt[..., :3] * im_gt[..., 3:] + (1.0 - im_gt[..., 3:])
-            all_c2w.append(c2w)
-            all_gt.append(torch.from_numpy(im_gt))
-        self.focal = float(0.5 * all_gt[0].shape[1] / np.tan(0.5 * j['camera_angle_x']))
-        self.c2w = torch.stack(all_c2w)
-        self.gt = torch.stack(all_gt)
-        self.n_images, self.h, self.w, _ = self.gt.shape
-        self.split = split
-
-        # Generate rays
-        origins = self.c2w[:, None, :3, 3].expand(-1, self.h * self.w, -1).contiguous()
-        yy, xx = torch.meshgrid(
-            torch.arange(self.h, dtype=torch.float32),
-            torch.arange(self.w, dtype=torch.float32),
-        )
-        xx = (xx - self.w * 0.5) / self.focal
-        yy = (yy - self.h * 0.5) / self.focal
-        zz = torch.ones_like(xx)
-        dirs = torch.stack((xx, -yy, -zz), dim=-1)  # OpenGL convention (NeRF)
-        dirs /= torch.norm(dirs, dim=-1, keepdim=True)
-        dirs = dirs.reshape(1, -1, 3, 1)
-        del xx, yy, zz
-        dirs = (self.c2w[:, None, :3, :3] @ dirs)[..., 0]
-
-        gt = self.gt.reshape(self.n_images, -1, 3)
-        origins = origins * scene_scale
-        if split == 'train':
-            origins = origins.view(-1, 3)
-            dirs = dirs.view(-1, 3)
-            gt = gt.view(-1, 3)
-
-        self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
-        self.rays = self.rays_init
-
-    def shuffle_rays(self):
-        """
-        Shuffle all rays
-        """
-        if self.split == 'train':
-            n_rays = self.rays.origins.size(0)
-            if self.permutation:
-                print("Shuffle rays")
-                perm = torch.randperm(n_rays)
-            else:
-                print("Randomize rays")
-                perm = torch.randint(0, n_rays, (n_rays,))
-            self.rays = Rays(origins = self.rays_init.origins[perm].to(device=self.device),
-                    dirs = self.rays_init.dirs[perm].to(device=self.device),
-                    gt = self.rays_init.gt[perm].to(device=self.device))
-
-class Timing:
-    """
-    Timing environment
-    usage:
-    with Timing("message"):
-        your commands here
-    will print CUDA runtime in ms
-    """
-    def __init__(self, name):
-        self.name = name
-
-    def __enter__(self):
-        self.start = torch.cuda.Event(enable_timing=True)
-        self.end = torch.cuda.Event(enable_timing=True)
-        self.start.record()
-
-    def __exit__(self, type, value, traceback):
-        self.end.record()
-        torch.cuda.synchronize()
-        print(self.name, 'elapsed', self.start.elapsed_time(self.end), 'ms')
-
 
 torch.manual_seed(20200823)
 np.random.seed(20200823)
@@ -199,10 +94,12 @@ for epoch_id in range(args.n_epochs):
             im_size = dset_test.h * dset_test.w
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
             N_IMGS_TO_SAVE = 5
-            img_save_interval = dset_test.n_images // N_IMGS_TO_SAVE
+            N_IMGS_TO_EVAL = 20
+            img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
+            img_save_interval = img_eval_interval * (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
             gstep_id = epoch_id * batches_per_epoch
             n_images_gen = 0
-            for img_id in tqdm(range(0, dset_test.n_images, img_save_interval)):
+            for img_id in tqdm(range(0, dset_test.n_images, img_eval_interval)):
                 all_rgbs = []
                 all_mses = []
                 for batch_begin in range(0, im_size, args.eval_batch_size):
@@ -215,10 +112,11 @@ for epoch_id in range(args.n_epochs):
                     rgb_pred_test = grid.volume_render(rays, use_kernel=True)
                     all_rgbs.append(rgb_pred_test.cpu())
                     all_mses.append(((rgb_gt_test - rgb_pred_test) ** 2).cpu())
-                if len(all_rgbs):
+                if img_id % img_save_interval == 0 and len(all_rgbs):
                     im = torch.cat(all_rgbs).view(dset_test.h, dset_test.w, all_rgbs[0].size(-1))
                     summary_writer.add_image(f'test/image_{img_id:04d}',
                             im, global_step=gstep_id, dataformats='HWC')
+                    im = None
                 mse_num : float = torch.cat(all_mses).mean().item()
                 psnr = -10.0 * math.log10(mse_num)
                 stats_test['mse'] += mse_num
