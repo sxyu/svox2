@@ -47,7 +47,7 @@ group.add_argument('--no_lerp', action='store_true', default=False,
 group.add_argument('--perm', action='store_true', default=False,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
-group.add_argument('--resample_thresh', type=float, default=5.0,
+group.add_argument('--resample_thresh', type=float, default=10.0, #5.0,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--prox_l1_alpha', type=float, default=0.0,
                    help='proximal L1 per epoch; amount to subtract from sigma')

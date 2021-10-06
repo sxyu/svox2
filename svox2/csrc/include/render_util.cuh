@@ -1,3 +1,4 @@
+// Copyright 2021 Alex Yu
 #pragma once
 
 #include <cstdint>

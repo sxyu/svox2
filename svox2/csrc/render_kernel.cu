@@ -248,9 +248,9 @@ __global__ void render_ray_nn_backward_kernel(
 }  // namespace
 
 torch::Tensor volume_render_nn(SparseGridSpec& grid, RaysSpec& rays, RenderOptions& opt) {
+    DEVICE_GUARD(grid.data);
     grid.check();
     rays.check();
-    DEVICE_GUARD(grid.data);
     const auto Q = rays.origins.size(0);
 
     const int cuda_n_threads = 512;
@@ -271,9 +271,9 @@ torch::Tensor volume_render_nn_backward(
         RenderOptions& opt,
         torch::Tensor grad_out,
         torch::Tensor color_cache) {
+    DEVICE_GUARD(grid.data);
     grid.check();
     rays.check();
-    DEVICE_GUARD(grid.data);
     CHECK_INPUT(grad_out);
     CHECK_INPUT(color_cache);
 
