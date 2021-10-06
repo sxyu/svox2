@@ -22,21 +22,37 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
 parser.add_argument('data_dir', type=str)
-parser.add_argument('--train_dir', '-t', type=str, default='ckpt',
+group = parser.add_argument_group("general")
+group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-parser.add_argument('--reso', type=int, default=256, help='grid resolution')
-parser.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
-parser.add_argument('--batch_size', type=int, default=5000, help='batch size')
-parser.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
-parser.add_argument('--lr_sigma', type=float, default=2e7, help='SGD lr for sigma')
-parser.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
-parser.add_argument('--n_epochs', type=int, default=20)
-parser.add_argument('--print_every', type=int, default=20, help='print every')
+group.add_argument('--reso', type=int, default=256, help='grid resolution')
+group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
 
-parser.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
-parser.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
-parser.add_argument('--no_lerp', action='store_true', default=False,
+group = parser.add_argument_group("optimization")
+group.add_argument('--batch_size', type=int, default=5000, help='batch size')
+group.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
+group.add_argument('--lr_sigma', type=float, default=2e7, help='SGD lr for sigma')
+group.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
+group.add_argument('--n_epochs', type=int, default=20)
+group.add_argument('--print_every', type=int, default=20, help='print every')
+
+group = parser.add_argument_group("initialization")
+group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
+group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
+
+
+group = parser.add_argument_group("misc experiments")
+group.add_argument('--no_lerp', action='store_true', default=False,
                     help='use nearest neighbor interp (faster)')
+group.add_argument('--perm', action='store_true', default=False,
+                    help='sample by permutation of rays (true epoch) instead of '
+                         'uniformly random rays')
+group.add_argument('--resample_thresh', type=float, default=5.0,
+                   help='Resample (upsample to 512) sigma threshold')
+group.add_argument('--prox_l1_alpha', type=float, default=0.0,
+                   help='proximal L1 per epoch; amount to subtract from sigma')
+group.add_argument('--prox_l0', action='store_true', default=False,
+                   help='proximal L0 i.e., keep resampling after each epoch')
 args = parser.parse_args()
 
 os.makedirs(args.train_dir, exist_ok=True)
@@ -62,7 +78,10 @@ class Dataset():
 
     def __init__(self, root, split,
                  device : Union[str, torch.device]='cpu',
-                 scene_scale : float = 1.0/1.5):
+                 scene_scale : float = 1.0/1.5,
+                 permutation : bool = False):
+        self.device = device
+        self.permutation = permutation
         all_c2w = []
         all_gt = []
 
@@ -73,14 +92,14 @@ class Dataset():
 
         for frame in tqdm(j['frames']):
             fpath = path.join(data_path, path.basename(frame['file_path']) + '.png')
-            c2w = torch.tensor(frame['transform_matrix'], dtype=torch.float32, device=device)
+            c2w = torch.tensor(frame['transform_matrix'], dtype=torch.float32)
 
             im_gt = imageio.imread(fpath).astype(np.float32) / 255.0
             im_gt = im_gt[..., :3] * im_gt[..., 3:] + (1.0 - im_gt[..., 3:])
             all_c2w.append(c2w)
             all_gt.append(torch.from_numpy(im_gt))
         self.focal = float(0.5 * all_gt[0].shape[1] / np.tan(0.5 * j['camera_angle_x']))
-        self.c2w = torch.stack(all_c2w).to(device=device)
+        self.c2w = torch.stack(all_c2w)
         self.gt = torch.stack(all_gt)
         self.n_images, self.h, self.w, _ = self.gt.shape
         self.split = split
@@ -88,8 +107,8 @@ class Dataset():
         # Generate rays
         origins = self.c2w[:, None, :3, 3].expand(-1, self.h * self.w, -1).contiguous()
         yy, xx = torch.meshgrid(
-            torch.arange(self.h, dtype=torch.float32, device=device),
-            torch.arange(self.w, dtype=torch.float32, device=device),
+            torch.arange(self.h, dtype=torch.float32),
+            torch.arange(self.w, dtype=torch.float32),
         )
         xx = (xx - self.w * 0.5) / self.focal
         yy = (yy - self.h * 0.5) / self.focal
@@ -100,25 +119,31 @@ class Dataset():
         del xx, yy, zz
         dirs = (self.c2w[:, None, :3, :3] @ dirs)[..., 0]
 
-        gt = self.gt.reshape(self.n_images, -1, 3).to(device=device)
+        gt = self.gt.reshape(self.n_images, -1, 3)
         origins = origins * scene_scale
         if split == 'train':
             origins = origins.view(-1, 3)
             dirs = dirs.view(-1, 3)
             gt = gt.view(-1, 3)
 
-        self.rays = Rays(origins=origins, dirs=dirs, gt=gt)
+        self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
+        self.rays = self.rays_init
 
     def shuffle_rays(self):
         """
         Shuffle all rays
         """
         if self.split == 'train':
-            print("Shuffle rays")
-            perm = torch.randperm(self.rays.origins.size(0), device=self.rays.origins.device)
-            self.rays = Rays(origins = self.rays.origins[perm],
-                    dirs = self.rays.dirs[perm],
-                    gt = self.rays.gt[perm])
+            n_rays = self.rays.origins.size(0)
+            if self.permutation:
+                print("Shuffle rays")
+                perm = torch.randperm(n_rays)
+            else:
+                print("Randomize rays")
+                perm = torch.randint(0, n_rays, (n_rays,))
+            self.rays = Rays(origins = self.rays_init.origins[perm].to(device=self.device),
+                    dirs = self.rays_init.dirs[perm].to(device=self.device),
+                    gt = self.rays_init.gt[perm].to(device=self.device))
 
 class Timing:
     """
@@ -145,7 +170,7 @@ class Timing:
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
-dset = Dataset(args.data_dir, split="train", device=device)
+dset = Dataset(args.data_dir, split="train", device=device, permutation=args.perm)
 dset_test = Dataset(args.data_dir, split="test")
 
 grid = svox2.SparseGrid(reso=args.reso,
@@ -212,9 +237,9 @@ for epoch_id in range(args.n_epochs):
 
     def train_step():
         print('Train step')
+        dset.shuffle_rays()
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
-        dset.shuffle_rays()
         for iter_id, batch_begin in pbar:
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
@@ -259,7 +284,11 @@ for epoch_id in range(args.n_epochs):
     print('Saving', ckpt_path)
     grid.save(ckpt_path)
 
-    #  if epoch_id == 0:
-    #      print('Upsampling!!!')
-    #      grid.resample(reso=512)
+    if epoch_id == 0 or args.prox_l0:
+        print('Upsampling!!!')
+        grid.resample(reso=512, sigma_thresh=args.resample_thresh)
+
+    if args.prox_l1_alpha > 0.0:
+        print('ProxL1: sigma -=', args.prox_l1_alpha)
+        grid.data.data[..., :1] -= args.prox_l1_alpha
 
