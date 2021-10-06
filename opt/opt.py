@@ -44,7 +44,7 @@ group.add_argument('--init_sigma', type=float, default=0.1, help='initialization
 group = parser.add_argument_group("misc experiments")
 group.add_argument('--no_lerp', action='store_true', default=False,
                     help='use nearest neighbor interp (faster)')
-group.add_argument('--perm', action='store_true', default=False,
+group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
 group.add_argument('--resample_thresh', type=float, default=10.0, #5.0,
@@ -188,7 +188,7 @@ batches_per_epoch = (epoch_size-1)//args.batch_size+1
 
 grid.opt.step_size = step_size
 grid.opt.sigma_thresh = 1e-8
-grid.opt.linear_interp = not args.no_lerp
+grid.opt.backend = 'cuvol'
 
 for epoch_id in range(args.n_epochs):
     # Test

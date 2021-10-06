@@ -15,17 +15,19 @@ class RenderOptions:
     """
     Rendering options, see comments
     available:
-    :param linear_interp: bool
+    :param backend: str, one of lerp, cuvol, nn
     :param background_brightness: float
     :param step_epsilon: float
-    :param step_size: float, step size for linear_interp = True only
+    :param step_size: float, step size for backend lerp or cuvol only
                       (for estimating the integral; in nearest-neighbor case the integral is exactly computed)
     :param sigma_thresh: float
     :param stop_thresh: float
     """
-    linear_interp : bool = True           # If true, enables trilinear interpolation (trilerp) during rendering;
-                                          # else, uses nearest neighbor interp (like svox)
-                                          # Note that trilerp is about 8-9x slower.
+    backend : str = 'cuvol'           # One of lerp, cuvol, nn
+                                      # nn is nearest neighbor (very fast)
+                                      # cuvol is basic lerp version from cuvol
+                                      #   (fast for small batch when sparse)
+                                      # lerp is coalesced lerp (fast for larger batch)
 
     background_brightness : float = 1.0   # [0, 1], the background color black-white
 
@@ -35,7 +37,7 @@ class RenderOptions:
                                           #   set it to something like 1e-1 for fast rendering.
                                           #   Probably do not set it below 1e-4, increase if getting stuck)
 
-    step_size : float = 0.5               # Step size, in normalized voxels; only used if linear_interp = True
+    step_size : float = 0.5               # Step size, in normalized voxels; only used if backend = lerp or cuvol
                                           #  (i.e. 1 = 1 voxel width, different from svox where 1 = grid width!)
 
     sigma_thresh : float = 1e-10          # Voxels with sigmas < this are ignored, in [0, 1]
@@ -55,7 +57,7 @@ class RenderOptions:
         opt.step_size = self.step_size
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
-        # Note that the linear_interp option is handled in Python
+        # Note that the backend option is handled in Python
         return opt
 
 @dataclass
@@ -105,20 +107,20 @@ class _VolumeRenderFunction(autograd.Function):
                 grid,
                 rays,
                 opt,
-                linear_interp : bool):
-        cu_fn = _C.volume_render_lerp if linear_interp else _C.volume_render_nn
+                backend : str):
+        cu_fn = _C.__dict__[f'volume_render_{backend}']
         color = cu_fn(grid, rays, opt)
         ctx.save_for_backward(color)
         ctx.grid = grid
         ctx.rays = rays
         ctx.opt = opt
-        ctx.linear_interp = linear_interp
+        ctx.backend = backend
         return color
 
     @staticmethod
     def backward(ctx, grad_out):
         color_cache, = ctx.saved_tensors
-        cu_fn = _C.volume_render_lerp_backward if ctx.linear_interp else _C.volume_render_nn_backward
+        cu_fn = _C.__dict__[f'volume_render_{ctx.backend}_backward']
         grad_grid = cu_fn(
             ctx.grid, ctx.rays, ctx.opt,
             grad_out.contiguous(),
@@ -466,14 +468,15 @@ class SparseGrid(nn.Module):
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
         :return: (N, 3) RGB
         """
+        assert self.opt.backend in ['cuvol', 'lerp', 'nn']
         if use_kernel and self.links.is_cuda and _C is not None:
             assert rays.is_cuda
             return _VolumeRenderFunction.apply(self.data, self._to_cpp(),
                                                rays._to_cpp(), self.opt._to_cpp(),
-                                               self.opt.linear_interp)
+                                               self.opt.backend)
         else:
             warn("Using slow volume rendering, should only be used for debugging")
-            if self.opt.linear_interp:
+            if self.opt.backend != 'nn':
                 return self._volume_render_gradcheck_lerp(rays)
             else:
                 return self._volume_render_gradcheck_nn(rays)

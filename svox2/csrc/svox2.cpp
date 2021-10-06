@@ -18,6 +18,10 @@ Tensor volume_render_lerp(SparseGridSpec&, RaysSpec&, RenderOptions&);
 Tensor volume_render_lerp_backward(SparseGridSpec&, RaysSpec&, RenderOptions&,
                                    Tensor, Tensor);
 
+Tensor volume_render_cuvol(SparseGridSpec&, RaysSpec&, RenderOptions&);
+Tensor volume_render_cuvol_backward(SparseGridSpec&, RaysSpec&, RenderOptions&,
+                                    Tensor, Tensor);
+
 Tensor dilate(Tensor);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -28,6 +32,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     _REG_FUNC(volume_render_nn_backward);
     _REG_FUNC(volume_render_lerp);
     _REG_FUNC(volume_render_lerp_backward);
+    _REG_FUNC(volume_render_cuvol);
+    _REG_FUNC(volume_render_cuvol_backward);
     _REG_FUNC(dilate);
 #undef _REG_FUNC
 
