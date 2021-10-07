@@ -1,4 +1,5 @@
-from .utils import isqrt, eval_sh_bases, gen_morton, is_pow2, MAX_SH_BASIS, _get_c_extension
+from .utils import eval_sh_bases, eval_cubemap
+from .utils import gen_morton, is_pow2, MAX_BASIS, _get_c_extension
 import torch
 from torch import nn, autograd
 import torch.nn.functional as F
@@ -23,11 +24,9 @@ class RenderOptions:
     :param sigma_thresh: float
     :param stop_thresh: float
     """
-    backend : str = 'cuvol'           # One of lerp, cuvol, nn
-                                      # nn is nearest neighbor (very fast)
+    backend : str = 'cuvol'           # Must be cuvol
                                       # cuvol is basic lerp version from cuvol
                                       #   (fast for small batch when sparse)
-                                      # lerp is coalesced lerp (fast for larger batch)
 
     background_brightness : float = 1.0   # [0, 1], the background color black-white
 
@@ -104,6 +103,7 @@ class _VolumeRenderFunction(autograd.Function):
     @staticmethod
     def forward(ctx,
                 data : torch.Tensor,
+                cubemap : torch.Tensor,
                 grid,
                 rays,
                 opt,
@@ -121,7 +121,7 @@ class _VolumeRenderFunction(autograd.Function):
     def backward(ctx, grad_out):
         color_cache, = ctx.saved_tensors
         cu_fn = _C.__dict__[f'volume_render_{ctx.backend}_backward']
-        grad_grid = cu_fn(
+        grad_grid, grad_cubemap = cu_fn(
             ctx.grid, ctx.rays, ctx.opt,
             grad_out.contiguous(),
             color_cache,
@@ -129,7 +129,9 @@ class _VolumeRenderFunction(autograd.Function):
         ctx.grid = ctx.rays = ctx.opt = None
         if not ctx.needs_input_grad[0]:
             grad_grid = None
-        return grad_grid, None, None, None, None
+        if not ctx.needs_input_grad[1]:
+            grad_cubemap = None
+        return grad_grid, grad_cubemap, None, None, None, None
 # END Differentiable CUDA functions with custom gradient
 
 
@@ -149,15 +151,16 @@ class SparseGrid(nn.Module):
             reso : Union[int, List[int]]=128,
             radius : Union[float, List[float]]=1.0,
             center : Union[float, List[float]]=[0.0, 0.0, 0.0],
-            basis_dim : int = 9, # SH size; square number
+            basis_dim : int = 8, # Basis size
+            cubemap_reso : int = 384,
             use_z_order=False,
             device : Union[torch.device, str]="cpu"):
         super().__init__()
 
-        assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
-        assert basis_dim >= 1 and basis_dim <= MAX_SH_BASIS, \
-                f"basis_dim 1-{MAX_SH_BASIS} supported"
+        assert basis_dim >= 1 and basis_dim <= MAX_BASIS, \
+                f"basis_dim 1-{MAX_BASIS} supported"
         self.basis_dim = basis_dim
+        self.cubemap_reso = cubemap_reso
 
         if isinstance(reso, int):
             reso = [reso] * 3
@@ -177,7 +180,10 @@ class SparseGrid(nn.Module):
         self.register_buffer("links", init_links.view(reso))
         self.links : torch.Tensor
         self.data = nn.Parameter(torch.zeros(
-            self.capacity, self.basis_dim * 3 + 1, dtype=torch.float32, device=device))
+            self.capacity, self.basis_dim + 4, dtype=torch.float32, device=device))
+        self.cubemap = nn.Parameter(torch.randn(
+            6, self.cubemap_reso, self.cubemap_reso,
+            3 * basis_dim, dtype=torch.float32, device=device))
 
         if isinstance(radius, float) or isinstance(radius, int):
             radius = [radius] * 3
@@ -196,7 +202,6 @@ class SparseGrid(nn.Module):
         self._scaling = 0.5 / self.radius
 
         self.opt = RenderOptions()
-
 
     @property
     def data_dim(self):
@@ -273,93 +278,6 @@ class SparseGrid(nn.Module):
     def forward(self, points : torch.Tensor, use_kernel : bool = True):
         return self.sample(points, use_kernel=use_kernel)
 
-    def _volume_render_gradcheck_nn(self, rays: Rays):
-        """
-        nearest-neighbor gradcheck version
-        """
-        def intersect_aabb_unit(cen, invdir):
-            """
-            voxel aabb ray tracing step
-            :param cen: torch.Tensor [B, 3] center
-            :param invdir: torch.Tensor [B, 3] 1/dir
-            :return: tmin torch.Tensor [B] at least 0;
-                     tmax torch.Tensor [B]
-            """
-            t1 = -cen * invdir
-            t2 = t1 + invdir
-            tmax = torch.min(torch.max(t1, t2), dim=-1).values
-            return tmax
-
-        origins = self.world2grid(rays.origins)
-        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True)
-        viewdirs = dirs
-        B = dirs.size(0)
-        assert origins.size(0) == B
-        gsz = self._grid_size()
-        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
-        delta_scale = 1.0 / dirs.norm(dim=1)
-        dirs *= delta_scale.unsqueeze(-1)
-
-        sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
-        invdirs = 1.0 / dirs
-        invdirs[dirs == 0] = 1e9
-
-        t1 = (1e-3 - origins) * invdirs
-        t2 = (self._grid_size().to(device=dirs.device) - 1.0 - 1e-3 - origins) * invdirs
-        t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(0.0)
-        tmax = torch.min(torch.max(t1, t2), dim=-1).values
-
-        log_light_intensity = torch.zeros(B, device=origins.device)
-        out_rgb = torch.zeros((B, 3), device=origins.device)
-        good_indices = torch.arange(B, device=origins.device)
-
-        mask = t < tmax
-        good_indices = good_indices[mask]
-        origins = origins[mask]
-        dirs = dirs[mask]
-        invdirs = invdirs[mask]
-        t = t[mask]
-        sh_mult = sh_mult[mask]
-        tmax = tmax[mask]
-
-
-        while good_indices.numel() > 0:
-            pos = origins + t[:, None] * dirs
-            l = pos.to(torch.long)
-            pos_t = pos - l
-
-            links = self.links[l.unbind(-1)]
-            rgba = self._fetch_links(links)
-            del links
-
-            subcube_tmax = intersect_aabb_unit(pos_t, invdirs)
-
-            delta_t = subcube_tmax + self.opt.step_epsilon
-            log_att = - delta_t * torch.relu(rgba[..., 0]) * delta_scale[good_indices]
-            weight = torch.exp(log_light_intensity[good_indices]) * (
-                        1.0 - torch.exp(log_att))
-            rgb = rgba[:, 1:]
-            # [B', 3, n_sh_coeffs]
-            rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.sigmoid(torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1))   # [B', 3]
-            rgb = weight[:, None] * rgb[:, :3]
-
-            out_rgb[good_indices] += rgb
-            log_light_intensity[good_indices] += log_att
-            t += delta_t
-
-            mask = t < tmax
-            good_indices = good_indices[mask]
-            origins = origins[mask]
-            dirs = dirs[mask]
-            invdirs = invdirs[mask]
-            t = t[mask]
-            sh_mult = sh_mult[mask]
-            tmax = tmax[mask]
-        out_rgb += torch.exp(log_light_intensity).unsqueeze(-1) * \
-                   self.opt.background_brightness
-        return out_rgb
-
     def _volume_render_gradcheck_lerp(self, rays : Rays):
         """
         trilerp gradcheck version
@@ -369,23 +287,27 @@ class SparseGrid(nn.Module):
         viewdirs = dirs
         B = dirs.size(0)
         assert origins.size(0) == B
-        gsz = self._grid_size()
-        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
+        gsz = torch.tensor(self.links.shape, device='cpu', dtype=torch.long)
+        gsz_f = gsz.float()
+        dirs = dirs * (self._scaling * gsz_f).to(device=dirs.device)
         delta_scale = 1.0 / dirs.norm(dim=1)
         dirs *= delta_scale.unsqueeze(-1)
 
-        sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
         invdirs = 1.0 / dirs
         invdirs[dirs == 0] = 1e9
 
-        t1 = (1e-3 - origins) * invdirs
-        t2 = (self._grid_size().to(device=dirs.device) - 1.0 - 1e-3 - origins) * invdirs
+        gsz_f = gsz_f.to(device=dirs.device)
+        gsz = gsz.to(device=dirs.device)
+        t1 = (0.0 - origins) * invdirs
+        t2 = (gsz_f - 1.0 - origins) * invdirs
         t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(0.0)
         tmax = torch.min(torch.max(t1, t2), dim=-1).values
 
         log_light_intensity = torch.zeros(B, device=origins.device)
         out_rgb = torch.zeros((B, 3), device=origins.device)
         good_indices = torch.arange(B, device=origins.device)
+        sphfunc_val = eval_cubemap(self.cubemap, viewdirs)
+        sphfunc_val = sphfunc_val.view(-1, 3, self.basis_dim)
 
         mask = t < tmax
         good_indices = good_indices[mask]
@@ -393,13 +315,16 @@ class SparseGrid(nn.Module):
         dirs = dirs[mask]
         invdirs = invdirs[mask]
         t = t[mask]
-        sh_mult = sh_mult[mask]
+        sphfunc_val = sphfunc_val[mask]
         tmax = tmax[mask]
 
 
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
+            pos.clamp_min_(0.0)
+            pos = torch.min(pos, gsz_f - 1)
             l = pos.to(torch.long)
+            l = torch.min(l, gsz - 2)
             pos -= l
 
             # BEGIN CRAZY TRILERP
@@ -437,11 +362,11 @@ class SparseGrid(nn.Module):
             log_att = - self.opt.step_size * torch.relu(rgba[..., 0]) * delta_scale[good_indices]
             weight = torch.exp(log_light_intensity[good_indices]) * (
                         1.0 - torch.exp(log_att))
-            rgb = rgba[:, 1:]
-            # [B', 3, n_sh_coeffs]
-            rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.sigmoid(torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1))   # [B', 3]
-            rgb = weight[:, None] * rgb[:, :3]
+            rgb_lambert = rgba[:, 1:4]
+            coeff = rgba[:, 4:].unsqueeze(-2)
+            # [B', 1, n_sh_coeffs]
+            rgb = torch.sigmoid(rgb_lambert + torch.sum(sphfunc_val * coeff, dim=-1))   # [B', 3]
+            rgb = weight[:, None] * rgb
 
             out_rgb[good_indices] += rgb
             log_light_intensity[good_indices] += log_att
@@ -453,7 +378,7 @@ class SparseGrid(nn.Module):
             dirs = dirs[mask]
             invdirs = invdirs[mask]
             t = t[mask]
-            sh_mult = sh_mult[mask]
+            sphfunc_val = sphfunc_val[mask]
             tmax = tmax[mask]
         out_rgb += torch.exp(log_light_intensity).unsqueeze(-1) * \
                    self.opt.background_brightness
@@ -468,18 +393,15 @@ class SparseGrid(nn.Module):
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
         :return: (N, 3) RGB
         """
-        assert self.opt.backend in ['cuvol', 'lerp', 'nn']
+        assert self.opt.backend in ['cuvol']#, 'lerp', 'nn']
         if use_kernel and self.links.is_cuda and _C is not None:
             assert rays.is_cuda
-            return _VolumeRenderFunction.apply(self.data, self._to_cpp(),
+            return _VolumeRenderFunction.apply(self.data, self.cubemap, self._to_cpp(),
                                                rays._to_cpp(), self.opt._to_cpp(),
                                                self.opt.backend)
         else:
             warn("Using slow volume rendering, should only be used for debugging")
-            if self.opt.backend != 'nn':
-                return self._volume_render_gradcheck_lerp(rays)
-            else:
-                return self._volume_render_gradcheck_nn(rays)
+            return self._volume_render_gradcheck_lerp(rays)
 
     def resample(self,
                  reso : Union[int, List[int]],
@@ -542,35 +464,23 @@ class SparseGrid(nn.Module):
         """
         Modify the size of the data stored in the voxels. Called expand/shrink in svox 1.
 
-        :param basis_dim: new basis dimension, must be square number
+        :param basis_dim: new basis dimension
         """
-        assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
-        assert basis_dim >= 1 and basis_dim <= MAX_SH_BASIS, \
-                f"basis_dim 1-{MAX_SH_BASIS} supported"
+        assert basis_dim >= 1 and basis_dim <= MAX_BASIS, \
+                f"basis_dim 1-{MAX_BASIS} supported"
         old_basis_dim = self.basis_dim
         self.basis_dim = basis_dim
         device = self.data.device
         old_data = self.data.data.cpu()
 
         shrinking = basis_dim < old_basis_dim
-        data_dim = 3 * basis_dim + 1
-        old_data_dim = 3 * old_basis_dim + 1
-        sigma_arr = torch.tensor([0])
-        if shrinking:
-            shift = old_basis_dim
-            arr = torch.arange(basis_dim) + 1
-            remap = torch.cat([sigma_arr, arr, shift + arr, 2 * shift + arr])
-        else:
-            shift = basis_dim
-            arr = torch.arange(old_basis_dim) + 1
-            remap = torch.cat([sigma_arr, arr, shift + arr, 2 * shift + arr])
+        sigma_arr = torch.tensor([0, 1, 2, 3])
 
-        del self.data
-        new_data = torch.zeros((old_data.size(0), 3 * basis_dim + 1), device='cpu')
+        new_data = torch.zeros((old_data.size(0), basis_dim), device='cpu')
         if shrinking:
-            new_data[:] = old_data[..., remap]
+            new_data[:] = old_data[..., :basis_dim + 4]
         else:
-            new_data[..., remap] = old_data
+            new_data[..., :old_basis_dim + 4] = old_data
         new_data = new_data.to(device=device)
         self.data = nn.Parameter(new_data)
 
@@ -700,6 +610,7 @@ class SparseGrid(nn.Module):
         gspec = _C.SparseGridSpec()
         gspec.data = self.data
         gspec.links = self.links
+        gspec.cubemap = self.cubemap
         if grid_coords:
             gspec._offset = torch.zeros_like(self._offset)
             gspec._scaling = torch.ones_like(self._offset)

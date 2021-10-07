@@ -7,7 +7,7 @@ torch.random.manual_seed(0)
 device = 'cuda:0'
 dtype = torch.float32
 grid = svox2.SparseGrid(
-                     reso=256,
+                     reso=128,
                      center=[0.0, 0.0, 0.0],
                      radius=[1.0, 1.0, 1.0],
                      basis_dim=9,
@@ -21,7 +21,7 @@ grid.data.data.normal_()
 grid.data.data[..., 0] = 0.1
 
 ENABLE_TORCH_CHECK = True
-N_RAYS = 200 * 200
+N_RAYS = 1000#200 * 200
 #  origins = torch.full((N_RAYS, 3), fill_value=0.0, device=device, dtype=dtype)
 origins = torch.zeros((N_RAYS, 3), device=device, dtype=dtype)
 dirs : torch.Tensor = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
@@ -39,7 +39,9 @@ s = samps.sum()
 with Timing("ours_backward"):
     s.backward()
 grid_grad_s = grid.data.grad.clone().cpu()
+cubemap_grad_s = grid.cubemap.grad.clone().cpu()
 grid.data.grad = None
+grid.cubemap.grad = None
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
@@ -48,13 +50,20 @@ if ENABLE_TORCH_CHECK:
     with Timing("torch_backward"):
         s.backward()
     grid_grad_t = grid.data.grad.clone().cpu()
+    cubemap_grad_t = grid.cubemap.grad.clone().cpu()
 
     E = torch.abs(grid_grad_s-grid_grad_t)
+    E_cube = torch.abs(cubemap_grad_s-cubemap_grad_t)
+
     print('err', torch.abs(samps - sampt).max())
+    print()
     print('err_grad\n', E.max())
     print(' mean\n', E.mean())
     print('err_grad_c\n', E[..., 1:].max())
     print('err_grad_sigma\n', E[..., 0].max())
+    print()
+    print('err_grad_cubemap\n', E_cube.max())
+    print()
     print()
     print('g_ours min/max\n', grid_grad_s.min(), grid_grad_s.max())
     print('g_torch min/max\n', grid_grad_t.min(), grid_grad_t.max())

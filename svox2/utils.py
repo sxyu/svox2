@@ -106,7 +106,7 @@ C4 = [
     0.6258357354491761,
 ]
 
-MAX_SH_BASIS = 16
+MAX_BASIS = 9
 def eval_sh_bases(basis_dim : int, dirs : torch.Tensor):
     """
     Evaluate spherical harmonics bases at unit directions,
@@ -157,16 +157,18 @@ def eval_sh_bases(basis_dim : int, dirs : torch.Tensor):
     return result
 
 # Cubemaps
-def cubemap2xyz(index : torch.Tensor, uv : torch.Tensor):
+def cubemap2xyz(index : torch.Tensor, uv : torch.Tensor, cubemap_reso : int = 1):
     """
     Cubemap coords to directional vector (nor normalized, max dim=1)
 
     :param index: integer Tensor (B,), 0-5 for face (x+, x-, y+, y-, z+, z-)
-    :param uv: float Tensor (B, 2), [-1, 1]^2 xy coord in each face
+    :param uv: float Tensor (B, 2), [-0.5, cubemap_reso - 0.5] xy coord in each face
+    :param cubemap_reso: float, cubemap resolution for each face
 
     :return: float tensor (B, 3), directions
     """
     xyz = torch.empty((uv.size(0), 3), dtype=uv.dtype, device=uv.device)
+    uv = 2 / cubemap_reso * (uv + 0.5) - 1
     ones = torch.ones_like(uv[:, 0])
     m = index == 0
     xyz[m] = torch.stack([ones[m], uv[m, 1], -uv[m, 0]], dim=-1)
@@ -182,14 +184,15 @@ def cubemap2xyz(index : torch.Tensor, uv : torch.Tensor):
     xyz[m] = torch.stack([-uv[m, 0], uv[m, 1], -ones[m]], dim=-1)
     return xyz
 
-def xyz2cubemap(xyz :  torch.Tensor):
+def xyz2cubemap(xyz :  torch.Tensor, cubemap_reso : int = 1):
     """
     Vector (not necessarily normalized) to cubemap coords
 
     :param xyz: float tensor (B, 3), directions
+    :param cubemap_reso: float, cubemap resolution for each face
 
     :return: index, long Tensor (B,), 0-5 for face (x+, x-, y+, y-, z+, z-);
-             uv, float Tensor (B, 2), [-1, 1]^2 xy coord in each face
+             uv, float Tensor (B, 2), [-0.5, cubemap_reso - 0.5] xy coord in each face
     """
     x, y, z = xyz.unbind(-1)
     abs_x = torch.abs(x)
@@ -224,6 +227,56 @@ def xyz2cubemap(xyz :  torch.Tensor):
     index[z_max_mask & z_pos] = 4
     index[z_max_mask & ~z_pos] = 5
 
-    uv = uv / max_axis.unsqueeze(-1)
+    uv = 0.5 * cubemap_reso * (uv / max_axis.unsqueeze(-1) + 1.0) - 0.5
     return index, uv
 
+def eval_cubemap(cubemap : torch.Tensor, xyz : torch.Tensor):
+    """
+    Evaluate cubemap at directions
+
+    :param cubemap: torch.Tensor float (6, cubemap_reso, cubemap_reso, data_dim)
+    :param xyz: torch.Tensor float (B, 3)
+
+    :return: (B, data_dim)
+    """
+    cubemap_reso = cubemap.size(1)
+
+    index, uv = xyz2cubemap(xyz, cubemap_reso)
+    uv.clamp_(0.0, cubemap_reso - 1.0)
+    uv_i = uv.to(dtype = torch.long)
+    uv_i.clamp_(0, cubemap_reso - 2)
+    t = uv - uv_i
+    ut, vt = t.unbind(-1)
+    u, v = uv_i.unbind(-1)
+
+    rgb_00 = cubemap[index, u, v]
+    rgb_01 = cubemap[index, u, v + 1]
+    rgb_10 = cubemap[index, u + 1, v]
+    rgb_11 = cubemap[index, u + 1, v + 1]
+    ub = ut.unsqueeze(-1)
+    vb = vt.unsqueeze(-1)
+    ua = 1.0 - ub
+    va = 1.0 - vb
+
+    return (rgb_00 * ua * va +
+            rgb_01 * ua * vb +
+            rgb_10 * ub * va +
+            rgb_11 * ub * vb)
+
+if __name__ == '__main__':
+    xyz = torch.randn(100, 3)
+    xyz /= xyz.norm(dim=-1, keepdim=True)
+
+    lr = 1e3
+    cubemap = torch.randn(6, 128, 128, 3 * 8, requires_grad=True)
+    targ = torch.randn((100, 3 * 8))
+
+    for i in range(25):
+        import torch.nn.functional as F
+        rgb = eval_cubemap(cubemap, xyz)
+        print(rgb.shape)
+        mse = F.mse_loss(rgb, targ)
+        print('iter', i, 'mse', mse.item())
+        mse.backward()
+        cubemap.data -= lr * cubemap.grad
+        del cubemap.grad

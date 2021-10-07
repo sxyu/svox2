@@ -1,6 +1,7 @@
 // Copyright 2021 Alex Yu
 #pragma once
 
+#include "cuda_util.cuh"
 #include <cstdint>
 
 namespace {
@@ -68,6 +69,99 @@ __device__ __inline__ void calc_sh(
             out[1] = -C1 * y;
             out[2] = C1 * z;
             out[3] = -C1 * x;
+    }
+}
+
+struct CubemapIndex {
+    int32_t face;
+    int32_t ui;
+    int32_t vi;
+    float u;
+    float v;
+};
+
+__device__ __inline__ void get_cubemap_index(
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cubemap,
+    const float* __restrict__ dir,
+    CubemapIndex* __restrict__ idx) {
+    const float x = dir[0], y = dir[1], z = dir[2];
+    const float absx = fabsf(x), absy = fabsf(y), absz = fabsf(z);
+    const int cubemap_reso = cubemap.size(1);
+    float u, v, max_axis;
+
+    if (absx >= absy && absx >= absz) {
+        max_axis = absx;
+        v = y;
+        if (x >= 0) {
+            idx->face = 0;
+            u = -z;
+        } else {
+            idx->face = 1;
+            u = z;
+        }
+    } else if (absy >= absz) {
+        max_axis = absy;
+        u = x;
+        if (y >= 0) {
+            idx->face = 2;
+            v = -z;
+        } else {
+            idx->face = 3;
+            v = z;
+        }
+    } else {
+        max_axis = absz;
+        v = y;
+        if (z >= 0) {
+            idx->face = 4;
+            u = x;
+        } else {
+            idx->face = 5;
+            u = -x;
+        }
+    }
+
+    u = min(max(0.5f * cubemap_reso * (u / max_axis + 1.f) - 0.5f, 0.f), cubemap_reso - 1.0f);
+    v = min(max(0.5f * cubemap_reso * (v / max_axis + 1.f) - 0.5f, 0.f), cubemap_reso - 1.0f);
+    idx->ui = min((int32_t) u, cubemap_reso - 2);
+    idx->vi = min((int32_t) v, cubemap_reso - 2);
+    idx->u = u - idx->ui;
+    idx->v = v - idx->vi;
+}
+
+__device__ __inline__ void eval_cubemap(
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cubemap,
+    const CubemapIndex& __restrict__ idx,
+    float* __restrict__ out) {
+
+    const float* __restrict__ ptr_00 = &cubemap[idx.face][idx.ui][idx.vi][0];
+    const float* __restrict__ ptr_01 = &cubemap[idx.face][idx.ui][idx.vi + 1][0];
+    const float* __restrict__ ptr_10 = &cubemap[idx.face][idx.ui + 1][idx.vi][0];
+    const float* __restrict__ ptr_11 = &cubemap[idx.face][idx.ui + 1][idx.vi + 1][0];
+    for (int i = 0; i < cubemap.size(3); ++i) {
+        const float l0 = lerp(ptr_00[i], ptr_01[i], idx.v);
+        const float l1 = lerp(ptr_10[i], ptr_11[i], idx.v);
+        out[i] = lerp(l0, l1, idx.u);
+    }
+}
+
+__device__ __inline__ void eval_cubemap_backward(
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> grad_cubemap,
+    const CubemapIndex& __restrict__ idx,
+    const float* __restrict__ grad_out) {
+
+    float* __restrict__ ptr00 = &grad_cubemap[idx.face][idx.ui][idx.vi][0];
+    float* __restrict__ ptr01 = &grad_cubemap[idx.face][idx.ui][idx.vi + 1][0];
+    float* __restrict__ ptr10 = &grad_cubemap[idx.face][idx.ui + 1][idx.vi][0];
+    float* __restrict__ ptr11 = &grad_cubemap[idx.face][idx.ui + 1][idx.vi + 1][0];
+
+    for (int i = 0; i < grad_cubemap.size(3); ++i) {
+        const float axo = (1.f - idx.u) * grad_out[i];
+        atomicAdd(ptr00 + i, (1.f - idx.v) * axo);
+        atomicAdd(ptr01 + i, idx.v * axo);
+        const float bxo = idx.u * grad_out[i];
+        atomicAdd(ptr10 + i, (1.f - idx.v) * bxo);
+        atomicAdd(ptr11 + i, idx.v * bxo);
     }
 }
 
