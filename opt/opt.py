@@ -36,12 +36,16 @@ group.add_argument('--batch_size', type=int, default=5000, help='batch size')
 group.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 group.add_argument('--lr_sigma', type=float, default=2e7, help='SGD lr for sigma')
 group.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
+group.add_argument('--lr_cubemap', type=float,
+                    default=2e3, #2e2, #2e4, #2e6,
+                    help='SGD lr for cubemap')
 group.add_argument('--n_epochs', type=int, default=20)
 group.add_argument('--print_every', type=int, default=20, help='print every')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
 group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
+group.add_argument('--init_cubemap_std', type=float, default=0.01, help='initialization of cubemap elements (std)')
 
 
 group = parser.add_argument_group("misc experiments")
@@ -75,6 +79,8 @@ grid = svox2.SparseGrid(reso=args.reso,
                         device=device)
 grid.data.data[..., 1:] = args.init_rgb
 grid.data.data[..., :1] = args.init_sigma
+
+grid.cubemap.data.normal_(0.0, args.init_cubemap_std)
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
@@ -170,8 +176,11 @@ for epoch_id in range(args.n_epochs):
             # Manual SGD step
             grid.data.grad[..., 1:] *= args.lr_sh
             grid.data.grad[..., :1] *= args.lr_sigma
+            grid.cubemap.grad *= args.lr_cubemap
             grid.data.data -= grid.data.grad
+            grid.cubemap.data -= grid.cubemap.grad
             del grid.data.grad  # Save memory
+            del grid.cubemap.grad  # Save memory
 
     train_step()
     gc.collect()

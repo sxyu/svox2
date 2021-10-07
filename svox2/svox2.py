@@ -152,7 +152,7 @@ class SparseGrid(nn.Module):
             radius : Union[float, List[float]]=1.0,
             center : Union[float, List[float]]=[0.0, 0.0, 0.0],
             basis_dim : int = 8, # Basis size
-            cubemap_reso : int = 384,
+            cubemap_reso : int = 1,
             use_z_order=False,
             device : Union[torch.device, str]="cpu"):
         super().__init__()
@@ -181,7 +181,7 @@ class SparseGrid(nn.Module):
         self.links : torch.Tensor
         self.data = nn.Parameter(torch.zeros(
             self.capacity, self.basis_dim + 4, dtype=torch.float32, device=device))
-        self.cubemap = nn.Parameter(torch.randn(
+        self.cubemap = nn.Parameter(torch.zeros(
             6, self.cubemap_reso, self.cubemap_reso,
             3 * basis_dim, dtype=torch.float32, device=device))
 
@@ -524,7 +524,8 @@ class SparseGrid(nn.Module):
                 radius=self.radius.numpy(),
                 center=self.center.numpy(),
                 links=self.links.cpu().numpy(),
-                data=self.data.data.cpu().numpy().astype(np.float16))
+                data=self.data.data.cpu().numpy().astype(np.float16),
+                cubemap=self.cubemap.data.cpu().numpy().astype(np.float16))
 
     @classmethod
     def load(cls, path : str, device : Union[torch.device, str]="cpu"):
@@ -533,6 +534,7 @@ class SparseGrid(nn.Module):
         """
         z = np.load(path)
         data = z.f.data
+        cubemap = z.f.cubemap
         links = z.f.links
         basis_dim = (data.shape[1] - 1) // 3
         radius = z.f.radius.tolist() if 'radius' in z.files else [1.0, 1.0, 1.0]
@@ -543,12 +545,15 @@ class SparseGrid(nn.Module):
             basis_dim = basis_dim,
             use_z_order = False,
             device='cpu')
+        grid.cubemap_reso = cubemap.size(1)
         if data.dtype != np.float32:
             data = data.astype(np.float32)
         data = torch.from_numpy(data).to(device=device)
+        cubemap = torch.from_numpy(cubemap).to(device=device)
         grid.data = nn.Parameter(data)
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.data.size(0)
+        grid.cubemap = nn.Parameter(cubemap)
         return grid
 
     def to_svox1(self, device : Union[torch.device, str, None]=None):
