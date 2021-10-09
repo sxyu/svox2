@@ -9,6 +9,7 @@ import json
 import imageio
 import os
 from os import path
+import shutil
 import gc
 import numpy as np
 import math
@@ -29,23 +30,32 @@ group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 group.add_argument('--reso', type=int, default=256, help='grid resolution')
-group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
+group.add_argument('--sh_dim', type=int, default=8,#9,
+                   help='SH dimensions, must be square number >=1, <= 16')
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
 group.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 group.add_argument('--lr_sigma', type=float, default=2e7, help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
+#  group.add_argument('--lr_color', type=float, default=5e5, help='SGD lr for base color')
+#  group.add_argument('--lr_coeff', type=float, default=5e5, help='SGD lr for coeffs')
+group.add_argument('--lr_color', type=float, default=2e5, help='sgd lr for base color')
+group.add_argument('--lr_coeff', type=float, default=5e4,#2e5,
+            help='SGD lr for coeffs')
 group.add_argument('--lr_cubemap', type=float,
-                    default=2e3, #2e2, #2e4, #2e6,
+                    default=2e3, #2e3, #2e4,#2e5,#2e2,
                     help='SGD lr for cubemap')
 group.add_argument('--n_epochs', type=int, default=20)
 group.add_argument('--print_every', type=int, default=20, help='print every')
+group.add_argument('--cubemap_reso', type=int, default=16, help='cubemap resolution (per face)')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
 group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
-group.add_argument('--init_cubemap_std', type=float, default=0.01, help='initialization of cubemap elements (std)')
+group.add_argument('--init_cubemap_mean', type=float, default=0.5,
+                   help='initialization of cubemap elements (mean)')
+group.add_argument('--init_cubemap_std', type=float, default=0.05,
+                   help='initialization of cubemap elements (std)')
 
 
 group = parser.add_argument_group("misc experiments")
@@ -66,6 +76,10 @@ os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
 
+with open(path.join(args.train_dir, 'args.json'), 'w') as f:
+    json.dump(args.__dict__, f, indent=2)
+shutil.copyfile(__file__, path.join(args.train_dir, 'opt.py'))
+
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
@@ -76,11 +90,13 @@ grid = svox2.SparseGrid(reso=args.reso,
                         radius=1.0,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
+                        cubemap_reso=args.cubemap_reso,
                         device=device)
 grid.data.data[..., 1:] = args.init_rgb
 grid.data.data[..., :1] = args.init_sigma
+#  grid.data.data[..., 4:] = 0.0  # DEBUG
 
-grid.cubemap.data.normal_(0.0, args.init_cubemap_std)
+grid.cubemap.data.normal_(args.init_cubemap_mean, args.init_cubemap_std)
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
@@ -174,11 +190,13 @@ for epoch_id in range(args.n_epochs):
             mse.backward()
 
             # Manual SGD step
-            grid.data.grad[..., 1:] *= args.lr_sh
+            grid.data.grad[..., 1:4] *= args.lr_color
+            grid.data.grad[..., 4:] *= args.lr_coeff
             grid.data.grad[..., :1] *= args.lr_sigma
             grid.cubemap.grad *= args.lr_cubemap
             grid.data.data -= grid.data.grad
             grid.cubemap.data -= grid.cubemap.grad
+            #  grid.data.data[..., 4:] = 0.0  # DEBUG
             del grid.data.grad  # Save memory
             del grid.cubemap.grad  # Save memory
 

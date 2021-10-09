@@ -152,7 +152,7 @@ class SparseGrid(nn.Module):
             radius : Union[float, List[float]]=1.0,
             center : Union[float, List[float]]=[0.0, 0.0, 0.0],
             basis_dim : int = 8, # Basis size
-            cubemap_reso : int = 1,
+            cubemap_reso : int = 16,
             use_z_order=False,
             device : Union[torch.device, str]="cpu"):
         super().__init__()
@@ -180,10 +180,10 @@ class SparseGrid(nn.Module):
         self.register_buffer("links", init_links.view(reso))
         self.links : torch.Tensor
         self.data = nn.Parameter(torch.zeros(
-            self.capacity, self.basis_dim + 4, dtype=torch.float32, device=device))
+            self.capacity, self.basis_dim * 3 + 4, dtype=torch.float32, device=device))
         self.cubemap = nn.Parameter(torch.zeros(
             6, self.cubemap_reso, self.cubemap_reso,
-            3 * basis_dim, dtype=torch.float32, device=device))
+            basis_dim, dtype=torch.float32, device=device))
 
         if isinstance(radius, float) or isinstance(radius, int):
             radius = [radius] * 3
@@ -307,7 +307,7 @@ class SparseGrid(nn.Module):
         out_rgb = torch.zeros((B, 3), device=origins.device)
         good_indices = torch.arange(B, device=origins.device)
         sphfunc_val = eval_cubemap(self.cubemap, viewdirs)
-        sphfunc_val = sphfunc_val.view(-1, 3, self.basis_dim)
+        sphfunc_val = sphfunc_val.view(-1, 1, self.basis_dim)
 
         mask = t < tmax
         good_indices = good_indices[mask]
@@ -363,7 +363,7 @@ class SparseGrid(nn.Module):
             weight = torch.exp(log_light_intensity[good_indices]) * (
                         1.0 - torch.exp(log_att))
             rgb_lambert = rgba[:, 1:4]
-            coeff = rgba[:, 4:].unsqueeze(-2)
+            coeff = rgba[:, 4:].view(-1, 3, self.basis_dim)
             # [B', 1, n_sh_coeffs]
             rgb = torch.sigmoid(rgb_lambert + torch.sum(sphfunc_val * coeff, dim=-1))   # [B', 3]
             rgb = weight[:, None] * rgb
@@ -520,12 +520,17 @@ class SparseGrid(nn.Module):
         Save to a path
         """
         save_fn = np.savez_compressed if compress else np.savez
+        data = self.data.data.cpu().numpy()
+        cubemap = self.cubemap.data.cpu().numpy()
+        if compress:
+            data = data.astype(np.float16)
+            cubemap = cubemap.astype(np.float16)
         save_fn(path,
                 radius=self.radius.numpy(),
                 center=self.center.numpy(),
                 links=self.links.cpu().numpy(),
-                data=self.data.data.cpu().numpy().astype(np.float16),
-                cubemap=self.cubemap.data.cpu().numpy().astype(np.float16))
+                data=data,
+                cubemap=cubemap)
 
     @classmethod
     def load(cls, path : str, device : Union[torch.device, str]="cpu"):
@@ -536,7 +541,7 @@ class SparseGrid(nn.Module):
         data = z.f.data
         cubemap = z.f.cubemap
         links = z.f.links
-        basis_dim = (data.shape[1] - 1) // 3
+        basis_dim = (data.shape[1] - 4) // 3
         radius = z.f.radius.tolist() if 'radius' in z.files else [1.0, 1.0, 1.0]
         center = z.f.center.tolist() if 'center' in z.files else [0.0, 0.0, 0.0]
         grid = cls(1,
@@ -545,9 +550,11 @@ class SparseGrid(nn.Module):
             basis_dim = basis_dim,
             use_z_order = False,
             device='cpu')
-        grid.cubemap_reso = cubemap.size(1)
+        grid.cubemap_reso = cubemap.shape[1]
         if data.dtype != np.float32:
             data = data.astype(np.float32)
+        if cubemap.dtype != np.float32:
+            cubemap = cubemap.astype(np.float32)
         data = torch.from_numpy(data).to(device=device)
         cubemap = torch.from_numpy(cubemap).to(device=device)
         grid.data = nn.Parameter(data)

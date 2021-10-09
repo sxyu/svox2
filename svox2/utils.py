@@ -271,12 +271,12 @@ if __name__ == '__main__':
     cubemap = torch.randn(6, 128, 128, 3 * 8, requires_grad=True)
     targ = torch.randn((100, 3 * 8))
 
-    for i in range(25):
+    for i in range(2):
         import torch.nn.functional as F
         rgb = eval_cubemap(cubemap, xyz)
         print(rgb.shape)
         mse = F.mse_loss(rgb, targ)
         print('iter', i, 'mse', mse.item())
+        cubemap.grad = None
         mse.backward()
         cubemap.data -= lr * cubemap.grad
-        del cubemap.grad

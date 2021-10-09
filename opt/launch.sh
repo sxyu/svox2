@@ -1,5 +1,6 @@
 #!/bin/bash
 
+echo $(which python)
 echo Launching experiment $1
 echo GPU $2
 echo EXTRA $3
