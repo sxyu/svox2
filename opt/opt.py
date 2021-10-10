@@ -30,7 +30,7 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 group.add_argument('--reso', type=int, default=256, help='grid resolution')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
-group.add_argument('--scene_scale', type=float, default=5/6,
+group.add_argument('--scene_scale', type=float, default=2/3,#5/6,
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
 
 group = parser.add_argument_group("optimization")
@@ -52,12 +52,14 @@ group.add_argument('--no_lerp', action='store_true', default=False,
 group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
-group.add_argument('--resample_thresh', type=float, default=10.0, #5.0,
+group.add_argument('--resample_thresh', type=float, default=5.0,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--prox_l1_alpha', type=float, default=0.0,
                    help='proximal L1 per epoch; amount to subtract from sigma')
 group.add_argument('--prox_l0', action='store_true', default=False,
                    help='proximal L0 i.e., keep resampling after each epoch')
+group.add_argument('--norand', action='store_true', default=True,
+                   help='disable random')
 args = parser.parse_args()
 
 os.makedirs(args.train_dir, exist_ok=True)
@@ -147,7 +149,7 @@ for epoch_id in range(args.n_epochs):
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
-            rgb_pred = grid.volume_render(rays, use_kernel=True, randomize=True)
+            rgb_pred = grid.volume_render(rays, use_kernel=True, randomize=not args.norand)
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
