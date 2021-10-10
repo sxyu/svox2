@@ -28,7 +28,8 @@ parser.add_argument('data_dir', type=str)
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-group.add_argument('--reso', type=int, default=256, help='grid resolution')
+group.add_argument('--final_reso', type=int, default=512, help='FINAL grid resolution')
+group.add_argument('--init_reso', type=int, default=64, help='INITIAL grid resolution')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
 group.add_argument('--scene_scale', type=float, default=2/3,#5/6,
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
@@ -43,7 +44,7 @@ group.add_argument('--print_every', type=int, default=20, help='print every')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
-group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
+group.add_argument('--init_sigma', type=float, default=0.33, help='initialization sigma')
 
 
 group = parser.add_argument_group("misc experiments")
@@ -73,7 +74,9 @@ dset = Dataset(args.data_dir, split="train", device=device, permutation=args.per
                 scene_scale=args.scene_scale)
 dset_test = Dataset(args.data_dir, split="test", scene_scale=args.scene_scale)
 
-grid = svox2.SparseGrid(reso=args.reso,
+reso = args.init_reso
+down_factor = args.final_reso // reso
+grid = svox2.SparseGrid(reso=reso,
                         radius=1.0,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
@@ -188,9 +191,10 @@ for epoch_id in range(args.n_epochs):
     print('Saving', ckpt_path)
     grid.save(ckpt_path)
 
-    if epoch_id == 0 or args.prox_l0:
+    if reso < args.final_reso or args.prox_l0:
+        reso *= 2
         print('Upsampling!!!')
-        grid.resample(reso=512, sigma_thresh=args.resample_thresh)
+        grid.resample(reso=reso, sigma_thresh=args.resample_thresh)
 
     if args.prox_l1_alpha > 0.0:
         print('ProxL1: sigma -=', args.prox_l1_alpha)
