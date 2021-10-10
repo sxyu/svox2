@@ -187,7 +187,7 @@ class SparseGrid(nn.Module):
         self.links : torch.Tensor
         self.data = nn.Parameter(torch.zeros(
             self.capacity, self.basis_dim * 3 + 4, dtype=torch.float32, device=device))
-        self.cubemap = nn.Parameter(torch.zeros(
+        self.cubemap = nn.Parameter(torch.randn(
             6, self.cubemap_reso, self.cubemap_reso,
             basis_dim, dtype=torch.float32, device=device))
 

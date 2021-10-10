@@ -165,9 +165,8 @@ __device__ __inline__ void trace_ray_cuvol(
     CubemapIndex idx;
     get_cubemap_index(grid.cubemap, ray.vdir, &idx);
 
-    float sphfunc_val[10];
-    sphfunc_val[0] = 1.f;
-    eval_cubemap(grid.cubemap, idx, sphfunc_val + 1);
+    float sphfunc_val[9];
+    eval_cubemap(grid.cubemap, idx, sphfunc_val);
 
     float light_intensity = 0.f;
     float pos[3], interp_val[31];
@@ -197,17 +196,12 @@ __device__ __inline__ void trace_ray_cuvol(
 
 #pragma unroll 3
             for (int j = 0; j < 3; ++j) {
-                int off = j * grid.basis_dim + 1;
-                float total = 0.f;
-                for (int i = 0; i < grid.basis_dim; ++i) {
-                    interp_val[off + i] = expf(interp_val[off + i]);
-                    total += interp_val[off + i];
-                }
-                float tmp = 0.f;
+                int off = j * grid.basis_dim + 4;
+                float tmp = sphfunc_val[j + 1];
                 for (int i = 0; i < grid.basis_dim; ++i) {
                     tmp += sphfunc_val[i] * interp_val[off + i];
                 }
-                out[j] += weight * tmp / total;
+                out[j] += weight * _SIGMOID(tmp);
             }
         }
         t += opt.step_size;
@@ -271,9 +265,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     CubemapIndex idx;
     get_cubemap_index(grid.cubemap, ray.vdir, &idx);
 
-    float sphfunc_val[10], grad_sphfunc_val[10];
-    sphfunc_val[0] = 1.f;
-    eval_cubemap(grid.cubemap, idx, sphfunc_val + 1);
+    float sphfunc_val[9], grad_sphfunc_val[9];
+    eval_cubemap(grid.cubemap, idx, sphfunc_val);
 
     for (int j = 0; j < grid.basis_dim; ++j) {
         grad_sphfunc_val[j] = 0.f;
@@ -313,30 +306,19 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             float total_color = 0.f;
 #pragma unroll 3
             for (int j = 0; j < 3; ++j) {
-                const int off = j * grid.basis_dim + 1;
-                {
-                    float total = 0.f;
-                    for (int i = 0; i < grid.basis_dim; ++i) {
-                        interp_val[off + i] = expf(interp_val[off + i]);
-                        total += interp_val[off + i];
-                    }
-                    const float invtotal = 1.f / total;
-                    for (int i = 0; i < grid.basis_dim; ++i) {
-                        interp_val[off + i] = interp_val[off + i] * invtotal;
-                    }
-                }
-
-                float smax_total = 0.f;
+                const int off = j * grid.basis_dim + 4;
+                float tmp = sphfunc_val[j + 1];
                 for (int i = 0; i < grid.basis_dim; ++i) {
-                    smax_total += sphfunc_val[i] * interp_val[off + i];
+                    tmp += sphfunc_val[i] * interp_val[off + i];
                 }
-                smax_total *= grad_output[j];
-                total_color += smax_total;
+                const float sigmoid = _SIGMOID(tmp);
+                total_color += sigmoid * grad_output;
 
-                const float sphfunc_scale = weight * grad_output[j];
+                const float tmp2 = weight * sigmoid * (1.f - sigmoid)  * grad_out[j];
+                curr_grad[j + 1] = tmp2;
                 for (int i = 0; i < grid.basis_dim; ++i) {
-                    curr_grad[off + i] = weight * interp_val[off + i] * (grad_output[j] * sphfunc_val[i] - smax_total);
-                    grad_sphfunc_val[i] += sphfunc_scale * interp_val[off + i];
+                    curr_grad[off + i] = sphfunc_val[i] * tmp2;
+                    grad_sphfunc_val[i] += tmp2 * interp_val[off + i];
                 }
             }
             accum -= weight * total_color;
@@ -347,7 +329,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         }
         t += opt.step_size;
     }
-    eval_cubemap_backward(grad_cubemap_out, idx, grad_sphfunc_val + 1);
+    eval_cubemap_backward(grad_cubemap_out, idx, grad_sphfunc_val);
 }
 
 
