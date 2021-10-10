@@ -14,7 +14,7 @@ namespace {
 namespace device {
 
 __device__ __constant__ const float ZEROS[] = {
-    0.f, 0.f, 0.f, 0.f, 0.f,
+    -100.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
