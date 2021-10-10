@@ -169,7 +169,7 @@ __device__ __inline__ void trace_ray_cuvol(
     eval_cubemap(grid.cubemap, idx, sphfunc_val);
 
     float light_intensity = 0.f;
-    float pos[3], interp_val[31];
+    float pos[3], interp_val[28];
     int32_t l[3];
     while (t <= tmax) {
 #pragma unroll 3
@@ -197,7 +197,7 @@ __device__ __inline__ void trace_ray_cuvol(
 #pragma unroll 3
             for (int j = 0; j < 3; ++j) {
                 int off = j * grid.basis_dim + 4;
-                float tmp = sphfunc_val[j + 1];
+                float tmp = interp_val[j + 1];
                 for (int i = 0; i < grid.basis_dim; ++i) {
                     tmp += sphfunc_val[i] * interp_val[off + i];
                 }
@@ -272,14 +272,14 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         grad_sphfunc_val[j] = 0.f;
     }
 
-    float pos[3], interp_val[31];
+    float pos[3], interp_val[28];
     int32_t l[3];
     float accum = color_cache[0] * grad_output[0] +
                   color_cache[1] * grad_output[1] +
                   color_cache[2] * grad_output[2];
 
     float light_intensity = 0.f;
-    float curr_grad[31];
+    float curr_grad[28];
     // remat samples
     while (t <= tmax) {
 #pragma unroll 3
@@ -307,14 +307,14 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 #pragma unroll 3
             for (int j = 0; j < 3; ++j) {
                 const int off = j * grid.basis_dim + 4;
-                float tmp = sphfunc_val[j + 1];
+                float tmp = interp_val[j + 1];
                 for (int i = 0; i < grid.basis_dim; ++i) {
                     tmp += sphfunc_val[i] * interp_val[off + i];
                 }
                 const float sigmoid = _SIGMOID(tmp);
-                total_color += sigmoid * grad_output;
+                total_color += sigmoid * grad_output[j];
 
-                const float tmp2 = weight * sigmoid * (1.f - sigmoid)  * grad_out[j];
+                const float tmp2 = weight * sigmoid * (1.f - sigmoid)  * grad_output[j];
                 curr_grad[j + 1] = tmp2;
                 for (int i = 0; i < grid.basis_dim; ++i) {
                     curr_grad[off + i] = sphfunc_val[i] * tmp2;
