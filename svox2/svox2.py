@@ -47,7 +47,7 @@ class RenderOptions:
                                           #  probability is <= this much (forward only)
                                           #  make this higher for fast rendering
 
-    def _to_cpp(self):
+    def _to_cpp(self, randomize: bool = False):
         """
         Generate object to pass to C++
         """
@@ -57,6 +57,11 @@ class RenderOptions:
         opt.step_size = self.step_size
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
+        opt.randomize = randomize
+        UINT32_MAX = 2**32-1
+        opt._m1 = np.random.randint(0, UINT32_MAX)
+        opt._m2 = np.random.randint(0, UINT32_MAX)
+        opt._m3 = np.random.randint(0, UINT32_MAX)
         # Note that the backend option is handled in Python
         return opt
 
@@ -273,93 +278,6 @@ class SparseGrid(nn.Module):
     def forward(self, points : torch.Tensor, use_kernel : bool = True):
         return self.sample(points, use_kernel=use_kernel)
 
-    def _volume_render_gradcheck_nn(self, rays: Rays):
-        """
-        nearest-neighbor gradcheck version
-        """
-        def intersect_aabb_unit(cen, invdir):
-            """
-            voxel aabb ray tracing step
-            :param cen: torch.Tensor [B, 3] center
-            :param invdir: torch.Tensor [B, 3] 1/dir
-            :return: tmin torch.Tensor [B] at least 0;
-                     tmax torch.Tensor [B]
-            """
-            t1 = -cen * invdir
-            t2 = t1 + invdir
-            tmax = torch.min(torch.max(t1, t2), dim=-1).values
-            return tmax
-
-        origins = self.world2grid(rays.origins)
-        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True)
-        viewdirs = dirs
-        B = dirs.size(0)
-        assert origins.size(0) == B
-        gsz = self._grid_size()
-        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
-        delta_scale = 1.0 / dirs.norm(dim=1)
-        dirs *= delta_scale.unsqueeze(-1)
-
-        sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
-        invdirs = 1.0 / dirs
-        invdirs[dirs == 0] = 1e9
-
-        t1 = (1e-3 - origins) * invdirs
-        t2 = (self._grid_size().to(device=dirs.device) - 1.0 - 1e-3 - origins) * invdirs
-        t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(0.0)
-        tmax = torch.min(torch.max(t1, t2), dim=-1).values
-
-        log_light_intensity = torch.zeros(B, device=origins.device)
-        out_rgb = torch.zeros((B, 3), device=origins.device)
-        good_indices = torch.arange(B, device=origins.device)
-
-        mask = t < tmax
-        good_indices = good_indices[mask]
-        origins = origins[mask]
-        dirs = dirs[mask]
-        invdirs = invdirs[mask]
-        t = t[mask]
-        sh_mult = sh_mult[mask]
-        tmax = tmax[mask]
-
-
-        while good_indices.numel() > 0:
-            pos = origins + t[:, None] * dirs
-            l = pos.to(torch.long)
-            pos_t = pos - l
-
-            links = self.links[l.unbind(-1)]
-            rgba = self._fetch_links(links)
-            del links
-
-            subcube_tmax = intersect_aabb_unit(pos_t, invdirs)
-
-            delta_t = subcube_tmax + self.opt.step_epsilon
-            log_att = - delta_t * torch.relu(rgba[..., 0]) * delta_scale[good_indices]
-            weight = torch.exp(log_light_intensity[good_indices]) * (
-                        1.0 - torch.exp(log_att))
-            rgb = rgba[:, 1:]
-            # [B', 3, n_sh_coeffs]
-            rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.sigmoid(torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1))   # [B', 3]
-            rgb = weight[:, None] * rgb[:, :3]
-
-            out_rgb[good_indices] += rgb
-            log_light_intensity[good_indices] += log_att
-            t += delta_t
-
-            mask = t < tmax
-            good_indices = good_indices[mask]
-            origins = origins[mask]
-            dirs = dirs[mask]
-            invdirs = invdirs[mask]
-            t = t[mask]
-            sh_mult = sh_mult[mask]
-            tmax = tmax[mask]
-        out_rgb += torch.exp(log_light_intensity).unsqueeze(-1) * \
-                   self.opt.background_brightness
-        return out_rgb
-
     def _volume_render_gradcheck_lerp(self, rays : Rays):
         """
         trilerp gradcheck version
@@ -378,8 +296,9 @@ class SparseGrid(nn.Module):
         invdirs = 1.0 / dirs
         invdirs[dirs == 0] = 1e9
 
-        t1 = (1e-3 - origins) * invdirs
-        t2 = (self._grid_size().to(device=dirs.device) - 1.0 - 1e-3 - origins) * invdirs
+        gsz = self._grid_size()
+        t1 = (- origins) * invdirs
+        t2 = (gsz.to(device=dirs.device) - 1.0 - origins) * invdirs
         t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(0.0)
         tmax = torch.min(torch.max(t1, t2), dim=-1).values
 
@@ -400,6 +319,10 @@ class SparseGrid(nn.Module):
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
             l = pos.to(torch.long)
+            l.clamp_min_(0)
+            l[:, 0].clamp_max_(gsz[0] - 2)
+            l[:, 1].clamp_max_(gsz[1] - 2)
+            l[:, 2].clamp_max_(gsz[2] - 2)
             pos -= l
 
             # BEGIN CRAZY TRILERP
@@ -460,7 +383,8 @@ class SparseGrid(nn.Module):
         return out_rgb
 
     def volume_render(self, rays : Rays,
-                      use_kernel : bool = True):
+                      use_kernel : bool = True,
+                      randomize : bool = False):
         """
         Standard volume rendering. See grid.opt.* (RenderOptions) for configs.
 
@@ -468,18 +392,16 @@ class SparseGrid(nn.Module):
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
         :return: (N, 3) RGB
         """
-        assert self.opt.backend in ['cuvol', 'lerp', 'nn']
+        assert self.opt.backend in ['cuvol']#, 'lerp', 'nn']
         if use_kernel and self.links.is_cuda and _C is not None:
             assert rays.is_cuda
             return _VolumeRenderFunction.apply(self.data, self._to_cpp(),
-                                               rays._to_cpp(), self.opt._to_cpp(),
+                                               rays._to_cpp(),
+                                               self.opt._to_cpp(randomize=randomize),
                                                self.opt.backend)
         else:
             warn("Using slow volume rendering, should only be used for debugging")
-            if self.opt.backend != 'nn':
-                return self._volume_render_gradcheck_lerp(rays)
-            else:
-                return self._volume_render_gradcheck_nn(rays)
+            return self._volume_render_gradcheck_lerp(rays)
 
     def resample(self,
                  reso : Union[int, List[int]],

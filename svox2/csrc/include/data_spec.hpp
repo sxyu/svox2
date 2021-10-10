@@ -42,4 +42,7 @@ struct RenderOptions {
     float step_size;
     float sigma_thresh;
     float stop_thresh;
+
+    bool randomize;
+    uint32_t _m1, _m2, _m3;
 };

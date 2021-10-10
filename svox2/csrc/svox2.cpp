@@ -10,14 +10,6 @@ using torch::Tensor;
 Tensor sample_grid(SparseGridSpec&, Tensor);
 Tensor sample_grid_backward(SparseGridSpec&, Tensor, Tensor);
 
-Tensor volume_render_nn(SparseGridSpec&, RaysSpec&, RenderOptions&);
-Tensor volume_render_nn_backward(SparseGridSpec&, RaysSpec&, RenderOptions&,
-                                 Tensor, Tensor);
-
-Tensor volume_render_lerp(SparseGridSpec&, RaysSpec&, RenderOptions&);
-Tensor volume_render_lerp_backward(SparseGridSpec&, RaysSpec&, RenderOptions&,
-                                   Tensor, Tensor);
-
 Tensor volume_render_cuvol(SparseGridSpec&, RaysSpec&, RenderOptions&);
 Tensor volume_render_cuvol_backward(SparseGridSpec&, RaysSpec&, RenderOptions&,
                                     Tensor, Tensor);
@@ -28,10 +20,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #define _REG_FUNC(funname) m.def(#funname, &funname)
     _REG_FUNC(sample_grid);
     _REG_FUNC(sample_grid_backward);
-    _REG_FUNC(volume_render_nn);
-    _REG_FUNC(volume_render_nn_backward);
-    _REG_FUNC(volume_render_lerp);
-    _REG_FUNC(volume_render_lerp_backward);
     _REG_FUNC(volume_render_cuvol);
     _REG_FUNC(volume_render_cuvol_backward);
     _REG_FUNC(dilate);
@@ -57,5 +45,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("step_epsilon", &RenderOptions::step_epsilon)
         .def_readwrite("step_size", &RenderOptions::step_size)
         .def_readwrite("sigma_thresh", &RenderOptions::sigma_thresh)
-        .def_readwrite("stop_thresh", &RenderOptions::stop_thresh);
+        .def_readwrite("stop_thresh", &RenderOptions::stop_thresh)
+        .def_readwrite("randomize", &RenderOptions::randomize)
+        .def_readwrite("_m1", &RenderOptions::_m1)
+        .def_readwrite("_m2", &RenderOptions::_m2)
+        .def_readwrite("_m3", &RenderOptions::_m3);
 }
