@@ -131,9 +131,9 @@ __device__ __inline__ void trace_ray_cuvol(
     // Warning: modifies ray.origin
     transform_coord(ray.origin, grid._scaling, grid._offset);
     // Warning: modifies ray.dir
-    const float world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
+    const float delta_scale = _get_delta_scale(grid._scaling, ray.dir);
 
-    float t, tmax;
+    float t, samp_t, tmax;
     float invdir[3];
 
 #pragma unroll 3
@@ -168,10 +168,15 @@ __device__ __inline__ void trace_ray_cuvol(
     float light_intensity = 0.f;
     float pos[3], interp_val[28];
     int32_t l[3];
+    samp_t = t;
     while (t <= tmax) {
+        float world_step = samp_t;
+        samp_t = t + rng.rand() * opt.step_size;
+        world_step = (samp_t - world_step) * delta_scale;
+
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            pos[j] = ray.origin[j] + t * ray.dir[j];
+            pos[j] = ray.origin[j] + samp_t * ray.dir[j];
             pos[j] = min(max(pos[j], 0.f), grid.links.size(j) - 1.f);
             l[j] = (int32_t) pos[j];
             l[j] = min(l[j], grid.links.size(j) - 2);
@@ -181,10 +186,6 @@ __device__ __inline__ void trace_ray_cuvol(
         trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 0, 1);
 
         float sigma = interp_val[0];
-        if (opt.randomize) {
-            sigma += rng.randn();
-        }
-
         if (sigma > opt.sigma_thresh) {
             trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 1, grid.data.size(1));
             const float pcnt = world_step * sigma;
@@ -229,9 +230,9 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     // Warning: modifies ray.origin
     transform_coord(ray.origin, grid._scaling, grid._offset);
     // Warning: modifies ray.dir
-    const float world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
+    const float delta_scale = _get_delta_scale(grid._scaling, ray.dir);
 
-    float t, tmax;
+    float t, samp_t, tmax;
     float invdir[3];
 
 #pragma unroll 3
@@ -269,11 +270,15 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
     float light_intensity = 0.f;
     float curr_grad[28];
+    samp_t = t;
     // remat samples
     while (t <= tmax) {
+        float world_step = samp_t;
+        samp_t = t + rng.rand() * opt.step_size;
+        world_step = (samp_t - world_step) * delta_scale;
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            pos[j] = ray.origin[j] + t * ray.dir[j];
+            pos[j] = ray.origin[j] + samp_t * ray.dir[j];
             pos[j] = min(max(pos[j], 0.f), grid.links.size(j) - 1.f);
             l[j] = (int32_t) pos[j];
             l[j] = min(l[j], grid.links.size(j) - 2);
@@ -282,9 +287,6 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
         trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 0, 1);
         float sigma = interp_val[0];
-        if (opt.randomize) {
-            sigma += rng.randn();
-        }
         if (sigma > opt.sigma_thresh) {
             trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 1,
                           grid.data.size(1));

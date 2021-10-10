@@ -28,6 +28,13 @@ struct RandomEngine32 {
     }
 
     __host__ __device__
+	float rand() {
+		uint32_t z = (*this)();
+		return float(z) / (1LL << 32);
+	}
+
+
+    __host__ __device__
     void randn2(float* out1, float* out2) {
         rand2(out1, out2);
         // Box-Muller transform

@@ -83,6 +83,7 @@ grid.data.data[..., :1] = args.init_sigma
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
+#  step_size = 2.0
 epoch_size = dset.rays.origins.size(0)
 batches_per_epoch = (epoch_size-1)//args.batch_size+1
 
