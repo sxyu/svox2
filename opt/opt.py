@@ -29,25 +29,30 @@ parser.add_argument('data_dir', type=str)
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
+group.add_argument('--scene_scale', type=float, default=5/6,
+                   help='Scene scale; generally 2/3, can be 5/6 for lego')
 group.add_argument('--reso', type=int, default=256, help='grid resolution')
 group.add_argument('--sh_dim', type=int, default=8,#9,
                    help='SH dimensions, must be square number >=1, <= 16')
 
 group = parser.add_argument_group("optimization")
-group.add_argument('--batch_size', type=int, default=5000, help='batch size')
+group.add_argument('--batch_size', type=int,
+                   default=5000,#20000,#5000,
+                   help='batch size')
 group.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 group.add_argument('--lr_sigma', type=float, default=2e7, help='SGD lr for sigma')
 #  group.add_argument('--lr_color', type=float, default=5e5, help='SGD lr for base color')
 #  group.add_argument('--lr_coeff', type=float, default=5e5, help='SGD lr for coeffs')
 group.add_argument('--lr_color', type=float, default=2e5, help='sgd lr for base color')
-group.add_argument('--lr_coeff', type=float, default=5e4,#2e5,
+group.add_argument('--lr_coeff', type=float, default=2e5,
             help='SGD lr for coeffs')
 group.add_argument('--lr_cubemap', type=float,
-                    default=2e3, #2e3, #2e4,#2e5,#2e2,
+                    default=2e2, #2e3, #2e4,#2e5,#2e2,
                     help='SGD lr for cubemap')
 group.add_argument('--n_epochs', type=int, default=20)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--cubemap_reso', type=int, default=16, help='cubemap resolution (per face)')
+group.add_argument('--cubemap_reso', type=int, default=4,#8,#8,#16,
+                   help='cubemap resolution (per face)')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
@@ -64,7 +69,7 @@ group.add_argument('--no_lerp', action='store_true', default=False,
 group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
-group.add_argument('--resample_thresh', type=float, default=10.0, #5.0,
+group.add_argument('--resample_thresh', type=float, default=2.5,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--prox_l1_alpha', type=float, default=0.0,
                    help='proximal L1 per epoch; amount to subtract from sigma')
@@ -83,8 +88,11 @@ shutil.copyfile(__file__, path.join(args.train_dir, 'opt.py'))
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
-dset = Dataset(args.data_dir, split="train", device=device, permutation=args.perm)
-dset_test = Dataset(args.data_dir, split="test")
+dset = Dataset(args.data_dir, split="train", device=device,
+               permutation=args.perm,
+               scene_scale=args.scene_scale)
+dset_test = Dataset(args.data_dir, split="test",
+                    scene_scale=args.scene_scale)
 
 grid = svox2.SparseGrid(reso=args.reso,
                         radius=1.0,
@@ -115,13 +123,14 @@ for epoch_id in range(args.n_epochs):
         with torch.no_grad():
             im_size = dset_test.h * dset_test.w
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
+            START_IMAGE = 4
             N_IMGS_TO_SAVE = 5
             N_IMGS_TO_EVAL = 20
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = img_eval_interval * (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
             gstep_id = epoch_id * batches_per_epoch
             n_images_gen = 0
-            for img_id in tqdm(range(0, dset_test.n_images, img_eval_interval)):
+            for img_id in tqdm(range(START_IMAGE, dset_test.n_images, img_eval_interval)):
                 all_rgbs = []
                 all_mses = []
                 for batch_begin in range(0, im_size, args.eval_batch_size):
@@ -134,7 +143,7 @@ for epoch_id in range(args.n_epochs):
                     rgb_pred_test = grid.volume_render(rays, use_kernel=True)
                     all_rgbs.append(rgb_pred_test.cpu())
                     all_mses.append(((rgb_gt_test - rgb_pred_test) ** 2).cpu())
-                if img_id % img_save_interval == 0 and len(all_rgbs):
+                if (img_id - START_IMAGE) % img_save_interval == 0 and len(all_rgbs):
                     im = torch.cat(all_rgbs).view(dset_test.h, dset_test.w, all_rgbs[0].size(-1))
                     summary_writer.add_image(f'test/image_{img_id:04d}',
                             im, global_step=gstep_id, dataformats='HWC')
@@ -166,7 +175,7 @@ for epoch_id in range(args.n_epochs):
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
-            rgb_pred = grid.volume_render(rays, use_kernel=True)
+            rgb_pred = grid.volume_render(rays, use_kernel=True, randomize=True)
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
 

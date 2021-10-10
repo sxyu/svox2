@@ -46,7 +46,7 @@ class RenderOptions:
                                           #  probability is <= this much (forward only)
                                           #  make this higher for fast rendering
 
-    def _to_cpp(self):
+    def _to_cpp(self, randomize : bool=False):
         """
         Generate object to pass to C++
         """
@@ -56,6 +56,12 @@ class RenderOptions:
         opt.step_size = self.step_size
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
+        opt.randomize = randomize
+
+        UINT32_MAX = 2**32-1
+        opt._m1 = np.random.randint(0, UINT32_MAX)
+        opt._m2 = np.random.randint(0, UINT32_MAX)
+        opt._m3 = np.random.randint(0, UINT32_MAX)
         # Note that the backend option is handled in Python
         return opt
 
@@ -385,19 +391,21 @@ class SparseGrid(nn.Module):
         return out_rgb
 
     def volume_render(self, rays : Rays,
-                      use_kernel : bool = True):
+                      use_kernel : bool = True,
+                      randomize: bool = False):
         """
         Standard volume rendering. See grid.opt.* (RenderOptions) for configs.
 
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
+        :param randomize: bool, if true uses randomization (CUDA version only)
         :return: (N, 3) RGB
         """
         assert self.opt.backend in ['cuvol']#, 'lerp', 'nn']
         if use_kernel and self.links.is_cuda and _C is not None:
             assert rays.is_cuda
             return _VolumeRenderFunction.apply(self.data, self.cubemap, self._to_cpp(),
-                                               rays._to_cpp(), self.opt._to_cpp(),
+                                               rays._to_cpp(), self.opt._to_cpp(randomize),
                                                self.opt.backend)
         else:
             warn("Using slow volume rendering, should only be used for debugging")
@@ -566,6 +574,7 @@ class SparseGrid(nn.Module):
     def to_svox1(self, device : Union[torch.device, str, None]=None):
         """
         Convert the grid to a svox 1 octree. Requires svox (pip install svox)
+        [For learned stuff, converts RGB only]
 
         :param device: device to put the octree. None = grid data's device
         """
@@ -576,7 +585,7 @@ class SparseGrid(nn.Module):
         import svox
         n_refine = int(np.log2(self.links.size(0))) - 1
 
-        t = svox.N3Tree(data_format=f'SH{self.basis_dim}',
+        t = svox.N3Tree(data_format=f'RGBA',
                         init_refine=0,
                         radius=self.radius.tolist(),
                         center=self.center.tolist(),
@@ -597,7 +606,7 @@ class SparseGrid(nn.Module):
         for i in tqdm(range(n_refine)):
             t[index].refine()
 
-        t[index, :-1] = self.data.data[:, 1:].to(device=device)
+        t[index, :-1] = torch.sigmoid(self.data.data[:, 1:4]).to(device=device)
         t[index, -1] = self.data.data[:, 0].to(device=device)
         return t
 
