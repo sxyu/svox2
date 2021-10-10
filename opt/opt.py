@@ -30,6 +30,8 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 group.add_argument('--reso', type=int, default=256, help='grid resolution')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
+group.add_argument('--scene_scale', type=float, default=5/6,
+                           help='Scene scale; generally 2/3, can be 5/6 for lego')
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
@@ -65,8 +67,9 @@ summary_writer = SummaryWriter(args.train_dir)
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
-dset = Dataset(args.data_dir, split="train", device=device, permutation=args.perm)
-dset_test = Dataset(args.data_dir, split="test")
+dset = Dataset(args.data_dir, split="train", device=device, permutation=args.perm,
+                scene_scale=args.scene_scale)
+dset_test = Dataset(args.data_dir, split="test", scene_scale=args.scene_scale)
 
 grid = svox2.SparseGrid(reso=args.reso,
                         radius=1.0,
@@ -144,7 +147,7 @@ for epoch_id in range(args.n_epochs):
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
-            rgb_pred = grid.volume_render(rays, use_kernel=True)
+            rgb_pred = grid.volume_render(rays, use_kernel=True, randomize=True)
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
 

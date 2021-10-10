@@ -13,8 +13,8 @@
 namespace {
 namespace device {
 
-__device__ __constant__ const float ZEROS[] = {
-    0.f, 0.f, 0.f, 0.f, 0.f,
+__device__ __constant__ const float EMPTY_CELL_DATA[] = {
+    -100.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
@@ -31,28 +31,28 @@ __device__ __inline__ void trilerp_cuvol(
         const int min_idx,
         const int max_idx) {
     const float* ptr000 = (links[l[0]][l[1]][l[2]] >= 0 ?
-                          &data[links[l[0]][l[1]][l[2]]][0] : ZEROS),
+                          &data[links[l[0]][l[1]][l[2]]][0] : EMPTY_CELL_DATA),
 
                * ptr001 = (links[l[0]][l[1]][l[2] + 1] >= 0 ?
-                          &data[links[l[0]][l[1]][l[2] + 1]][0] : ZEROS),
+                          &data[links[l[0]][l[1]][l[2] + 1]][0] : EMPTY_CELL_DATA),
 
                * ptr010 = (links[l[0]][l[1] + 1][l[2]] >= 0 ?
-                          &data[links[l[0]][l[1] + 1][l[2]]][0] : ZEROS),
+                          &data[links[l[0]][l[1] + 1][l[2]]][0] : EMPTY_CELL_DATA),
 
                * ptr011 = (links[l[0]][l[1] + 1][l[2] + 1] >= 0 ?
-                          &data[links[l[0]][l[1] + 1][l[2] + 1]][0] : ZEROS),
+                          &data[links[l[0]][l[1] + 1][l[2] + 1]][0] : EMPTY_CELL_DATA),
 
                * ptr100 = (links[l[0] + 1][l[1]][l[2]] >= 0 ?
-                          &data[links[l[0] + 1][l[1]][l[2]]][0] : ZEROS),
+                          &data[links[l[0] + 1][l[1]][l[2]]][0] : EMPTY_CELL_DATA),
 
                * ptr101 = (links[l[0] + 1][l[1]][l[2] + 1] >= 0 ?
-                          &data[links[l[0] + 1][l[1]][l[2] + 1]][0] : ZEROS),
+                          &data[links[l[0] + 1][l[1]][l[2] + 1]][0] : EMPTY_CELL_DATA),
 
                * ptr110 = (links[l[0] + 1][l[1] + 1][l[2]] >= 0 ?
-                          &data[links[l[0] + 1][l[1] + 1][l[2]]][0] : ZEROS),
+                          &data[links[l[0] + 1][l[1] + 1][l[2]]][0] : EMPTY_CELL_DATA),
 
                * ptr111 = (links[l[0] + 1][l[1] + 1][l[2] + 1] >= 0 ?
-                          &data[links[l[0] + 1][l[1] + 1][l[2] + 1]][0] : ZEROS);
+                          &data[links[l[0] + 1][l[1] + 1][l[2] + 1]][0] : EMPTY_CELL_DATA);
 #pragma unroll
     for (int j = min_idx; j < max_idx; ++j) {
         const float ix0y0 = lerp(ptr000[j], ptr001[j], pos[2]);
