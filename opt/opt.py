@@ -37,7 +37,7 @@ group.add_argument('--sh_dim', type=int, default=8,#9,
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int,
-                   default=5000,#20000,#5000,
+                   default=20000,#20000,#5000,
                    help='batch size')
 group.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 group.add_argument('--lr_sigma', type=float, default=2e7, help='SGD lr for sigma')
@@ -51,7 +51,7 @@ group.add_argument('--lr_cubemap', type=float,
                     help='SGD lr for cubemap')
 group.add_argument('--n_epochs', type=int, default=20)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--cubemap_reso', type=int, default=4,#8,#8,#16,
+group.add_argument('--cubemap_reso', type=int, default=8,#4,#16,
                    help='cubemap resolution (per face)')
 
 group = parser.add_argument_group("initialization")
