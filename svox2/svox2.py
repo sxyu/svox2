@@ -535,7 +535,7 @@ class SparseGrid(nn.Module):
 
         sample_vals_mask = torch.cat(all_sample_vals_mask, dim=0)
         if use_weight_thresh:
-            sigmas = sample_vals_mask
+            sigmas = sample_vals_mask.view(reso)
             gsz = torch.tensor(reso)
             offset = (self._offset * gsz - 0.5).to(device=device)
             scaling = (self._scaling * gsz).to(device=device)

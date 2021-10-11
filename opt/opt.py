@@ -40,14 +40,13 @@ group.add_argument('--scene_scale', type=float, default=2/3,#5/6,
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
-group.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 group.add_argument('--lr_sigma', type=float, default=2e5, # 2e7
         help='SGD lr for sigma')
 group.add_argument('--lr_sh', type=float, default=2e4, # 2e6
         help='SGD lr for SH')
 group.add_argument('--n_epochs', type=int, default=20)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=4, help='upsample the grid every')
+group.add_argument('--upsamp_every', type=int, default=1, help='upsample the grid every')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
@@ -60,8 +59,14 @@ group.add_argument('--no_lerp', action='store_true', default=False,
 group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
-group.add_argument('--resample_thresh', type=float, default=2.5,
+group.add_argument('--sigma_thresh', type=float,
+                    default=2.5,
                    help='Resample (upsample to 512) sigma threshold')
+group.add_argument('--weight_thresh', type=float,
+                    default=0.001,
+                   help='Resample (upsample to 512) weight threshold')
+group.add_argument('--use_weight_thresh', action='store_true', default=True,
+                    help='use weight thresholding')
 group.add_argument('--prox_l1_alpha', type=float, default=0.0,
                    help='proximal L1 per epoch; amount to subtract from sigma')
 group.add_argument('--prox_l0', action='store_true', default=False,
@@ -103,6 +108,12 @@ grid.opt.sigma_thresh = 1e-8
 grid.opt.backend = 'cuvol'
 
 gstep_id_base = 0
+
+resample_cameras = [
+        svox2.Camera(c2w.to(device=device), dset.focal, dset.focal,
+                     dset.w, dset.h) for c2w in dset.c2w
+    ] if args.use_weight_thresh else None
+
 for epoch_id in range(args.n_epochs):
     epoch_size = dset.rays.origins.size(0)
     batches_per_epoch = (epoch_size-1)//args.batch_size+1
@@ -119,24 +130,17 @@ for epoch_id in range(args.n_epochs):
             img_save_interval = img_eval_interval * (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
             n_images_gen = 0
             for img_id in tqdm(range(0, dset_test.n_images, img_eval_interval)):
-                all_rgbs = []
-                all_mses = []
-                for batch_begin in range(0, im_size, args.eval_batch_size):
-                    batch_end = min(batch_begin + args.eval_batch_size, im_size)
-                    batch_origins = dset_test.rays.origins[img_id][batch_begin: batch_end].to(device=device)
-                    batch_dirs = dset_test.rays.dirs[img_id][batch_begin: batch_end].to(device=device)
-                    rgb_gt_test = dset_test.rays.gt[img_id][batch_begin: batch_end].to(device=device)
-
-                    rays = svox2.Rays(batch_origins, batch_dirs)
-                    rgb_pred_test = grid.volume_render(rays, use_kernel=True)
-                    all_rgbs.append(rgb_pred_test.cpu())
-                    all_mses.append(((rgb_gt_test - rgb_pred_test) ** 2).cpu())
-                if img_id % img_save_interval == 0 and len(all_rgbs):
-                    im = torch.cat(all_rgbs).view(dset_test.h, dset_test.w, all_rgbs[0].size(-1))
+                c2w = dset_test.c2w[img_id].to(device=device)
+                cam = svox2.Camera(c2w, dset_test.focal, dset_test.focal,
+                                   dset_test.w, dset_test.h)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
+                rgb_gt_test = dset_test.gt[img_id].to(device=device)
+                all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
+                if img_id % img_save_interval == 0:
                     summary_writer.add_image(f'test/image_{img_id:04d}',
-                            im, global_step=gstep_id_base, dataformats='HWC')
-                    im = None
-                mse_num : float = torch.cat(all_mses).mean().item()
+                            rgb_pred_test.cpu(), global_step=gstep_id_base, dataformats='HWC')
+                rgb_pred_test = rgb_gt_test = None
+                mse_num : float = all_mses.mean().item()
                 psnr = -10.0 * math.log10(mse_num)
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
@@ -149,7 +153,7 @@ for epoch_id in range(args.n_epochs):
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    if (epoch_id + 1) % factor == 0:
+    if epoch_id % (factor * factor) == 0:
         eval_step()
         gc.collect()
 
@@ -191,7 +195,7 @@ for epoch_id in range(args.n_epochs):
             grid.data.grad[..., :1] *= args.lr_sigma
             grid.data.data -= grid.data.grad
             del grid.data.grad  # Save memory
-        
+
 
     train_step()
     gc.collect()
@@ -207,10 +211,12 @@ for epoch_id in range(args.n_epochs):
         if reso < args.final_reso or args.prox_l0:
             print('* Upsampling from', reso, 'to', reso * 2)
             reso *= 2
-            use_sparsify = reso >= args.ref_reso
-            grid.resample(reso=reso, sigma_thresh=
-                    args.resample_thresh if use_sparsify else 0.0,
-                    dilate=use_sparsify)
+            use_sparsify = True #reso >= args.ref_reso
+            grid.resample(reso=reso, 
+                    sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
+                    weight_thresh=args.weight_thresh if use_sparsify else 0.0,
+                    dilate=use_sparsify,
+                    cameras=resample_cameras)
             args.lr_sigma *= 8
             args.lr_sh *= 8
             print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
