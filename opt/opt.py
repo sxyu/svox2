@@ -35,18 +35,18 @@ group.add_argument('--init_reso', type=int, default=64,
 group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
-group.add_argument('--scene_scale', type=float, default=2/3,#5/6,
+group.add_argument('--scene_scale', type=float, default=5/6,
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
-group.add_argument('--lr_sigma', type=float, default=2e5, # 2e7
+group.add_argument('--lr_sigma', type=float, default=2e6, # 2e7
         help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=2e4, # 2e6
+group.add_argument('--lr_sh', type=float, default=2e3, # 2e6
         help='SGD lr for SH')
-group.add_argument('--n_epochs', type=int, default=20)
+group.add_argument('--n_epochs', type=int, default=50)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=1, help='upsample the grid every')
+group.add_argument('--upsamp_every', type=int, default=5, help='upsample the grid every')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
@@ -54,8 +54,6 @@ group.add_argument('--init_sigma', type=float, default=0.1, help='initialization
 
 
 group = parser.add_argument_group("misc experiments")
-group.add_argument('--no_lerp', action='store_true', default=False,
-                    help='use nearest neighbor interp (faster)')
 group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
@@ -122,7 +120,6 @@ for epoch_id in range(args.n_epochs):
         # Put in a function to avoid memory leak
         print('Eval step')
         with torch.no_grad():
-            im_size = dset_test.h * dset_test.w
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
             N_IMGS_TO_SAVE = 5
             N_IMGS_TO_EVAL = 20
@@ -153,7 +150,7 @@ for epoch_id in range(args.n_epochs):
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    if epoch_id % (factor * factor) == 0:
+    if epoch_id % factor == 0:
         eval_step()
         gc.collect()
 
@@ -211,8 +208,8 @@ for epoch_id in range(args.n_epochs):
         if reso < args.final_reso or args.prox_l0:
             print('* Upsampling from', reso, 'to', reso * 2)
             reso *= 2
-            use_sparsify = True #reso >= args.ref_reso
-            grid.resample(reso=reso, 
+            use_sparsify = reso >= args.ref_reso
+            grid.resample(reso=reso,
                     sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=use_sparsify,

@@ -527,7 +527,7 @@ class SparseGrid(nn.Module):
                     sample_vals = sample_vals[sample_vals_mask]
                     sample_vals_mask = sample_vals_mask.cpu()
             else:
-                sample_vals_mask = sample_vals[:, 0]
+                sample_vals_mask = sample_vals[:, 0].clone()
             sample_vals = sample_vals.cpu()
             all_sample_vals.append(sample_vals)
             all_sample_vals_mask.append(sample_vals_mask)
