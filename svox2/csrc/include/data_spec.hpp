@@ -25,6 +25,21 @@ struct SparseGridSpec {
     }
 };
 
+struct CameraSpec {
+    torch::Tensor c2w;
+    float fx;
+    float fy;
+    int width;
+    int height;
+
+    inline void check() {
+        CHECK_INPUT(c2w);
+        TORCH_CHECK(c2w.is_floating_point());
+        TORCH_CHECK(c2w.ndimension() == 2);
+        TORCH_CHECK(c2w.size(1) == 4);
+    }
+};
+
 struct RaysSpec {
     Tensor origins;
     Tensor dirs;

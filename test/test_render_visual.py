@@ -7,7 +7,7 @@ device='cuda:0'
 
 GRID_FILE = 'lego.npy'
 grid = svox2.SparseGrid(reso=256, device='cpu', radius=1.3256)
-grid.grid.data = torch.from_numpy(np.load(GRID_FILE))
+grid.data.data = torch.from_numpy(np.load(GRID_FILE)).view(-1, grid.data_dim)
 grid = grid.cuda()
 
 c2w = torch.tensor([

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include "data_spec_packed.cuh"
 
 namespace {
 namespace device {
@@ -102,6 +103,22 @@ __device__ __inline__ float _get_delta_scale(
     dir[1] *= delta_scale;
     dir[2] *= delta_scale;
     return delta_scale;
+}
+
+__device__ __inline__ void cam2world_ray(
+    int ix, int iy,
+    float* dir,
+    float* origin,
+    const PackedCameraSpec& __restrict__ cam) {
+    // OpenCV convention (contrary to svox 1, which uses OpenGL)
+    float x = (ix - 0.5 * cam.width) / cam.fx;
+    float y = (iy - 0.5 * cam.height) / cam.fy;
+    float z = sqrtf(x * x + y * y + 1.0);
+    x /= z; y /= z; z = 1.0f / z;
+    dir[0] = cam.c2w[0][0] * x + cam.c2w[0][1] * y + cam.c2w[0][2] * z;
+    dir[1] = cam.c2w[1][0] * x + cam.c2w[1][1] * y + cam.c2w[1][2] * z;
+    dir[2] = cam.c2w[2][0] * x + cam.c2w[2][1] * y + cam.c2w[2][2] * z;
+    origin[0] = cam.c2w[0][3]; origin[1] = cam.c2w[1][3]; origin[2] = cam.c2w[2][3];
 }
 
 } // namespace device

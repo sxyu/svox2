@@ -28,8 +28,12 @@ parser.add_argument('data_dir', type=str)
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-group.add_argument('--final_reso', type=int, default=512, help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=64, help='INITIAL grid resolution')
+group.add_argument('--final_reso', type=int, default=512,
+                   help='FINAL grid resolution')
+group.add_argument('--init_reso', type=int, default=64,
+                   help='INITIAL grid resolution')
+group.add_argument('--ref_reso', type=int, default=256,
+                   help='reference grid resolution (for adjusting lr)')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
 group.add_argument('--scene_scale', type=float, default=2/3,#5/6,
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
@@ -37,14 +41,17 @@ group.add_argument('--scene_scale', type=float, default=2/3,#5/6,
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
 group.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
-group.add_argument('--lr_sigma', type=float, default=2e7, help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
+group.add_argument('--lr_sigma', type=float, default=2e5, # 2e7
+        help='SGD lr for sigma')
+group.add_argument('--lr_sh', type=float, default=2e4, # 2e6
+        help='SGD lr for SH')
 group.add_argument('--n_epochs', type=int, default=20)
 group.add_argument('--print_every', type=int, default=20, help='print every')
+group.add_argument('--upsamp_every', type=int, default=4, help='upsample the grid every')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
-group.add_argument('--init_sigma', type=float, default=0.33, help='initialization sigma')
+group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
 
 
 group = parser.add_argument_group("misc experiments")
@@ -53,7 +60,7 @@ group.add_argument('--no_lerp', action='store_true', default=False,
 group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
-group.add_argument('--resample_thresh', type=float, default=5.0,
+group.add_argument('--resample_thresh', type=float, default=2.5,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--prox_l1_alpha', type=float, default=0.0,
                    help='proximal L1 per epoch; amount to subtract from sigma')
@@ -70,12 +77,15 @@ summary_writer = SummaryWriter(args.train_dir)
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
+reso = args.init_reso
+factor = args.ref_reso // reso
+
 dset = Dataset(args.data_dir, split="train", device=device, permutation=args.perm,
-                scene_scale=args.scene_scale)
+               factor=factor,
+               scene_scale=args.scene_scale)
+dset.shuffle_rays()
 dset_test = Dataset(args.data_dir, split="test", scene_scale=args.scene_scale)
 
-reso = args.init_reso
-down_factor = args.final_reso // reso
 grid = svox2.SparseGrid(reso=reso,
                         radius=1.0,
                         basis_dim=args.sh_dim,
@@ -87,14 +97,15 @@ grid.data.data[..., :1] = args.init_sigma
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
 #  step_size = 2.0
-epoch_size = dset.rays.origins.size(0)
-batches_per_epoch = (epoch_size-1)//args.batch_size+1
 
 grid.opt.step_size = step_size
 grid.opt.sigma_thresh = 1e-8
 grid.opt.backend = 'cuvol'
 
+gstep_id_base = 0
 for epoch_id in range(args.n_epochs):
+    epoch_size = dset.rays.origins.size(0)
+    batches_per_epoch = (epoch_size-1)//args.batch_size+1
     # Test
     def eval_step():
         # Put in a function to avoid memory leak
@@ -106,7 +117,6 @@ for epoch_id in range(args.n_epochs):
             N_IMGS_TO_EVAL = 20
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = img_eval_interval * (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
-            gstep_id = epoch_id * batches_per_epoch
             n_images_gen = 0
             for img_id in tqdm(range(0, dset_test.n_images, img_eval_interval)):
                 all_rgbs = []
@@ -124,7 +134,7 @@ for epoch_id in range(args.n_epochs):
                 if img_id % img_save_interval == 0 and len(all_rgbs):
                     im = torch.cat(all_rgbs).view(dset_test.h, dset_test.w, all_rgbs[0].size(-1))
                     summary_writer.add_image(f'test/image_{img_id:04d}',
-                            im, global_step=gstep_id, dataformats='HWC')
+                            im, global_step=gstep_id_base, dataformats='HWC')
                     im = None
                 mse_num : float = torch.cat(all_mses).mean().item()
                 psnr = -10.0 * math.log10(mse_num)
@@ -136,15 +146,15 @@ for epoch_id in range(args.n_epochs):
             stats_test['psnr'] /= n_images_gen
             for stat_name in stats_test:
                 summary_writer.add_scalar('test/' + stat_name,
-                        stats_test[stat_name], global_step=gstep_id)
-            summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id)
+                        stats_test[stat_name], global_step=gstep_id_base)
+            summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    eval_step()
-    gc.collect()
+    if (epoch_id + 1) % factor == 0:
+        eval_step()
+        gc.collect()
 
     def train_step():
         print('Train step')
-        dset.shuffle_rays()
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
@@ -166,7 +176,7 @@ for epoch_id in range(args.n_epochs):
 
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
-                gstep_id = iter_id + epoch_id * batches_per_epoch
+                gstep_id = iter_id + gstep_id_base
                 pbar.set_description(f'epoch {epoch_id}/{args.n_epochs} psnr={psnr:.2f}')
                 for stat_name in stats:
                     stat_val = stats[stat_name] / args.print_every
@@ -181,9 +191,11 @@ for epoch_id in range(args.n_epochs):
             grid.data.grad[..., :1] *= args.lr_sigma
             grid.data.data -= grid.data.grad
             del grid.data.grad  # Save memory
+        
 
     train_step()
     gc.collect()
+    gstep_id_base += batches_per_epoch
 
     #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
     # Overwrite prev checkpoints since they are very huge
@@ -191,10 +203,22 @@ for epoch_id in range(args.n_epochs):
     print('Saving', ckpt_path)
     grid.save(ckpt_path)
 
-    if reso < args.final_reso or args.prox_l0:
-        reso *= 2
-        print('Upsampling!!!')
-        grid.resample(reso=reso, sigma_thresh=args.resample_thresh)
+    if (epoch_id + 1) % args.upsamp_every == 0:
+        if reso < args.final_reso or args.prox_l0:
+            print('* Upsampling from', reso, 'to', reso * 2)
+            reso *= 2
+            use_sparsify = reso >= args.ref_reso
+            grid.resample(reso=reso, sigma_thresh=
+                    args.resample_thresh if use_sparsify else 0.0,
+                    dilate=use_sparsify)
+            args.lr_sigma *= 8
+            args.lr_sh *= 8
+            print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
+
+        if factor > 1:
+            factor //= 2
+            dset.gen_rays(factor=factor)
+            dset.shuffle_rays()
 
     if args.prox_l1_alpha > 0.0:
         print('ProxL1: sigma -=', args.prox_l1_alpha)

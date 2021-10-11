@@ -2,7 +2,7 @@ from .utils import isqrt, eval_sh_bases, gen_morton, is_pow2, MAX_SH_BASIS, _get
 import torch
 from torch import nn, autograd
 import torch.nn.functional as F
-from typing import Union, List, NamedTuple
+from typing import Union, List, NamedTuple, Optional
 from dataclasses import dataclass
 from warnings import warn
 from functools import reduce
@@ -64,6 +64,31 @@ class RenderOptions:
         opt._m3 = np.random.randint(0, UINT32_MAX)
         # Note that the backend option is handled in Python
         return opt
+
+@dataclass
+class Camera:
+    c2w : torch.Tensor # OpenCV
+    fx : float
+    fy : float
+    width : int
+    height : int
+
+    def _to_cpp(self):
+        """
+        Generate object to pass to C++
+        """
+        spec = _C.CameraSpec()
+        spec.c2w = self.c2w
+        spec.fx = self.fx
+        spec.fy = self.fy
+        spec.width = self.width
+        spec.height = self.height
+        return spec
+
+    @property
+    def is_cuda(self):
+        return self.c2w.is_cuda
+
 
 @dataclass
 class Rays:
@@ -132,6 +157,38 @@ class _VolumeRenderFunction(autograd.Function):
             color_cache,
         )
         ctx.grid = ctx.rays = ctx.opt = None
+        if not ctx.needs_input_grad[0]:
+            grad_grid = None
+        return grad_grid, None, None, None, None
+
+
+class _VolumeRenderImageFunction(autograd.Function):
+    @staticmethod
+    def forward(ctx,
+                data : torch.Tensor,
+                grid,
+                cam,
+                opt,
+                backend : str):
+        cu_fn = _C.__dict__[f'volume_render_{backend}_image']
+        color = cu_fn(grid, cam, opt)
+        ctx.save_for_backward(color)
+        ctx.grid = grid
+        ctx.cam = cam
+        ctx.opt = opt
+        ctx.backend = backend
+        return color
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        color_cache, = ctx.saved_tensors
+        cu_fn = _C.__dict__[f'volume_render_{ctx.backend}_image_backward']
+        grad_grid = cu_fn(
+            ctx.grid, ctx.cam, ctx.opt,
+            grad_out.contiguous(),
+            color_cache,
+        )
+        ctx.grid = ctx.cam = ctx.opt = None
         if not ctx.needs_input_grad[0]:
             grad_grid = None
         return grad_grid, None, None, None, None
@@ -403,16 +460,43 @@ class SparseGrid(nn.Module):
             warn("Using slow volume rendering, should only be used for debugging")
             return self._volume_render_gradcheck_lerp(rays)
 
+    def volume_render_image(self, camera : Camera,
+                            use_kernel : bool = True,
+                            randomize : bool = False):
+        """
+        Standard volume rendering (entire image version).
+        See grid.opt.* (RenderOptions) for configs.
+
+        :param camera: Camera, (origins (N, 3), dirs (N, 3))
+        :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
+        :return: (N, 3) RGB
+        """
+        assert self.opt.backend in ['cuvol']#, 'lerp', 'nn']
+        if use_kernel and self.links.is_cuda and _C is not None:
+            assert camera.is_cuda
+            return _VolumeRenderImageFunction.apply(self.data, self._to_cpp(),
+                                               camera._to_cpp(),
+                                               self.opt._to_cpp(randomize=randomize),
+                                               self.opt.backend)
+        else:
+            raise NotImplementedError("Pure PyTorch image rendering not implemented, " +
+                    "please use rays")
+
     def resample(self,
                  reso : Union[int, List[int]],
                  sigma_thresh : float = 5.0,
-                 dilate : bool = True):
+                 weight_thresh : float = 0.01,
+                 dilate : int = 2,
+                 cameras : Optional[List[Camera]] = None,
+                 ):
         """
         Resample and sparsify the grid; used to increase the resolution
         :param reso: int or List[int, int, int], resolution for resampled grid, as in the constructor
-        :param sigma_thresh: float, threshold to apply on the sigma
-        :param dilate: bool, if true applies dilation of size 1 to the 3D mask for nodes to keep in the grid
+        :param sigma_thresh: float, threshold to apply on the sigma (if using sigma thresh i.e. cameras NOT given)
+        :param weight_thresh: float, threshold to apply on the weights (if using weight thresh i.e. cameras given)
+        :param dilate: int, if true applies dilation of size <dilate> to the 3D mask for nodes to keep in the grid
                              (keep neighbors in all 28 directions, including diagonals, of the desired nodes)
+        :param cameras: Optional[List[Camera]], optional list of cameras in OpenCV convention (if given, uses weight thresholding)
         """
         device = self.links.device
         if isinstance(reso, int):
@@ -429,33 +513,53 @@ class SparseGrid(nn.Module):
         X, Y, Z = torch.meshgrid(X, Y, Z)
         points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
 
+        use_weight_thresh = cameras is not None
+        pre_mask_samples = not (dilate or use_weight_thresh)
+
         batch_size = 720720
         all_sample_vals = []
         all_sample_vals_mask = []
         for i in tqdm(range(0, len(points), batch_size)):
             sample_vals = self.sample(points[i:i+batch_size].to(device=device), grid_coords=True)
-            sample_vals_mask = sample_vals[:, 0] > sigma_thresh
-            if dilate:
-                sample_vals = sample_vals.cpu()
+            if not use_weight_thresh:
+                sample_vals_mask = sample_vals[:, 0] > sigma_thresh
+                if pre_mask_samples:
+                    sample_vals = sample_vals[sample_vals_mask]
+                    sample_vals_mask = sample_vals_mask.cpu()
             else:
-                sample_vals = sample_vals[sample_vals_mask].cpu()
-                sample_vals_mask = sample_vals_mask.cpu()
+                sample_vals_mask = sample_vals[:, 0]
+            sample_vals = sample_vals.cpu()
             all_sample_vals.append(sample_vals)
             all_sample_vals_mask.append(sample_vals_mask)
         del self.data
 
         sample_vals_mask = torch.cat(all_sample_vals_mask, dim=0)
+        if use_weight_thresh:
+            sigmas = sample_vals_mask
+            gsz = torch.tensor(reso)
+            offset = (self._offset * gsz - 0.5).to(device=device)
+            scaling = (self._scaling * gsz).to(device=device)
+            max_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
+            print(' Grid weight render')
+            for cam in tqdm(cameras):
+                _C.grid_weight_render(sigmas, cam._to_cpp(), 0.5, offset, scaling, max_wt_grid)
+            sample_vals_mask = max_wt_grid.view(-1) > weight_thresh
+            del sigmas
         del all_sample_vals_mask
         if dilate:
-            sample_vals_mask = _C.dilate(sample_vals_mask.view(reso).cuda()).view(-1).cpu()
+            sample_vals_mask = sample_vals_mask.view(reso).cuda()
+            for i in range(int(dilate)):
+                sample_vals_mask = _C.dilate(sample_vals_mask)
+            sample_vals_mask = sample_vals_mask.view(-1).cpu()
         sample_vals = torch.cat(all_sample_vals, dim=0)
         del all_sample_vals
-        if dilate:
+        if not pre_mask_samples:
             sample_vals = sample_vals[sample_vals_mask]
         init_links = torch.cumsum(sample_vals_mask.to(torch.int32), dim=-1).int() - 1
         init_links[~sample_vals_mask] = -1
 
         self.capacity = sample_vals_mask.sum().item()
+        print(' New cap:', self.capacity)
         del sample_vals_mask
         self.data = nn.Parameter(sample_vals.to(device=device))
         self.links = init_links.view(reso).to(device=device)
