@@ -507,9 +507,10 @@ class SparseGrid(nn.Module):
         self.capacity : int = reduce(lambda x,y: x*y, reso)
         curr_reso = self.links.shape
         dtype = torch.float32
-        X = torch.linspace(0.0, curr_reso[0] - 1, reso[0], dtype=dtype)
-        Y = torch.linspace(0.0, curr_reso[1] - 1, reso[1], dtype=dtype)
-        Z = torch.linspace(0.0, curr_reso[2] - 1, reso[2], dtype=dtype)
+        reso_facts = [0.5 * curr_reso[i] / reso[i] for i in range(3)]
+        X = torch.linspace(reso_facts[0] - 0.5, curr_reso[0] - reso_facts[0] - 0.5, reso[0], dtype=dtype)
+        Y = torch.linspace(reso_facts[1] - 0.5, curr_reso[1] - reso_facts[1] - 0.5, reso[1], dtype=dtype)
+        Z = torch.linspace(reso_facts[2] - 0.5, curr_reso[2] - reso_facts[2] - 0.5, reso[2], dtype=dtype)
         X, Y, Z = torch.meshgrid(X, Y, Z)
         points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
 
@@ -540,9 +541,10 @@ class SparseGrid(nn.Module):
             offset = (self._offset * gsz - 0.5).to(device=device)
             scaling = (self._scaling * gsz).to(device=device)
             max_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
-            print(' Grid weight render')
+            print(' Grid weight render', sigmas.shape)
             for cam in tqdm(cameras):
                 _C.grid_weight_render(sigmas, cam._to_cpp(), 0.5, offset, scaling, max_wt_grid)
+            print(' max/mean/min weight', max_wt_grid.max(), max_wt_grid.mean(), max_wt_grid.min())
             sample_vals_mask = max_wt_grid.view(-1) > weight_thresh
             del sigmas
         del all_sample_vals_mask

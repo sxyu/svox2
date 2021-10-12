@@ -9,6 +9,7 @@ import json
 import imageio
 import os
 from os import path
+import shutil
 import gc
 import numpy as np
 import math
@@ -30,7 +31,7 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 group.add_argument('--final_reso', type=int, default=512,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=64,
+group.add_argument('--init_reso', type=int, default=32,
                    help='INITIAL grid resolution')
 group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
@@ -40,11 +41,11 @@ group.add_argument('--scene_scale', type=float, default=5/6,
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
-group.add_argument('--lr_sigma', type=float, default=2e6, # 2e7
+group.add_argument('--lr_sigma', type=float, default=97656.25,
         help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=2e3, # 2e6
+group.add_argument('--lr_sh', type=float, default=3906.25,
         help='SGD lr for SH')
-group.add_argument('--n_epochs', type=int, default=50)
+group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--upsamp_every', type=int, default=5, help='upsample the grid every')
 
@@ -76,6 +77,9 @@ args = parser.parse_args()
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
+with open(path.join(args.train_dir, 'args.json'), 'w') as f:
+    json.dump(args.__dict__, f, indent=2)
+    shutil.copyfile(__file__, path.join(args.train_dir, 'opt.py'))
 
 torch.manual_seed(20200823)
 np.random.seed(20200823)
@@ -208,14 +212,18 @@ for epoch_id in range(args.n_epochs):
         if reso < args.final_reso or args.prox_l0:
             print('* Upsampling from', reso, 'to', reso * 2)
             reso *= 2
-            use_sparsify = reso >= args.ref_reso
+            use_sparsify = True # reso >= args.ref_reso
             grid.resample(reso=reso,
                     sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
-                    dilate=use_sparsify,
+                    dilate=1, #use_sparsify,
                     cameras=resample_cameras)
-            args.lr_sigma *= 8
-            args.lr_sh *= 8
+            if reso <= args.ref_reso:
+                args.lr_sigma *= 8
+                args.lr_sh *= 8
+            else:
+                args.lr_sigma *= 2
+                args.lr_sh *= 2
             print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
         if factor > 1:
