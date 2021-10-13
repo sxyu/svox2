@@ -1,3 +1,5 @@
+# Copyright 2021 Alex Yu
+
 # First, install svox2
 # Then, python opt.py <path_to>/nerf_synthetic/<scene> -t ckpt/<some_name>
 # or use launching script:   sh launch.sh <EXP_NAME> <GPU> <DATA_DIR>
@@ -31,7 +33,7 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 group.add_argument('--final_reso', type=int, default=512,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=32,
+group.add_argument('--init_reso', type=int, default=256,#32,
                    help='INITIAL grid resolution')
 group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
@@ -41,13 +43,14 @@ group.add_argument('--scene_scale', type=float, default=5/6,
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
-group.add_argument('--lr_sigma', type=float, default=97656.25,
+group.add_argument('--lr_sigma', type=float, default=2e8,#97656.25,
         help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=3906.25,
+group.add_argument('--lr_sh', type=float, default=2e6,#3906.25,
         help='SGD lr for SH')
 group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=5, help='upsample the grid every')
+group.add_argument('--upsamp_every', type=int, default=10,#5,
+                    help='upsample the grid every')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
@@ -72,6 +75,11 @@ group.add_argument('--prox_l0', action='store_true', default=False,
                    help='proximal L0 i.e., keep resampling after each epoch')
 group.add_argument('--norand', action='store_true', default=True,
                    help='disable random')
+
+group.add_argument('--tune_mode', action='store_true', default=False,
+                   help='hypertuning mode (do not eval or save until the end)')
+group.add_argument('--no_save', action='store_true', default=False,
+                   help='do not save at all')
 args = parser.parse_args()
 
 os.makedirs(args.train_dir, exist_ok=True)
@@ -115,6 +123,7 @@ resample_cameras = [
         svox2.Camera(c2w.to(device=device), dset.focal, dset.focal,
                      dset.w, dset.h) for c2w in dset.c2w
     ] if args.use_weight_thresh else None
+ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 for epoch_id in range(args.n_epochs):
     epoch_size = dset.rays.origins.size(0)
@@ -154,7 +163,7 @@ for epoch_id in range(args.n_epochs):
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    if epoch_id % factor == 0:
+    if epoch_id % factor == 0 and not args.tune_mode and not args.no_save:
         eval_step()
         gc.collect()
 
@@ -204,29 +213,32 @@ for epoch_id in range(args.n_epochs):
 
     #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
     # Overwrite prev checkpoints since they are very huge
-    ckpt_path = path.join(args.train_dir, 'ckpt.npz')
-    print('Saving', ckpt_path)
-    grid.save(ckpt_path)
+    if epoch_id % factor == 0 and not args.tune_mode:
+        print('Saving', ckpt_path)
+        grid.save(ckpt_path)
 
     if (epoch_id + 1) % args.upsamp_every == 0:
         if reso < args.final_reso or args.prox_l0:
             print('* Upsampling from', reso, 'to', reso * 2)
-            reso *= 2
+            non_final = reso < args.final_reso
+            if non_final:
+                reso *= 2
             use_sparsify = True # reso >= args.ref_reso
             grid.resample(reso=reso,
                     sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=1, #use_sparsify,
                     cameras=resample_cameras)
-            if reso <= args.ref_reso:
-                args.lr_sigma *= 8
-                args.lr_sh *= 8
-            else:
-                args.lr_sigma *= 2
-                args.lr_sh *= 2
+            if non_final:
+                if reso <= args.ref_reso:
+                    args.lr_sigma *= 8
+                    args.lr_sh *= 8
+                else:
+                    args.lr_sigma *= 2
+                    #  args.lr_sh *= 2
             print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
-        if factor > 1:
+        if factor > 1 and reso < args.final_reso:
             factor //= 2
             dset.gen_rays(factor=factor)
             dset.shuffle_rays()
@@ -235,3 +247,8 @@ for epoch_id in range(args.n_epochs):
         print('ProxL1: sigma -=', args.prox_l1_alpha)
         grid.data.data[..., :1] -= args.prox_l1_alpha
 
+    if epoch_id == args.n_epochs - 1:
+        print('Final eval and save')
+        eval_step()
+        if not args.no_save:
+            grid.save(ckpt_path)

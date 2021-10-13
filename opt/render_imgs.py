@@ -1,3 +1,5 @@
+# Copyright 2021 Alex Yu
+
 import torch
 import svox2
 import math
