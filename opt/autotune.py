@@ -147,10 +147,12 @@ if __name__ == '__main__':
 
     for task in all_tasks:
         pqueue.put(task)
-    pqueue.put({})
 
     args.gpus = list(map(int, args.gpus.split()))
     print('GPUS:', args.gpus)
+
+    for _ in args.gpus:
+        pqueue.put({})
 
     all_procs = []
     for i, gpu in enumerate(args.gpus):

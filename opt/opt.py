@@ -33,7 +33,7 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 group.add_argument('--final_reso', type=int, default=512,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=256,#32,
+group.add_argument('--init_reso', type=int, default=32,
                    help='INITIAL grid resolution')
 group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
@@ -43,9 +43,9 @@ group.add_argument('--scene_scale', type=float, default=5/6,
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
-group.add_argument('--lr_sigma', type=float, default=2e8,#97656.25,
+group.add_argument('--lr_sigma', type=float, default=584803.548, #2e8
         help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=2e6,#3906.25,
+group.add_argument('--lr_sh', type=float, default=215443.469, #2e6,
         help='SGD lr for SH')
 group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
@@ -232,7 +232,7 @@ for epoch_id in range(args.n_epochs):
             if non_final:
                 if reso <= args.ref_reso:
                     args.lr_sigma *= 8
-                    args.lr_sh *= 8
+                    args.lr_sh *= 2
                 else:
                     args.lr_sigma *= 2
                     #  args.lr_sh *= 2
