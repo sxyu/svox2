@@ -192,6 +192,29 @@ class _VolumeRenderImageFunction(autograd.Function):
         if not ctx.needs_input_grad[0]:
             grad_grid = None
         return grad_grid, None, None, None, None
+
+class _TotalVariationFunction(autograd.Function):
+    @staticmethod
+    def forward(ctx,
+                data : torch.Tensor,
+                links : torch.Tensor,
+                start_dim : int,
+                end_dim : int):
+        tv = _C.tv(links, data, start_dim, end_dim)
+        ctx.save_for_backward(links, data)
+        ctx.start_dim = start_dim
+        ctx.end_dim = end_dim
+        return tv
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        links, data = ctx.saved_tensors
+        grad_grid = torch.zeros_like(data)
+        _C.tv_grad(links, data, ctx.start_dim, ctx.end_dim, 1.0, grad_grid)
+        ctx.start_dim = ctx.end_dim = None
+        if not ctx.needs_input_grad[0]:
+            grad_grid = None
+        return grad_grid, None, None, None
 # END Differentiable CUDA functions with custom gradient
 
 
@@ -266,6 +289,10 @@ class SparseGrid(nn.Module):
         Get the number of channels in the data (data.size(1))
         """
         return self.data.size(1)
+
+    @property
+    def shape(self):
+        return list(self.links.shape) + [self.data.size(1)]
 
     def _fetch_links(self, links):
         result = torch.empty((links.size(0), self.data.size(1)), device=links.device, dtype=torch.float32)
@@ -707,6 +734,41 @@ class SparseGrid(nn.Module):
         t[index, -1] = self.data.data[:, 0].to(device=device)
         return t
 
+    def tv(self, start_dim : int = 0, end_dim : Optional[int] = None):
+        """
+        Compute L1 total variation as in Neural Volumes [Lombardi et al., ToG 2019]
+        
+        :param start_dim: int, first channel dimension to compute TV over (inclusive).
+                          Default 0.
+        :param end_dim: int, last channel dimension to compute TV over (exclusive).
+                          Default None = data_dim.
+
+        :return: torch.Tensor, size scalar, the TV value (sum over channels,
+                 mean over voxels)
+        """
+        assert _C is not None and self.data.is_cuda, \
+                "CUDA extension is currently required for total variation"
+        if end_dim is None: 
+            end_dim = self.data_dim
+        end_dim = end_dim + self.data_dim if end_dim < 0 else end_dim
+        start_dim = start_dim + self.data_dim if start_dim < 0 else start_dim
+        return _TotalVariationFunction.apply(self.data, self.links, start_dim, end_dim)
+
+    def inplace_tv_grad(self, grad : torch.Tensor,
+                        start_dim : int = 0,
+                        end_dim : Optional[int] = None,
+                        scaling : float = 1.0):
+        """
+        Add gradient of L1 total variation as in Neural Volumes [Lombardi et al., ToG 2019]
+        directly into the gradient tensor, multiplied by 'scaling'
+        """
+        assert _C is not None and self.data.is_cuda and grad.is_cuda, \
+                "CUDA extension is currently required for total variation"
+        if end_dim is None: 
+            end_dim = self.data_dim
+        end_dim = end_dim + self.data_dim if end_dim < 0 else end_dim
+        start_dim = start_dim + self.data_dim if start_dim < 0 else start_dim
+        _C.tv_grad(self.links, self.data, start_dim, end_dim, scaling, grad)
 
     def __repr__(self):
         return (f"svox2.SparseGrid(basis_dim={self.basis_dim}, " +

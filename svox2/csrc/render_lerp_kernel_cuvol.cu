@@ -14,7 +14,7 @@ namespace {
 namespace device {
 
 __device__ __constant__ const float EMPTY_CELL_DATA[] = {
-    -100.f, 0.f, 0.f, 0.f, 0.f,
+    0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,

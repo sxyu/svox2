@@ -33,7 +33,7 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 group.add_argument('--final_reso', type=int, default=512,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=32,
+group.add_argument('--init_reso', type=int, default=256,
                    help='INITIAL grid resolution')
 group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
@@ -43,9 +43,9 @@ group.add_argument('--scene_scale', type=float, default=5/6,
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
-group.add_argument('--lr_sigma', type=float, default=584803.548, #2e8
+group.add_argument('--lr_sigma', type=float, default=2e0,#1e0,#1e8
         help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=215443.469, #2e6,
+group.add_argument('--lr_sh', type=float, default=2e6,
         help='SGD lr for SH')
 group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
@@ -80,6 +80,9 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not eval or save until the end)')
 group.add_argument('--no_save', action='store_true', default=False,
                    help='do not save at all')
+
+group.add_argument('--rms_beta', type=float, default=0.9)
+group.add_argument('--lambda_tv', type=float, default=1e-2)
 args = parser.parse_args()
 
 os.makedirs(args.train_dir, exist_ok=True)
@@ -125,6 +128,8 @@ resample_cameras = [
     ] if args.use_weight_thresh else None
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
+rms : torch.Tensor = torch.zeros_like(grid.data[..., :1])
+
 for epoch_id in range(args.n_epochs):
     epoch_size = dset.rays.origins.size(0)
     batches_per_epoch = (epoch_size-1)//args.batch_size+1
@@ -168,6 +173,7 @@ for epoch_id in range(args.n_epochs):
         gc.collect()
 
     def train_step():
+        global rms
         print('Train step')
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
@@ -196,12 +202,26 @@ for epoch_id in range(args.n_epochs):
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
                     stats[stat_name] = 0.0
+                #  with torch.no_grad():
+                #      tv = grid.tv()
+                #  summary_writer.add_scalar("loss_tv", args.lambda_tv * tv, global_step=gstep_id)
 
             # Backprop
             mse.backward()
 
+            # Apply TV
+            #  grid.inplace_tv_grad(grid.data.grad, scaling=args.lambda_tv)
+
             # Manual SGD step
+            tmp = grid.data.grad[..., :1].clone()
+            tmp.square_()
+            tmp *= (1.0 - args.rms_beta)
+            rms[tmp != 0.0] *= args.rms_beta
+            rms += tmp
+            del tmp
+
             grid.data.grad[..., 1:] *= args.lr_sh
+            grid.data.grad[..., :1] /= (torch.sqrt(rms) + 1e-8)
             grid.data.grad[..., :1] *= args.lr_sigma
             grid.data.data -= grid.data.grad
             del grid.data.grad  # Save memory
@@ -229,13 +249,15 @@ for epoch_id in range(args.n_epochs):
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=1, #use_sparsify,
                     cameras=resample_cameras)
+            del rms
+            rms : torch.Tensor = torch.zeros_like(grid.data[..., :1])
             if non_final:
                 if reso <= args.ref_reso:
                     args.lr_sigma *= 8
                     args.lr_sh *= 2
-                else:
-                    args.lr_sigma *= 2
-                    #  args.lr_sh *= 2
+                #  else:
+                #  args.lr_sigma *= 4
+                #  args.lr_sh *= 2
             print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
         if factor > 1 and reso < args.final_reso:
