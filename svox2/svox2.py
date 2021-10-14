@@ -57,11 +57,11 @@ class RenderOptions:
         opt.step_size = self.step_size
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
-        opt.randomize = randomize
-        UINT32_MAX = 2**32-1
-        opt._m1 = np.random.randint(0, UINT32_MAX)
-        opt._m2 = np.random.randint(0, UINT32_MAX)
-        opt._m3 = np.random.randint(0, UINT32_MAX)
+        #  opt.randomize = randomize
+        #  UINT32_MAX = 2**32-1
+        #  opt._m1 = np.random.randint(0, UINT32_MAX)
+        #  opt._m2 = np.random.randint(0, UINT32_MAX)
+        #  opt._m3 = np.random.randint(0, UINT32_MAX)
         # Note that the backend option is handled in Python
         return opt
 
@@ -236,6 +236,7 @@ class SparseGrid(nn.Module):
             center : Union[float, List[float]]=[0.0, 0.0, 0.0],
             basis_dim : int = 9, # SH size; square number
             use_z_order=False,
+            use_sphere_bound=False,
             device : Union[torch.device, str]="cpu"):
         super().__init__()
 
@@ -249,20 +250,10 @@ class SparseGrid(nn.Module):
         else:
             assert len(reso) == 3, \
                    "reso must be an integer or indexable object of 3 ints"
-        self.capacity : int = reduce(lambda x,y: x*y, reso)
 
         if not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
             print("Morton code requires a cube grid of power-of-2 size, ignoring...")
             use_z_order = False
-        if use_z_order:
-            init_links = gen_morton(reso[0], device=device, dtype=torch.int32)
-        else:
-            init_links = torch.arange(self.capacity, device=device, dtype=torch.int32)
-
-        self.register_buffer("links", init_links.view(reso))
-        self.links : torch.Tensor
-        self.data = nn.Parameter(torch.zeros(
-            self.capacity, self.basis_dim * 3 + 1, dtype=torch.float32, device=device))
 
         if isinstance(radius, float) or isinstance(radius, int):
             radius = [radius] * 3
@@ -280,6 +271,44 @@ class SparseGrid(nn.Module):
         self._offset = 0.5 * (1.0 - self.center / self.radius)
         self._scaling = 0.5 / self.radius
 
+        n3 : int = reduce(lambda x,y: x*y, reso)
+        if use_z_order:
+            init_links = gen_morton(reso[0], device=device, dtype=torch.int32)
+        else:
+            init_links = torch.arange(n3, device=device, dtype=torch.int32)
+
+        if use_sphere_bound:
+            X = (torch.arange(reso[0], dtype=torch.float32, device=device) - 0.5)
+            Y = (torch.arange(reso[1], dtype=torch.float32, device=device) - 0.5)
+            Z = (torch.arange(reso[2], dtype=torch.float32, device=device) - 0.5)
+            X, Y, Z = torch.meshgrid(X, Y, Z)
+            points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
+            gsz = torch.tensor(reso)
+            roffset = 1.0 / gsz - 1.0
+            rscaling = 2.0 / gsz
+            points = torch.addcmul(roffset.to(device=points.device),
+                                   points,
+                                   rscaling.to(device=points.device))
+
+            norms = points.norm(dim=-1)
+            mask = norms <= 1.0 + (3**0.5) / gsz.max()
+            self.capacity : int = mask.sum()
+
+            data_mask = torch.zeros(n3, dtype=torch.int32, device=device)
+            idxs = init_links[mask].long()
+            data_mask[idxs] = 1
+            data_mask = torch.cumsum(data_mask, dim=0) - 1
+
+            init_links[mask] = data_mask[idxs].int()
+            init_links[~mask] = -1
+        else:
+            self.capacity = n3
+
+        self.data = nn.Parameter(torch.zeros(
+            self.capacity, self.basis_dim * 3 + 1, dtype=torch.float32, device=device))
+
+        self.register_buffer("links", init_links.view(reso))
+        self.links : torch.Tensor
         self.opt = RenderOptions()
 
 

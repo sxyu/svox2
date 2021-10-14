@@ -7,8 +7,6 @@
 
 #include <cstdint>
 #include <tuple>
-#define _SIGMOID(x) (1 / (1 + expf(-(x))))
-#define _SQR(x) ((x) * (x))
 
 namespace {
 namespace device {
@@ -124,16 +122,12 @@ __device__ __inline__ void trace_ray_cuvol(
         uint32_t ray_id,
         float* __restrict__ out) {
 
-    RandomEngine32 rng{ray_id ^ opt._m1,
-                       ray_id ^ opt._m2,
-                       ray_id ^ opt._m3};
-
     // Warning: modifies ray.origin
     transform_coord(ray.origin, grid._scaling, grid._offset);
     // Warning: modifies ray.dir
-    const float delta_scale = _get_delta_scale(grid._scaling, ray.dir);
+    const float world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
 
-    float t, samp_t, tmax;
+    float t, tmax;
     float invdir[3];
 
 #pragma unroll 3
@@ -168,15 +162,10 @@ __device__ __inline__ void trace_ray_cuvol(
     float light_intensity = 0.f;
     float pos[3], interp_val[28];
     int32_t l[3];
-    samp_t = t;
     while (t <= tmax) {
-        float world_step = samp_t;
-        samp_t = t + rng.rand() * opt.step_size;
-        world_step = (samp_t - world_step) * delta_scale;
-
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            pos[j] = ray.origin[j] + samp_t * ray.dir[j];
+            pos[j] = ray.origin[j] + t * ray.dir[j];
             pos[j] = min(max(pos[j], 0.f), grid.links.size(j) - 1.f);
             l[j] = (int32_t) pos[j];
             l[j] = min(l[j], grid.links.size(j) - 2);
@@ -189,7 +178,7 @@ __device__ __inline__ void trace_ray_cuvol(
         if (sigma > opt.sigma_thresh) {
             trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 1, grid.data.size(1));
             const float pcnt = world_step * sigma;
-            const float weight = expf(light_intensity) * (1.f - expf(-pcnt));
+            const float weight = __expf(light_intensity) * (1.f - __expf(-pcnt));
             light_intensity -= pcnt;
 
 #pragma unroll 3
@@ -204,7 +193,7 @@ __device__ __inline__ void trace_ray_cuvol(
         }
         t += opt.step_size;
     }
-    const float alpha = expf(light_intensity) * opt.background_brightness;
+    const float alpha = __expf(light_intensity) * opt.background_brightness;
 #pragma unroll 3
     for (int j = 0; j < 3; ++j) {
         out[j] += alpha;
@@ -223,16 +212,12 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         float* __restrict__ grad_data_out
         ) {
 
-    RandomEngine32 rng{ray_id ^ opt._m1,
-                       ray_id ^ opt._m2,
-                       ray_id ^ opt._m3};
-
     // Warning: modifies ray.origin
     transform_coord(ray.origin, grid._scaling, grid._offset);
     // Warning: modifies ray.dir
-    const float delta_scale = _get_delta_scale(grid._scaling, ray.dir);
+    const float world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
 
-    float t, samp_t, tmax;
+    float t, tmax;
     float invdir[3];
 
 #pragma unroll 3
@@ -270,15 +255,11 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
     float light_intensity = 0.f;
     float curr_grad[28];
-    samp_t = t;
     // remat samples
     while (t <= tmax) {
-        float world_step = samp_t;
-        samp_t = t + rng.rand() * opt.step_size;
-        world_step = (samp_t - world_step) * delta_scale;
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            pos[j] = ray.origin[j] + samp_t * ray.dir[j];
+            pos[j] = ray.origin[j] + t * ray.dir[j];
             pos[j] = min(max(pos[j], 0.f), grid.links.size(j) - 1.f);
             l[j] = (int32_t) pos[j];
             l[j] = min(l[j], grid.links.size(j) - 2);
@@ -290,7 +271,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         if (sigma > opt.sigma_thresh) {
             trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 1,
                           grid.data.size(1));
-            const float weight = expf(light_intensity) * (1.f - expf(
+            const float weight = __expf(light_intensity) * (1.f - __expf(
                         -world_step * sigma));
             light_intensity -= world_step * sigma;
 
@@ -312,7 +293,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             }
             accum -= weight * total_color;
             curr_grad[0] = world_step * (
-                    total_color * expf(light_intensity) - accum);
+                    total_color * __expf(light_intensity) - accum);
             trilerp_backward_cuvol(grid.links, grad_data_out, l, pos, curr_grad,
                                    grid.data.size(1), grid.data.size(1));
         }

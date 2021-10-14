@@ -4,6 +4,11 @@
 #include <c10/cuda/CUDAGuard.h>
 #include "util.hpp"
 
+
+#undef _SIGMOID
+// CUDA version of sigmoid
+#define _SIGMOID(x) (1 / (1 + __expf(-(x))))
+
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 

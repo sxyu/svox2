@@ -38,16 +38,21 @@ group.add_argument('--init_reso', type=int, default=256,
 group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
-group.add_argument('--scene_scale', type=float, default=5/6,
+group.add_argument('--scene_scale', type=float, default=
+                           1/1.4, # ship
+                           #  1/1.3, # generic
+                           #  5/6, # lego, drums
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
 
 
-group.add_argument('--lr_sigma', type=float, default=5e1, #5e1,#2e0,#1e8
+# TODO: make the lr higher near the end
+group.add_argument('--lr_sigma', type=float, default=1e1,#5e1,
+                                            #5e1,#2e0,#1e8
         help='SGD lr for sigma')
-group.add_argument('--lr_sigma_final', type=float, default=5e-1)
+group.add_argument('--lr_sigma_final', type=float, default=1e0)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sigma_delay_steps', type=int, default=20000)
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
