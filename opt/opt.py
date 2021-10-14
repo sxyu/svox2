@@ -264,7 +264,7 @@ for epoch_id in range(args.n_epochs):
                 grid.data.data[..., 1:] *= args.weight_decay_sh
 
             if args.weight_decay_sigma < 1.0:
-                grid.data.data[..., 1:] *= args.weight_decay_sigma
+                grid.data.data[..., :1] *= args.weight_decay_sigma
 
             del grid.data.grad  # Save memory
 
