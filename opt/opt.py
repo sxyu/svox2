@@ -82,7 +82,7 @@ group.add_argument('--no_save', action='store_true', default=False,
                    help='do not save at all')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-2)
+group.add_argument('--lambda_tv', type=float, default=1e-4)
 args = parser.parse_args()
 
 os.makedirs(args.train_dir, exist_ok=True)
@@ -202,15 +202,17 @@ for epoch_id in range(args.n_epochs):
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
                     stats[stat_name] = 0.0
-                #  with torch.no_grad():
-                #      tv = grid.tv()
-                #  summary_writer.add_scalar("loss_tv", args.lambda_tv * tv, global_step=gstep_id)
+                if args.lambda_tv > 0.0:
+                    with torch.no_grad():
+                        tv = grid.tv()
+                    summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
 
             # Backprop
             mse.backward()
 
             # Apply TV
-            #  grid.inplace_tv_grad(grid.data.grad, scaling=args.lambda_tv)
+            if args.lambda_tv > 0.0:
+                grid.inplace_tv_grad(grid.data.grad, scaling=args.lambda_tv)
 
             # Manual SGD step
             tmp = grid.data.grad[..., :1].clone()
