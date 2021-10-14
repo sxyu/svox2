@@ -21,6 +21,7 @@ Tensor volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
 Tensor dilate(Tensor);
 Tensor tv(Tensor, Tensor, int, int);
 void tv_grad(Tensor, Tensor, int, int, float, Tensor);
+void tv_aniso_grad(Tensor, Tensor, int, int, float, Tensor);
 void grid_weight_render(Tensor, CameraSpec &, float, Tensor, Tensor, Tensor);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -34,6 +35,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(dilate);
   _REG_FUNC(tv);
   _REG_FUNC(tv_grad);
+  _REG_FUNC(tv_aniso_grad);
   _REG_FUNC(grid_weight_render);
 #undef _REG_FUNC
 

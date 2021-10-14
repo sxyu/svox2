@@ -757,7 +757,8 @@ class SparseGrid(nn.Module):
     def inplace_tv_grad(self, grad : torch.Tensor,
                         start_dim : int = 0,
                         end_dim : Optional[int] = None,
-                        scaling : float = 1.0):
+                        scaling : float = 1.0,
+                        anisotropic : bool = False):
         """
         Add gradient of L1 total variation as in Neural Volumes [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
@@ -768,7 +769,8 @@ class SparseGrid(nn.Module):
             end_dim = self.data_dim
         end_dim = end_dim + self.data_dim if end_dim < 0 else end_dim
         start_dim = start_dim + self.data_dim if start_dim < 0 else start_dim
-        _C.tv_grad(self.links, self.data, start_dim, end_dim, scaling, grad)
+        cu_fn = _C.tv_aniso_grad if anisotropic else _C.tv_grad
+        cu_fn(self.links, self.data, start_dim, end_dim, scaling, grad)
 
     def __repr__(self):
         return (f"svox2.SparseGrid(basis_dim={self.basis_dim}, " +

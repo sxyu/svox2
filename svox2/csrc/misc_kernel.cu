@@ -96,41 +96,106 @@ __global__ void tv_grad_kernel(
         float scale,
         int Q,
         // Output
-        torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> grad_data) {
+        float* __restrict__ grad_data) {
     CUDA_GET_THREAD_ID(tid, Q);
-    float dummy[28];
+    __shared__ float dummy[28];
     const int z = tid % (links.size(2) - 1);
     const int xy = tid / (links.size(2) - 1);
     const int y = xy % (links.size(1) - 1);
     const int x = xy / (links.size(1) - 1);
 
-    const float* __restrict__ ptr000 = (links[x][y][z] >= 0 ?
-                          &data[links[x][y][z]][0] : EMPTY_CELL_DATA);
-    const float* __restrict__ ptr100 = (links[x + 1][y][z] >= 0 ?
-                          &data[links[x + 1][y][z]][0] : EMPTY_CELL_DATA);
-    const float* __restrict__ ptr010 = (links[x][y + 1][z] >= 0 ?
-                          &data[links[x][y + 1][z]][0] : EMPTY_CELL_DATA);
-    const float* __restrict__ ptr001 = (links[x][y][z + 1] >= 0 ?
-                          &data[links[x][y][z + 1]][0] : EMPTY_CELL_DATA);
+    const float* dptr = data.data(), *ptr000 = EMPTY_CELL_DATA,
+                                     *ptr100 = EMPTY_CELL_DATA,
+                                     *ptr010 = EMPTY_CELL_DATA,
+                                     *ptr001 = EMPTY_CELL_DATA;
+    const size_t ddim = data.size(1);
+    float* gptr000 = dummy,
+         * gptr100 = dummy,
+         * gptr010 = dummy,
+         * gptr001 = dummy;
+    bool any_nonempty = false;
 
-    float* __restrict__ gptr000 = (links[x][y][z] >= 0 ?
-                          &grad_data[links[x][y][z]][0] : dummy);
-    float* __restrict__ gptr100 = (links[x + 1][y][z] >= 0 ?
-                          &grad_data[links[x + 1][y][z]][0] : dummy);
-    float* __restrict__ gptr010 = (links[x][y + 1][z] >= 0 ?
-                          &grad_data[links[x][y + 1][z]][0] : dummy);
-    float* __restrict__ gptr001 = (links[x][y][z + 1] >= 0 ?
-                          &grad_data[links[x][y][z + 1]][0] : dummy);
+    if (links[x][y][z] >= 0) {
+        const size_t lnk = links[x][y][z] * ddim;
+        ptr000 = dptr + lnk;
+        gptr000 = grad_data + lnk;
+        any_nonempty = true;
+    }
+    if (links[x + 1][y][z] >= 0) {
+        const size_t lnk = links[x + 1][y][z] * ddim;
+        ptr100 = dptr + lnk;
+        gptr100 = grad_data + lnk;
+        any_nonempty = true;
+    }
+    if (links[x][y + 1][z] >= 0) {
+        const size_t lnk = links[x][y + 1][z] * ddim;
+        ptr010 = dptr + lnk;
+        gptr010 = grad_data + lnk;
+        any_nonempty = true;
+    }
+    if (links[x][y][z + 1] >= 0) {
+        const size_t lnk = links[x][y][z + 1] * ddim;
+        ptr001 = dptr + lnk;
+        gptr001 = grad_data + lnk;
+        any_nonempty = true;
+    }
+    if (!any_nonempty) return;
 
     for (int i = start_dim; i < end_dim; ++i) {
-        const float dx = ptr100[i] - ptr000[i];
-        const float dy = ptr010[i] - ptr000[i];
-        const float dz = ptr001[i] - ptr000[i];
-        const float idelta = scale / (Q * sqrtf(1e-5f + dx * dx + dy * dy + dz * dz));
+        const float val = ptr000[i];
+        const float dx = ptr100[i] - val;
+        const float dy = ptr010[i] - val;
+        const float dz = ptr001[i] - val;
+        const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
         atomicAdd(gptr000 + i, -(dx + dy + dz) * idelta);
         atomicAdd(gptr100 + i, dx * idelta);
         atomicAdd(gptr010 + i, dy * idelta);
         atomicAdd(gptr001 + i, dz * idelta);
+    }
+}
+
+__global__ void tv_aniso_grad_kernel(
+        torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        int start_dim, int end_dim,
+        float scale,
+        int Q,
+        // Output
+        float* __restrict__ grad_data) {
+    CUDA_GET_THREAD_ID(tid, Q);
+    const int z = tid % links.size(2);
+    const int xy = tid / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
+
+    if (links[x][y][z] < 0) return;
+    const size_t ddim = data.size(1);
+    const size_t lnk = links[x][y][z] * ddim;
+
+    const float* __restrict__ ptr000 = data.data() + lnk;
+    float* __restrict__ gptr000 = grad_data + lnk;
+    const float* __restrict__ ptrx[6] = {
+            ((x < links.size(0) - 1 && links[x + 1][y][z] >= 0 ?
+                          &data[links[x + 1][y][z]][0] : EMPTY_CELL_DATA)),
+            ((y < links.size(1) - 1 && links[x][y + 1][z] >= 0 ?
+                          &data[links[x][y + 1][z]][0] : EMPTY_CELL_DATA)),
+            ((z < links.size(2) - 1 && links[x][y][z + 1] >= 0 ?
+                          &data[links[x][y][z + 1]][0] : EMPTY_CELL_DATA)),
+            ((x > 0 && links[x - 1][y][z] >= 0 ?
+                          &data[links[x - 1][y][z]][0] : EMPTY_CELL_DATA)),
+            ((y > 0 && links[x][y - 1][z] >= 0 ?
+                          &data[links[x][y - 1][z]][0] : EMPTY_CELL_DATA)),
+            ((z > 0 && links[x][y][z - 1] >= 0 ?
+                          &data[links[x][y][z - 1]][0] : EMPTY_CELL_DATA))
+        };
+    for (int i = start_dim; i < end_dim; ++i) {
+        float cnt = 0.f;
+        const float val = ptr000[i];
+#pragma unroll 6
+        for (int j = 0; j < 6; ++j) {
+            cnt += (val > ptrx[j][i]) ? 1.f : (val < ptrx[j][i]) ? -1.f : 0.f;
+        }
+        gptr000[i] += cnt * scale;
     }
 }
 
@@ -317,17 +382,48 @@ void tv_grad(torch::Tensor links, torch::Tensor data,
 
     int Q = (links.size(0) - 1) * (links.size(1) - 1) * (links.size(2) - 1);
 
-    const int cuda_n_threads = 512;
+    const int cuda_n_threads = 1024;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
     device::tv_grad_kernel<<<blocks, cuda_n_threads>>>(
             links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
             data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
             start_dim,
             end_dim,
-            scale,
+            scale / Q,
             Q,
             // Output
-            grad_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+            grad_data.data<float>());
+    CUDA_CHECK_ERRORS;
+}
+
+void tv_aniso_grad(torch::Tensor links, torch::Tensor data,
+             int start_dim, int end_dim,
+             float scale,
+             torch::Tensor grad_data) {
+    DEVICE_GUARD(data);
+    CHECK_INPUT(data);
+    CHECK_INPUT(links);
+    CHECK_INPUT(grad_data);
+    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(grad_data.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(grad_data.ndimension() == 2);
+
+    int Q = links.size(0) * links.size(1) * links.size(2);
+
+    const int cuda_n_threads = 1024;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    device::tv_aniso_grad_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            start_dim,
+            end_dim,
+            scale / Q,
+            Q,
+            // Output
+            grad_data.data<float>());
     CUDA_CHECK_ERRORS;
 }
 

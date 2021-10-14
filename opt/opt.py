@@ -17,7 +17,7 @@ import numpy as np
 import math
 import argparse
 from util.dataset import Dataset
-from util.util import Timing
+from util.util import Timing, get_expon_lr_func
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -43,13 +43,26 @@ group.add_argument('--scene_scale', type=float, default=5/6,
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
-group.add_argument('--lr_sigma', type=float, default=2e0,#1e0,#1e8
+
+
+group.add_argument('--lr_sigma', type=float, default=2e1, #5e1,#2e0,#1e8
         help='SGD lr for sigma')
-group.add_argument('--lr_sh', type=float, default=2e6,
-        help='SGD lr for SH')
+group.add_argument('--lr_sigma_final', type=float, default=5e-1)
+group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
+group.add_argument('--lr_sigma_delay_steps', type=int, default=10000)
+group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
+
+
+group.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
+group.add_argument('--lr_sh_final', type=float, default=2e5)
+group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
+group.add_argument('--lr_sh_delay_steps', type=int, default=10000)
+group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
+group.add_argument('--lr_sh_upscale_factor', type=float, default=2)
+
 group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=10,#5,
+group.add_argument('--upsamp_every', type=int, default=3,#4,
                     help='upsample the grid every')
 
 group = parser.add_argument_group("initialization")
@@ -82,7 +95,12 @@ group.add_argument('--no_save', action='store_true', default=False,
                    help='do not save at all')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-4)
+group.add_argument('--lambda_tv', type=float, default=0.0)
+group.add_argument('--aniso_tv', action='store_true', default=False)
+group.add_argument('--weight_decay_sigma', type=float, default=1.0)
+group.add_argument('--weight_decay_sh', type=float, default=1.0)
+
+group.add_argument('--lr_decay', action='store_true', default=True)
 args = parser.parse_args()
 
 os.makedirs(args.train_dir, exist_ok=True)
@@ -130,6 +148,13 @@ ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 rms : torch.Tensor = torch.zeros_like(grid.data[..., :1])
 
+lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
+                                  args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
+lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
+                               args.lr_sh_delay_mult, args.lr_sh_decay_steps)
+lr_sigma_factor = 1.0
+lr_sh_factor = 1.0
+
 for epoch_id in range(args.n_epochs):
     epoch_size = dset.rays.origins.size(0)
     batches_per_epoch = (epoch_size-1)//args.batch_size+1
@@ -140,7 +165,7 @@ for epoch_id in range(args.n_epochs):
         with torch.no_grad():
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
             N_IMGS_TO_SAVE = 5
-            N_IMGS_TO_EVAL = 20
+            N_IMGS_TO_EVAL = 20 if epoch_id > 0 else 5
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = img_eval_interval * (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
             n_images_gen = 0
@@ -178,6 +203,13 @@ for epoch_id in range(args.n_epochs):
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
+            gstep_id = iter_id + gstep_id_base
+            lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
+            lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
+            if not args.lr_decay:
+                lr_sigma = args.lr_sigma * lr_sigma_factor
+                lr_sh = args.lr_sh * lr_sh_factor
+
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
@@ -196,7 +228,6 @@ for epoch_id in range(args.n_epochs):
 
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
-                gstep_id = iter_id + gstep_id_base
                 pbar.set_description(f'epoch {epoch_id}/{args.n_epochs} psnr={psnr:.2f}')
                 for stat_name in stats:
                     stat_val = stats[stat_name] / args.print_every
@@ -205,14 +236,16 @@ for epoch_id in range(args.n_epochs):
                 if args.lambda_tv > 0.0:
                     with torch.no_grad():
                         tv = grid.tv()
+                    # Apply TV
+                    grid.inplace_tv_grad(grid.data.data,
+                                scaling=-args.lambda_tv,
+                                anisotropic=args.aniso_tv)
                     summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
+                summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
+                summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
 
             # Backprop
             mse.backward()
-
-            # Apply TV
-            if args.lambda_tv > 0.0:
-                grid.inplace_tv_grad(grid.data.grad, scaling=args.lambda_tv)
 
             # Manual SGD step
             tmp = grid.data.grad[..., :1].clone()
@@ -224,8 +257,15 @@ for epoch_id in range(args.n_epochs):
 
             grid.data.grad[..., 1:] *= args.lr_sh
             grid.data.grad[..., :1] /= (torch.sqrt(rms) + 1e-8)
-            grid.data.grad[..., :1] *= args.lr_sigma
+            grid.data.grad[..., :1] *= lr_sigma
             grid.data.data -= grid.data.grad
+
+            if args.weight_decay_sh < 1.0:
+                grid.data.data[..., 1:] *= args.weight_decay_sh
+
+            if args.weight_decay_sigma < 1.0:
+                grid.data.data[..., 1:] *= args.weight_decay_sigma
+
             del grid.data.grad  # Save memory
 
 
@@ -254,12 +294,11 @@ for epoch_id in range(args.n_epochs):
             del rms
             rms : torch.Tensor = torch.zeros_like(grid.data[..., :1])
             if non_final:
-                if reso <= args.ref_reso:
-                    args.lr_sigma *= 8
-                    args.lr_sh *= 2
+                #  if reso <= args.ref_reso:
+                #  lr_sigma_factor *= 8
                 #  else:
-                #  args.lr_sigma *= 4
-                #  args.lr_sh *= 2
+                #  lr_sigma_factor *= 4
+                lr_sh_factor *= args.lr_sh_upscale_factor
             print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
         if factor > 1 and reso < args.final_reso:
