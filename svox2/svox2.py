@@ -737,7 +737,7 @@ class SparseGrid(nn.Module):
     def tv(self, start_dim : int = 0, end_dim : Optional[int] = None):
         """
         Compute L1 total variation as in Neural Volumes [Lombardi et al., ToG 2019]
-        
+
         :param start_dim: int, first channel dimension to compute TV over (inclusive).
                           Default 0.
         :param end_dim: int, last channel dimension to compute TV over (exclusive).
@@ -748,7 +748,7 @@ class SparseGrid(nn.Module):
         """
         assert _C is not None and self.data.is_cuda, \
                 "CUDA extension is currently required for total variation"
-        if end_dim is None: 
+        if end_dim is None:
             end_dim = self.data_dim
         end_dim = end_dim + self.data_dim if end_dim < 0 else end_dim
         start_dim = start_dim + self.data_dim if start_dim < 0 else start_dim
@@ -765,7 +765,7 @@ class SparseGrid(nn.Module):
         """
         assert _C is not None and self.data.is_cuda and grad.is_cuda, \
                 "CUDA extension is currently required for total variation"
-        if end_dim is None: 
+        if end_dim is None:
             end_dim = self.data_dim
         end_dim = end_dim + self.data_dim if end_dim < 0 else end_dim
         start_dim = start_dim + self.data_dim if start_dim < 0 else start_dim

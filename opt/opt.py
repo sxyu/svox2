@@ -45,18 +45,18 @@ group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=5000, help='batch size')
 
 
-group.add_argument('--lr_sigma', type=float, default=2e1, #5e1,#2e0,#1e8
+group.add_argument('--lr_sigma', type=float, default=5e1, #5e1,#2e0,#1e8
         help='SGD lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-1)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=10000)
+group.add_argument('--lr_sigma_delay_steps', type=int, default=20000)
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 
 group.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
 group.add_argument('--lr_sh_final', type=float, default=2e5)
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sh_delay_steps', type=int, default=10000)
+group.add_argument('--lr_sh_delay_steps', type=int, default=20000)
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 group.add_argument('--lr_sh_upscale_factor', type=float, default=2)
 
