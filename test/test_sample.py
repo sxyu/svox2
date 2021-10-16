@@ -1,10 +1,17 @@
 import svox2
 import torch
+import numpy as np
 from util import Timing
 
 torch.random.manual_seed(0)
 
 device = 'cuda:0'
+
+#  GRID_FILE = 'lego.npy'
+#  grid = svox2.SparseGrid(reso=256, device='cpu', radius=1.3256)
+#  grid.data.data = torch.from_numpy(np.load(GRID_FILE)).view(-1, grid.data_dim)
+#  grid = grid.cuda()
+
 grid = svox2.SparseGrid(reso=128, center=[0.0, 0.0, 0.0],
                         radius=1.0, device=device)
 grid.data.data[..., 1:].normal_(0.0, 1.0)

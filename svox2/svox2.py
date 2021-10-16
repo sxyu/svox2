@@ -544,6 +544,7 @@ class SparseGrid(nn.Module):
                  weight_thresh : float = 0.01,
                  dilate : int = 2,
                  cameras : Optional[List[Camera]] = None,
+                 use_z_order=False,
                  ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -553,6 +554,7 @@ class SparseGrid(nn.Module):
         :param dilate: int, if true applies dilation of size <dilate> to the 3D mask for nodes to keep in the grid
                              (keep neighbors in all 28 directions, including diagonals, of the desired nodes)
         :param cameras: Optional[List[Camera]], optional list of cameras in OpenCV convention (if given, uses weight thresholding)
+        :param use_z_order: bool, if true, stores the data initially in a Z-order curve if possible
         """
         device = self.links.device
         if isinstance(reso, int):
@@ -560,6 +562,11 @@ class SparseGrid(nn.Module):
         else:
             assert len(reso) == 3, \
                    "reso must be an integer or indexable object of 3 ints"
+
+        if not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
+            print("Morton code requires a cube grid of power-of-2 size, ignoring...")
+            use_z_order = False
+
         self.capacity : int = reduce(lambda x,y: x*y, reso)
         curr_reso = self.links.shape
         dtype = torch.float32
@@ -569,6 +576,10 @@ class SparseGrid(nn.Module):
         Z = torch.linspace(reso_facts[2] - 0.5, curr_reso[2] - reso_facts[2] - 0.5, reso[2], dtype=dtype)
         X, Y, Z = torch.meshgrid(X, Y, Z)
         points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
+
+        if use_z_order:
+            morton = gen_morton(reso[0], dtype=torch.long).view(-1)
+            points[morton] = points.clone()
 
         use_weight_thresh = cameras is not None
         pre_mask_samples = not (dilate or use_weight_thresh)
@@ -613,8 +624,15 @@ class SparseGrid(nn.Module):
         del all_sample_vals
         if not pre_mask_samples:
             sample_vals = sample_vals[sample_vals_mask]
-        init_links = torch.cumsum(sample_vals_mask.to(torch.int32), dim=-1).int() - 1
-        init_links[~sample_vals_mask] = -1
+        if use_z_order:
+            inv_morton = torch.empty_like(morton)
+            inv_morton[morton] = torch.arange(morton.size(0), dtype=morton.dtype)
+            inv_idx = inv_morton[sample_vals_mask]
+            init_links = torch.full((sample_vals_mask.size(0),), fill_value=-1, dtype=torch.int32)
+            init_links[inv_idx] = torch.arange(inv_idx.size(0), dtype=torch.int32)
+        else:
+            init_links = torch.cumsum(sample_vals_mask.to(torch.int32), dim=-1).int() - 1
+            init_links[~sample_vals_mask] = -1
 
         self.capacity = sample_vals_mask.sum().item()
         print(' New cap:', self.capacity)

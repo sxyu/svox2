@@ -100,7 +100,7 @@ group.add_argument('--no_save', action='store_true', default=False,
                    help='do not save at all')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=0.0)
+group.add_argument('--lambda_tv', type=float, default=1e-3)#,1e-5)
 group.add_argument('--aniso_tv', action='store_true', default=False)
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
@@ -241,16 +241,18 @@ for epoch_id in range(args.n_epochs):
                 if args.lambda_tv > 0.0:
                     with torch.no_grad():
                         tv = grid.tv()
-                    # Apply TV
-                    grid.inplace_tv_grad(grid.data.data,
-                                scaling=-args.lambda_tv,
-                                anisotropic=args.aniso_tv)
                     summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
 
             # Backprop
             mse.backward()
+
+            # Apply TV
+            if args.lambda_tv > 0.0:
+                grid.inplace_tv_grad(grid.data.grad,
+                        scaling=args.lambda_tv,
+                        anisotropic=args.aniso_tv)
 
             # Manual SGD step
             tmp = grid.data.grad[..., :1].clone()
