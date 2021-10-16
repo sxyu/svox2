@@ -94,64 +94,61 @@ __global__ void tv_grad_kernel(
         const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
         int start_dim, int end_dim,
         float scale,
-        int Q,
+        size_t Q,
         // Output
         float* __restrict__ grad_data) {
-    CUDA_GET_THREAD_ID(tid, Q);
-    __shared__ float dummy[28];
-    const int z = tid % (links.size(2) - 1);
-    const int xy = tid / (links.size(2) - 1);
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    float dummy;
+    const int idx = tid % (end_dim - start_dim);
+    const int xyz = tid / (end_dim - start_dim);
+    const int z = xyz % (links.size(2) - 1);
+    const int xy = xyz / (links.size(2) - 1);
     const int y = xy % (links.size(1) - 1);
     const int x = xy / (links.size(1) - 1);
 
-    const float* dptr = data.data(), *ptr000 = EMPTY_CELL_DATA,
-                                     *ptr100 = EMPTY_CELL_DATA,
-                                     *ptr010 = EMPTY_CELL_DATA,
-                                     *ptr001 = EMPTY_CELL_DATA;
+    const float* dptr = data.data();
     const size_t ddim = data.size(1);
-    float* gptr000 = dummy,
-         * gptr100 = dummy,
-         * gptr010 = dummy,
-         * gptr001 = dummy;
+    float v000 = 0.f, v100 = 0.f, v010 = 0.f, v001 = 0.f;
+    float* gptr000 = &dummy,
+         * gptr100 = &dummy,
+         * gptr010 = &dummy,
+         * gptr001 = &dummy;
     bool any_nonempty = false;
 
     if (links[x][y][z] >= 0) {
-        const size_t lnk = links[x][y][z] * ddim;
-        ptr000 = dptr + lnk;
+        const size_t lnk = links[x][y][z] * ddim + idx;
+        v000 = dptr[lnk];
         gptr000 = grad_data + lnk;
         any_nonempty = true;
     }
     if (links[x + 1][y][z] >= 0) {
-        const size_t lnk = links[x + 1][y][z] * ddim;
-        ptr100 = dptr + lnk;
+        const size_t lnk = links[x + 1][y][z] * ddim + idx;
+        v100 = dptr[lnk];
         gptr100 = grad_data + lnk;
         any_nonempty = true;
     }
     if (links[x][y + 1][z] >= 0) {
-        const size_t lnk = links[x][y + 1][z] * ddim;
-        ptr010 = dptr + lnk;
+        const size_t lnk = links[x][y + 1][z] * ddim + idx;
+        v010 = dptr[lnk];
         gptr010 = grad_data + lnk;
         any_nonempty = true;
     }
     if (links[x][y][z + 1] >= 0) {
-        const size_t lnk = links[x][y][z + 1] * ddim;
-        ptr001 = dptr + lnk;
+        const size_t lnk = links[x][y][z + 1] * ddim + idx;
+        v001 = dptr[lnk];
         gptr001 = grad_data + lnk;
         any_nonempty = true;
     }
     if (!any_nonempty) return;
 
-    for (int i = start_dim; i < end_dim; ++i) {
-        const float val = ptr000[i];
-        const float dx = ptr100[i] - val;
-        const float dy = ptr010[i] - val;
-        const float dz = ptr001[i] - val;
-        const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
-        atomicAdd(gptr000 + i, -(dx + dy + dz) * idelta);
-        atomicAdd(gptr100 + i, dx * idelta);
-        atomicAdd(gptr010 + i, dy * idelta);
-        atomicAdd(gptr001 + i, dz * idelta);
-    }
+    const float dx = v100 - v000;
+    const float dy = v010 - v000;
+    const float dz = v001 - v000;
+    const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
+    atomicAdd(gptr000, -(dx + dy + dz) * idelta);
+    atomicAdd(gptr100, dx * idelta);
+    atomicAdd(gptr010, dy * idelta);
+    atomicAdd(gptr001, dz * idelta);
 }
 
 __global__ void tv_aniso_grad_kernel(
@@ -159,44 +156,43 @@ __global__ void tv_aniso_grad_kernel(
         torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
         int start_dim, int end_dim,
         float scale,
-        int Q,
+        size_t Q,
         // Output
         float* __restrict__ grad_data) {
-    CUDA_GET_THREAD_ID(tid, Q);
-    const int z = tid % links.size(2);
-    const int xy = tid / links.size(2);
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int idx = tid % (end_dim - start_dim);
+    const int xyz = tid / (end_dim - start_dim);
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
     const int y = xy % links.size(1);
     const int x = xy / links.size(1);
 
     if (links[x][y][z] < 0) return;
-    const size_t ddim = data.size(1);
-    const size_t lnk = links[x][y][z] * ddim;
+    const size_t lnk = links[x][y][z] * data.size(1) + idx;
 
-    const float* __restrict__ ptr000 = data.data() + lnk;
+    float cnt = 0.f;
+    const float val000 = data.data()[lnk];
     float* __restrict__ gptr000 = grad_data + lnk;
-    const float* __restrict__ ptrx[6] = {
-            ((x < links.size(0) - 1 && links[x + 1][y][z] >= 0 ?
-                          &data[links[x + 1][y][z]][0] : EMPTY_CELL_DATA)),
-            ((y < links.size(1) - 1 && links[x][y + 1][z] >= 0 ?
-                          &data[links[x][y + 1][z]][0] : EMPTY_CELL_DATA)),
-            ((z < links.size(2) - 1 && links[x][y][z + 1] >= 0 ?
-                          &data[links[x][y][z + 1]][0] : EMPTY_CELL_DATA)),
-            ((x > 0 && links[x - 1][y][z] >= 0 ?
-                          &data[links[x - 1][y][z]][0] : EMPTY_CELL_DATA)),
-            ((y > 0 && links[x][y - 1][z] >= 0 ?
-                          &data[links[x][y - 1][z]][0] : EMPTY_CELL_DATA)),
-            ((z > 0 && links[x][y][z - 1] >= 0 ?
-                          &data[links[x][y][z - 1]][0] : EMPTY_CELL_DATA))
-        };
-    for (int i = start_dim; i < end_dim; ++i) {
-        float cnt = 0.f;
-        const float val = ptr000[i];
-#pragma unroll 6
-        for (int j = 0; j < 6; ++j) {
-            cnt += (val > ptrx[j][i]) ? 1.f : (val < ptrx[j][i]) ? -1.f : 0.f;
-        }
-        gptr000[i] += cnt * scale;
+#define _SUB_SIGN(x, y) (((x)>(y)) - ((y)>(x))) 
+    if (x < links.size(0) - 1 && links[x + 1][y][z] >= 0) {
+        cnt += _SUB_SIGN(val000, data[links[x + 1][y][z]][idx]);
     }
+    if (y < links.size(1) - 1 && links[x][y + 1][z] >= 0) {
+        cnt += _SUB_SIGN(val000, data[links[x][y + 1][z]][idx]);
+    }
+    if (z < links.size(2) - 1 && links[x][y][z + 1] >= 0) {
+        cnt += _SUB_SIGN(val000, data[links[x][y][z + 1]][idx]);
+    }
+    if (x > 0 && links[x - 1][y][z] >= 0) {
+        cnt += _SUB_SIGN(val000, data[links[x - 1][y][z]][idx]);
+    }
+    if (y > 0 && links[x][y - 1][z] >= 0) {
+        cnt += _SUB_SIGN(val000, data[links[x][y - 1][z]][idx]);
+    }
+    if (z > 0 && links[x][y][z - 1] >= 0) {
+        cnt += _SUB_SIGN(val000, data[links[x][y][z - 1]][idx]);
+    }
+    *gptr000 += cnt * scale;
 }
 
 __device__ __inline__ void grid_trace_ray(
@@ -380,7 +376,8 @@ void tv_grad(torch::Tensor links, torch::Tensor data,
     TORCH_CHECK(links.ndimension() == 3);
     TORCH_CHECK(grad_data.ndimension() == 2);
 
-    int Q = (links.size(0) - 1) * (links.size(1) - 1) * (links.size(2) - 1);
+    int nl = (links.size(0) - 1) * (links.size(1) - 1) * (links.size(2) - 1);
+    size_t Q = nl * size_t(end_dim - start_dim);
 
     const int cuda_n_threads = 1024;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
@@ -389,7 +386,7 @@ void tv_grad(torch::Tensor links, torch::Tensor data,
             data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
             start_dim,
             end_dim,
-            scale / Q,
+            scale / nl,
             Q,
             // Output
             grad_data.data<float>());
@@ -411,7 +408,8 @@ void tv_aniso_grad(torch::Tensor links, torch::Tensor data,
     TORCH_CHECK(links.ndimension() == 3);
     TORCH_CHECK(grad_data.ndimension() == 2);
 
-    int Q = links.size(0) * links.size(1) * links.size(2);
+    int nl = links.size(0) * links.size(1) * links.size(2);
+    size_t Q = nl * size_t(end_dim - start_dim);
 
     const int cuda_n_threads = 1024;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
@@ -420,7 +418,7 @@ void tv_aniso_grad(torch::Tensor links, torch::Tensor data,
             data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
             start_dim,
             end_dim,
-            scale / Q,
+            scale / nl,
             Q,
             // Output
             grad_data.data<float>());

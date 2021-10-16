@@ -10,5 +10,10 @@
   CHECK_CPU(x);                                                                \
   CHECK_CONTIGUOUS(x)
 
+#if !defined(__CUDA_ARCH__)
 #define _SIGMOID(x) (1 / (1 + expf(-(x))))
+#else
+// CUDA version of sigmoid
+#define _SIGMOID(x) (1 / (1 + __expf(-(x))))
+#endif
 #define _SQR(x) ((x) * (x))
