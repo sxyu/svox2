@@ -104,33 +104,27 @@ __global__ void tv_grad_kernel(
          * gptr100 = &dummy,
          * gptr010 = &dummy,
          * gptr001 = &dummy;
-    bool any_nonempty = false;
 
     if (links[x][y][z] >= 0) {
         const size_t lnk = links[x][y][z] * ddim + idx;
         v000 = dptr[lnk];
         gptr000 = grad_data + lnk;
-        any_nonempty = v000 != 0.f;
     }
     if (links[x + 1][y][z] >= 0) {
         const size_t lnk = links[x + 1][y][z] * ddim + idx;
         v100 = dptr[lnk];
         gptr100 = grad_data + lnk;
-        any_nonempty |= v100 != 0.f;
     }
     if (links[x][y + 1][z] >= 0) {
         const size_t lnk = links[x][y + 1][z] * ddim + idx;
         v010 = dptr[lnk];
         gptr010 = grad_data + lnk;
-        any_nonempty |= v010 != 0.f;
     }
     if (links[x][y][z + 1] >= 0) {
         const size_t lnk = links[x][y][z + 1] * ddim + idx;
         v001 = dptr[lnk];
         gptr001 = grad_data + lnk;
-        any_nonempty |= v001 != 0.f;
     }
-    if (!any_nonempty) return;
 
     const float dx = v100 - v000;
     const float dy = v010 - v000;
@@ -138,16 +132,19 @@ __global__ void tv_grad_kernel(
     const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
     coop[threadIdx.x] = -(dx + dy + dz) * idelta;
     __syncthreads();
-    atomicAdd(gptr100, dx * idelta);
-    atomicAdd(gptr010, dy * idelta);
-    const int nx = threadIdx.x + (end_dim - start_dim);
-    if (nx < 1024 && z + 2 < links.size(2)) {
-        coop[nx] += dz * idelta;
-    } else {
-        atomicAdd(gptr001, dz * idelta);
+    if (dx != 0.f) atomicAdd(gptr100, dx * idelta);
+    if (dy != 0.f) atomicAdd(gptr010, dy * idelta);
+    if (dz != 0.f) {
+        const int nx = threadIdx.x + (end_dim - start_dim);
+        if (nx < 1024 && z + 2 < links.size(2)) {
+            coop[nx] += dz * idelta;
+        } else {
+            atomicAdd(gptr001, dz * idelta);
+        }
     }
     __syncthreads();
-    atomicAdd(gptr000, coop[threadIdx.x]);
+    if (coop[threadIdx.x] != 0.f)
+        atomicAdd(gptr000, coop[threadIdx.x]);
 }
 
 __global__ void tv_aniso_grad_kernel(
