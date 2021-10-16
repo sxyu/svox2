@@ -72,7 +72,7 @@ __global__ void sample_grid_backward_kernel(
     const float xa = 1.f - point[0], ya = 1.f - point[1], za = 1.f - point[2];
 
 #define MAYBE_ADD_GRAD_LINK_PTR(u, content) if (link_ptr[u] >= 0)  \
-            atomicAdd(&grad_data[link_ptr[u]][idx], content) 
+            atomicAdd(&grad_data[link_ptr[u]][idx], content)
 
     const float xago = xa * go;
     float tmp = ya * xago;
