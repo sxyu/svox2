@@ -98,8 +98,7 @@ torch::Tensor sample_grid(SparseGridSpec& grid, torch::Tensor points) {
     CHECK_INPUT(points);
     TORCH_CHECK(points.ndimension() == 2);
     const auto Q = points.size(0);
-
-    const int cuda_n_threads = 768;
+    const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
     torch::Tensor result = torch::empty({Q, grid.data.size(1)}, points.options());
 
@@ -124,7 +123,7 @@ torch::Tensor sample_grid_backward(
     TORCH_CHECK(grad_out.ndimension() == 2);
     const auto Q = points.size(0);
 
-    const int cuda_n_threads = 768;
+    const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
 
     torch::Tensor grad_data = torch::empty({grid.data.requires_grad() ? grid.data.size(0) : 0,

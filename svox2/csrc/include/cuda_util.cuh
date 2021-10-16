@@ -1,7 +1,9 @@
 // Copyright 2021 Alex Yu
 #pragma once
 #include <cuda_runtime.h>
+#include <cub/cub.cuh>
 #include <c10/cuda/CUDAGuard.h>
+#include <ATen/cuda/CUDAContext.h>
 #include "util.hpp"
 
 
@@ -17,6 +19,8 @@
     cudaError_t err = cudaGetLastError(); \
     if (err != cudaSuccess) \
             printf("Error in svox.%s : %s\n", __FUNCTION__, cudaGetErrorString(err))
+
+#define CUDA_MAX_THREADS at::cuda::getCurrentDeviceProperties()->maxThreadsPerBlock
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 600
 #else
