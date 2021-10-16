@@ -26,6 +26,8 @@ class Dataset():
                  scene_scale : float = 1.0/1.5,
                  factor : int = 1,
                  permutation : bool = True):
+        assert path.isdir(root), f"'{root}' is not a directory"
+            
         self.device = device
         self.permutation = permutation
         all_c2w = []

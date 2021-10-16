@@ -40,8 +40,8 @@ group.add_argument('--ref_reso', type=int, default=256,
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
 group.add_argument('--scene_scale', type=float, default=
                            #  1/1.4, # ship
-                           1/1.3, # generic
-                           #  5/6, # lego, drums
+                           #  1/1.3, # generic
+                           5/6, # lego, drums
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
 
 group = parser.add_argument_group("optimization")
@@ -58,16 +58,16 @@ group.add_argument('--lr_sigma_delay_steps', type=int, default=20000)
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 
-group.add_argument('--lr_sh', type=float, default=2e6, help='SGD lr for SH')
-group.add_argument('--lr_sh_final', type=float, default=2e5)
+group.add_argument('--lr_sh', type=float, default=1e-1, help='SGD lr for SH')
+group.add_argument('--lr_sh_final', type=float, default=5e-1)
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=20000)
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
-group.add_argument('--lr_sh_upscale_factor', type=float, default=2)
+#  group.add_argument('--lr_sh_upscale_factor', type=float, default=2)
 
 group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=3,#4,
+group.add_argument('--upsamp_every', type=int, default=10,#4,
                     help='upsample the grid every')
 
 group = parser.add_argument_group("initialization")
@@ -100,7 +100,7 @@ group.add_argument('--no_save', action='store_true', default=False,
                    help='do not save at all')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-3)#,1e-5)
+group.add_argument('--lambda_tv', type=float, default=0.0)#,1e-5)
 group.add_argument('--aniso_tv', action='store_true', default=False)
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
@@ -151,7 +151,7 @@ resample_cameras = [
     ] if args.use_weight_thresh else None
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
-rms : torch.Tensor = torch.zeros_like(grid.data[..., :1])
+rms : torch.Tensor = torch.zeros_like(grid.data)
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
@@ -255,16 +255,16 @@ for epoch_id in range(args.n_epochs):
                         anisotropic=args.aniso_tv)
 
             # Manual SGD step
-            tmp = grid.data.grad[..., :1].clone()
+            tmp = grid.data.grad.clone()
             tmp.square_()
             tmp *= (1.0 - args.rms_beta)
             rms[tmp != 0.0] *= args.rms_beta
             rms += tmp
             del tmp
 
-            grid.data.grad[..., 1:] *= args.lr_sh
-            grid.data.grad[..., :1] /= (torch.sqrt(rms) + 1e-8)
+            grid.data.grad[..., 1:] *= lr_sh
             grid.data.grad[..., :1] *= lr_sigma
+            grid.data.grad /= (torch.sqrt(rms) + 1e-8)
             grid.data.data -= grid.data.grad
 
             if args.weight_decay_sh < 1.0:
@@ -300,12 +300,12 @@ for epoch_id in range(args.n_epochs):
                     cameras=resample_cameras)
             del rms
             rms : torch.Tensor = torch.zeros_like(grid.data[..., :1])
-            if non_final:
+            #  if non_final:
                 #  if reso <= args.ref_reso:
                 #  lr_sigma_factor *= 8
                 #  else:
                 #  lr_sigma_factor *= 4
-                lr_sh_factor *= args.lr_sh_upscale_factor
+                #  lr_sh_factor *= args.lr_sh_upscale_factor
             print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
         if factor > 1 and reso < args.final_reso:
