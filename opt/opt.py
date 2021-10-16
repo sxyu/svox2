@@ -67,7 +67,7 @@ group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=10,#4,
+group.add_argument('--upsamp_every', type=int, default=4,
                     help='upsample the grid every')
 
 group = parser.add_argument_group("initialization")

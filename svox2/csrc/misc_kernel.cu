@@ -52,7 +52,7 @@ __global__ void tv_kernel(
     typedef cub::BlockReduce<float, 1024> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
 
-    const int idx = tid % (end_dim - start_dim);
+    const int idx = tid % (end_dim - start_dim) + start_dim;
     const int xyz = tid / (end_dim - start_dim);
     const int z = xyz % (links.size(2) - 1);
     const int xy = xyz / (links.size(2) - 1);
@@ -88,12 +88,14 @@ __global__ void tv_grad_kernel(
         float* __restrict__ grad_data) {
     CUDA_GET_THREAD_ID_U64(tid, Q);
     float dummy;
-    const int idx = tid % (end_dim - start_dim);
+    const int idx = tid % (end_dim - start_dim) + start_dim;
     const int xyz = tid / (end_dim - start_dim);
     const int z = xyz % (links.size(2) - 1);
     const int xy = xyz / (links.size(2) - 1);
     const int y = xy % (links.size(1) - 1);
     const int x = xy / (links.size(1) - 1);
+
+    __shared__ float coop[1024];
 
     const float* dptr = data.data();
     const size_t ddim = data.size(1);
@@ -108,25 +110,25 @@ __global__ void tv_grad_kernel(
         const size_t lnk = links[x][y][z] * ddim + idx;
         v000 = dptr[lnk];
         gptr000 = grad_data + lnk;
-        any_nonempty = true;
+        any_nonempty = v000 != 0.f;
     }
     if (links[x + 1][y][z] >= 0) {
         const size_t lnk = links[x + 1][y][z] * ddim + idx;
         v100 = dptr[lnk];
         gptr100 = grad_data + lnk;
-        any_nonempty = true;
+        any_nonempty |= v100 != 0.f;
     }
     if (links[x][y + 1][z] >= 0) {
         const size_t lnk = links[x][y + 1][z] * ddim + idx;
         v010 = dptr[lnk];
         gptr010 = grad_data + lnk;
-        any_nonempty = true;
+        any_nonempty |= v010 != 0.f;
     }
     if (links[x][y][z + 1] >= 0) {
         const size_t lnk = links[x][y][z + 1] * ddim + idx;
         v001 = dptr[lnk];
         gptr001 = grad_data + lnk;
-        any_nonempty = true;
+        any_nonempty |= v001 != 0.f;
     }
     if (!any_nonempty) return;
 
@@ -134,10 +136,18 @@ __global__ void tv_grad_kernel(
     const float dy = v010 - v000;
     const float dz = v001 - v000;
     const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
-    atomicAdd(gptr000, -(dx + dy + dz) * idelta);
+    coop[threadIdx.x] = -(dx + dy + dz) * idelta;
+    __syncthreads();
     atomicAdd(gptr100, dx * idelta);
     atomicAdd(gptr010, dy * idelta);
-    atomicAdd(gptr001, dz * idelta);
+    const int nx = threadIdx.x + (end_dim - start_dim);
+    if (nx < 1024 && z + 2 < links.size(2)) {
+        coop[nx] += dz * idelta;
+    } else {
+        atomicAdd(gptr001, dz * idelta);
+    }
+    __syncthreads();
+    atomicAdd(gptr000, coop[threadIdx.x]);
 }
 
 __global__ void tv_aniso_grad_kernel(
@@ -149,7 +159,7 @@ __global__ void tv_aniso_grad_kernel(
         // Output
         float* __restrict__ grad_data) {
     CUDA_GET_THREAD_ID_U64(tid, Q);
-    const int idx = tid % (end_dim - start_dim);
+    const int idx = tid % (end_dim - start_dim) + start_dim;
     const int xyz = tid / (end_dim - start_dim);
     const int z = xyz % links.size(2);
     const int xy = xyz / links.size(2);
@@ -370,7 +380,7 @@ void tv_grad(torch::Tensor links, torch::Tensor data,
     int nl = (links.size(0) - 1) * (links.size(1) - 1) * (links.size(2) - 1);
     size_t Q = nl * size_t(end_dim - start_dim);
 
-    const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
+    const int cuda_n_threads = 1024;//std::min<int>(Q, CUDA_MAX_THREADS);
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
     device::tv_grad_kernel<<<blocks, cuda_n_threads>>>(
             links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
