@@ -5,7 +5,8 @@
 
 struct PackedSparseGridSpec {
     PackedSparseGridSpec(SparseGridSpec& spec)
-        : data(spec.data.packed_accessor64<float, 2, torch::RestrictPtrTraits>()),
+        : density_data(spec.density_data.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
+          sh_data(spec.sh_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>()),
           links(spec.links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>()),
           basis_dim(spec.basis_dim),
           _offset{spec._offset.data<float>()[0],
@@ -16,7 +17,8 @@ struct PackedSparseGridSpec {
                    spec._scaling.data<float>()[2]} {
     }
 
-    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data;
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> density_data;
+    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> sh_data;
     torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links;
     int basis_dim;
     const float _offset[3];

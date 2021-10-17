@@ -17,12 +17,13 @@ __device__ __constant__ const float EMPTY_CELL_DATA[] = {
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
     0.f, 0.f, 0.f, 0.f, 0.f,
-    0.f, 0.f, 0.f,
+    0.f, 0.f,
 };
 
+template<class data_index_t>
 __device__ __inline__ void trilerp_cuvol(
         torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
-        torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        torch::GenericPackedTensorAccessor<float, 2, torch::RestrictPtrTraits, data_index_t> data,
         const int32_t* __restrict__ l,
         const float* __restrict__ pos,
         float* __restrict__ out,
@@ -74,7 +75,7 @@ __device__ __inline__ void trilerp_backward_cuvol(
     const float ax = 1.f - pos[0], ay = 1.f - pos[1], az = 1.f - pos[2];
     const float bx = pos[0], by = pos[1], bz = pos[2];
 
-    float zeros[28];
+    float zeros[27];
     float* ptr000 = links[l[0]][l[1]][l[2]] >= 0 ?
                     grad_data + stride * links[l[0]][l[1]][l[2]] : zeros,
 
@@ -172,11 +173,12 @@ __device__ __inline__ void trace_ray_cuvol(
             pos[j] -= l[j];
         }
 
-        trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 0, 1);
+        trilerp_cuvol(grid.links, grid.density_data, l, pos, interp_val, 0, 1);
 
         float sigma = interp_val[0];
         if (sigma > opt.sigma_thresh) {
-            trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 1, grid.data.size(1));
+            trilerp_cuvol(grid.links, grid.sh_data, l, pos, interp_val + 1, 0,
+                    grid.sh_data.size(1));
             const float pcnt = world_step * sigma;
             const float weight = __expf(light_intensity) * (1.f - __expf(-pcnt));
             light_intensity -= pcnt;
@@ -209,7 +211,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             SingleRaySpec ray,
             RenderOptions& __restrict__ opt,
         uint32_t ray_id,
-        float* __restrict__ grad_data_out
+        float* __restrict__ grad_density_data_out,
+        float* __restrict__ grad_sh_data_out
         ) {
 
     // Warning: modifies ray.origin
@@ -266,11 +269,11 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             pos[j] -= l[j];
         }
 
-        trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 0, 1);
+        trilerp_cuvol(grid.links, grid.density_data, l, pos, interp_val, 0, 1);
         float sigma = interp_val[0];
         if (sigma > opt.sigma_thresh) {
-            trilerp_cuvol(grid.links, grid.data, l, pos, interp_val, 1,
-                          grid.data.size(1));
+            trilerp_cuvol(grid.links, grid.sh_data, l, pos, interp_val + 1, 0,
+                          grid.sh_data.size(1));
             const float weight = __expf(light_intensity) * (1.f - __expf(
                         -world_step * sigma));
             light_intensity -= world_step * sigma;
@@ -294,8 +297,10 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             accum -= weight * total_color;
             curr_grad[0] = world_step * (
                     total_color * __expf(light_intensity) - accum);
-            trilerp_backward_cuvol(grid.links, grad_data_out, l, pos, curr_grad,
-                                   grid.data.size(1), grid.data.size(1));
+            trilerp_backward_cuvol(grid.links, grad_density_data_out, l, pos, curr_grad,
+                                   1, 1);
+            trilerp_backward_cuvol(grid.links, grad_sh_data_out, l, pos, curr_grad + 1,
+                                   grid.sh_data.size(1), grid.sh_data.size(1));
         }
         t += opt.step_size;
     }
@@ -325,7 +330,8 @@ __global__ void render_ray_backward_kernel(
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> color_cache,
         PackedRaysSpec rays,
         RenderOptions opt,
-    float* __restrict__ grad_data_out
+    float* __restrict__ grad_density_data_out,
+    float* __restrict__ grad_sh_data_out
         ) {
     CUDA_GET_THREAD_ID(tid, rays.origins.size(0));
     trace_ray_cuvol_backward(
@@ -335,7 +341,8 @@ __global__ void render_ray_backward_kernel(
         SingleRaySpec(&rays.origins[tid][0], &rays.dirs[tid][0]),
         opt,
         tid,
-        grad_data_out);
+        grad_density_data_out,
+        grad_sh_data_out);
 }
 
 __global__ void render_image_kernel(
@@ -362,7 +369,8 @@ __global__ void render_image_backward_kernel(
         torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color_cache,
         PackedCameraSpec cam,
         RenderOptions opt,
-        float* __restrict__ grad_data_out) {
+        float* __restrict__ grad_density_data_out,
+        float* __restrict__ grad_sh_data_out) {
     CUDA_GET_THREAD_ID(tid, cam.width * cam.height);
     int iy = tid / cam.width, ix = tid % cam.width;
     float dir[3], origin[3];
@@ -374,13 +382,14 @@ __global__ void render_image_backward_kernel(
         SingleRaySpec(origin, dir),
         opt,
         tid,
-        grad_data_out);
+        grad_density_data_out,
+        grad_sh_data_out);
 }
 }  // namespace device
 }  // namespace
 
 torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOptions& opt) {
-    DEVICE_GUARD(grid.data);
+    DEVICE_GUARD(grid.sh_data);
     grid.check();
     rays.check();
 
@@ -397,14 +406,14 @@ torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOp
     return results;
 }
 
-torch::Tensor volume_render_cuvol_backward(
+std::tuple<torch::Tensor,torch::Tensor> volume_render_cuvol_backward(
         SparseGridSpec& grid,
         RaysSpec& rays,
         RenderOptions& opt,
         torch::Tensor grad_out,
         torch::Tensor color_cache) {
 
-    DEVICE_GUARD(grid.data);
+    DEVICE_GUARD(grid.sh_data);
     grid.check();
     rays.check();
     const auto Q = rays.origins.size(0);
@@ -412,7 +421,8 @@ torch::Tensor volume_render_cuvol_backward(
     const int cuda_n_threads_render_backward = 448;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads_render_backward);
 
-    torch::Tensor result = torch::zeros_like(grid.data);
+    torch::Tensor result_density = torch::zeros_like(grid.density_data);
+    torch::Tensor result_sh = torch::zeros_like(grid.sh_data);
     device::render_ray_backward_kernel<<<blocks,
            cuda_n_threads_render_backward>>>(
             grid,
@@ -420,13 +430,14 @@ torch::Tensor volume_render_cuvol_backward(
             color_cache.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             rays, opt,
             // Output
-            result.data<float>());
+            result_density.data<float>(),
+            result_sh.data<float>());
     CUDA_CHECK_ERRORS;
-    return result;
+    return std::tuple<torch::Tensor, torch::Tensor>{result_density, result_sh};
 }
 
 torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, RenderOptions& opt) {
-    DEVICE_GUARD(grid.data);
+    DEVICE_GUARD(grid.sh_data);
     grid.check();
     cam.check();
 
@@ -434,7 +445,7 @@ torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, R
 
     const int cuda_n_threads = 768;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
-    torch::Tensor result = torch::zeros({cam.height, cam.width, 3}, grid.data.options());
+    torch::Tensor result = torch::zeros({cam.height, cam.width, 3}, grid.sh_data.options());
 
     device::render_image_kernel<<<blocks, cuda_n_threads>>>(
             grid, cam, opt,
@@ -444,14 +455,14 @@ torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, R
     return result;
 }
 
-torch::Tensor volume_render_cuvol_image_backward(
+std::tuple<torch::Tensor,torch::Tensor> volume_render_cuvol_image_backward(
         SparseGridSpec& grid,
         CameraSpec& cam,
         RenderOptions& opt,
         torch::Tensor grad_out,
         torch::Tensor color_cache) {
 
-    DEVICE_GUARD(grid.data);
+    DEVICE_GUARD(grid.sh_data);
     grid.check();
     cam.check();
     const size_t Q = size_t(cam.width) * cam.height;
@@ -459,7 +470,8 @@ torch::Tensor volume_render_cuvol_image_backward(
     const int cuda_n_threads_render_backward = 448;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads_render_backward);
 
-    torch::Tensor result = torch::zeros_like(grid.data);
+    torch::Tensor result_density = torch::zeros_like(grid.density_data);
+    torch::Tensor result_sh = torch::zeros_like(grid.sh_data);
     device::render_image_backward_kernel<<<blocks,
            cuda_n_threads_render_backward>>>(
             grid,
@@ -468,7 +480,8 @@ torch::Tensor volume_render_cuvol_image_backward(
             cam,
             opt,
             // Output
-            result.data<float>());
+            result_density.data<float>(),
+            result_sh.data<float>());
     CUDA_CHECK_ERRORS;
-    return result;
+    return std::tuple<torch::Tensor, torch::Tensor>{result_density, result_sh};
 }

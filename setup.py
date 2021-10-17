@@ -16,6 +16,7 @@ try:
         CUDAExtension('svox2.csrc', [
             'svox2/csrc/svox2.cpp',
             'svox2/csrc/svox2_kernel.cu',
+            'svox2/csrc/render_lerp_kernel_multistage.cu',
             'svox2/csrc/render_lerp_kernel_cuvol.cu',
             'svox2/csrc/misc_kernel.cu',
         ], include_dirs=[osp.join(ROOT_DIR, "svox2", "csrc", "include"),],

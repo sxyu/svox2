@@ -6,21 +6,25 @@
 using torch::Tensor;
 
 struct SparseGridSpec {
-  Tensor data;
+  Tensor density_data;
+  Tensor sh_data;
   Tensor links;
   Tensor _offset;
   Tensor _scaling;
   int basis_dim;
   inline void check() {
-    CHECK_INPUT(data);
+    CHECK_INPUT(density_data);
+    CHECK_INPUT(sh_data);
     CHECK_INPUT(links);
     CHECK_CPU_INPUT(_offset);
     CHECK_CPU_INPUT(_scaling);
-    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(density_data.is_floating_point());
+    TORCH_CHECK(sh_data.is_floating_point());
     TORCH_CHECK(!links.is_floating_point());
     TORCH_CHECK(_offset.is_floating_point());
     TORCH_CHECK(_scaling.is_floating_point());
-    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(density_data.ndimension() == 2);
+    TORCH_CHECK(sh_data.ndimension() == 2);
     TORCH_CHECK(links.ndimension() == 3);
   }
 };

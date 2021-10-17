@@ -13,12 +13,11 @@ grid = svox2.SparseGrid(
                      basis_dim=9,
                      use_z_order=True,
                      device=device)
-grid.opt.linear_interp = True
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
 
-grid.data.data.normal_()
-grid.data.data[..., 0] = 0.1
+grid.sh_data.data.normal_()
+grid.density_data.data[:] = 0.1
 
 N_RAYS = 200 * 200
 #  origins = torch.full((N_RAYS, 3), fill_value=0.0, device=device, dtype=dtype)
