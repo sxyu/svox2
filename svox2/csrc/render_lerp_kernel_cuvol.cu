@@ -12,7 +12,7 @@ namespace {
 const int WARP_SIZE = 32;
 const int TRACE_RAY_CUDA_THREADS = 768;
 const int TRACE_RAY_CUDA_RAYS_PER_BLOCK = TRACE_RAY_CUDA_THREADS / WARP_SIZE;
-const int TRACE_RAY_BKWD_CUDA_THREADS = 448;
+const int TRACE_RAY_BKWD_CUDA_THREADS = 768;
 const int TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK = TRACE_RAY_BKWD_CUDA_THREADS / WARP_SIZE;
 typedef cub::WarpReduce<float> WarpReducef;
 
@@ -155,6 +155,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         return;
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
+    const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim));
 
     if (ray.tmin > ray.tmax) return;
     float t = ray.tmin;
@@ -203,8 +204,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             float sigmoid = _SIGMOID(lane_color_total);
 
             float total_color = sigmoid * gout;
-            float total_color_c1 = __shfl_sync(0xffffffff, total_color, grid.basis_dim);
-            total_color += __shfl_sync(0xffffffff, total_color, 2 * grid.basis_dim);
+            float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim);
+            total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
             total_color += total_color_c1;
 
             sigmoid = __shfl_sync(0xffffffff, sigmoid, lane_colorgrp * grid.basis_dim);
