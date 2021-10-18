@@ -11,11 +11,11 @@ g = svox2.SparseGrid(center=[0.0, 0.0, 0.0],
 g.opt.sigma_thresh = 0.0
 g.opt.stop_thresh = 0.0
 
-g.data.data.normal_()
-g.data.data[..., 0] = 1.5
-g.data.data[..., 1] += 1.0
+g.sh_data.data.normal_()
+g.density_data.data[..., 0] = 1.5
+g.sh_data.data[..., 0] += 1.0
 
-N_RAYS = 1000
+N_RAYS = 1
 
 origins = torch.zeros(N_RAYS, 3, device=device) #torch.randn(N_RAYS, 3) * 0.01
 dirs = torch.randn(N_RAYS, 3, device=device)

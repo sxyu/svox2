@@ -47,10 +47,19 @@ struct PackedRaysSpec {
 };
 
 struct SingleRaySpec {
+    SingleRaySpec() = default;
     __device__ SingleRaySpec(const float* __restrict__ origin, const float* __restrict__ dir)
         : origin{origin[0], origin[1], origin[2]},
           dir{dir[0], dir[1], dir[2]},
           vdir(dir) {}
+    __device__ void set(const float* __restrict__ origin, const float* __restrict__ dir) {
+        vdir = dir;
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            this->origin[i] = origin[i];
+            this->dir[i] = dir[i];
+        }
+    }
     float origin[3];
     float dir[3];
     const float* __restrict__ vdir;

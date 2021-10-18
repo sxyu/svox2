@@ -11,9 +11,8 @@
   CHECK_CONTIGUOUS(x)
 
 #if !defined(__CUDA_ARCH__)
+#define _EXP(x) expf(x)
 #define _SIGMOID(x) (1 / (1 + expf(-(x))))
-#else
-// CUDA version of sigmoid
-#define _SIGMOID(x) (1 / (1 + __expf(-(x))))
+// CUDA version is in cuda_util.cuh
 #endif
 #define _SQR(x) ((x) * (x))

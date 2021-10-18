@@ -15,7 +15,6 @@ grid = svox2.SparseGrid(
                      device=device)
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
-grid.opt.step_size = 1.0
 
 grid.sh_data.data.normal_()
 grid.density_data.data[:] = 0.1

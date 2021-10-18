@@ -68,3 +68,6 @@ __device__ __inline__ void transform_coord(float* __restrict__ point,
 
 // Subtract and fused multiply-add
 #define lerp(a, b, w) fmaf(w, b - a, a)
+
+#define _EXP(x) __expf(x)
+#define _SIGMOID(x) (1 / (1 + _EXP(-(x))))
