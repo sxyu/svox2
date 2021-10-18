@@ -151,7 +151,7 @@ __device__ __inline__ void ray_find_bounds(
     for (int i = 0; i < 3; ++i) {
         const float invdir = 1.0 / ray.dir[i];
         const float t1 = (- ray.origin[i]) * invdir;
-        const float t2 = (grid.links.size(i) - 1.f  - ray.origin[i]) * invdir;
+        const float t2 = (grid.size[i] - 1.f  - ray.origin[i]) * invdir;
         if (ray.dir[i] != 0.f) {
             ray.tmin = max(ray.tmin, min(t1, t2));
             ray.tmax = min(ray.tmax, max(t1, t2));

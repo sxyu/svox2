@@ -57,7 +57,7 @@ struct RaysSpec {
 
 struct RenderOptions {
   float background_brightness;
-  float step_epsilon;
+  // float step_epsilon;
   float step_size;
   float sigma_thresh;
   float stop_thresh;

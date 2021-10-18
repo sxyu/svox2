@@ -9,10 +9,16 @@ namespace device {
 
 struct PackedSparseGridSpec {
     PackedSparseGridSpec(SparseGridSpec& spec)
-        : density_data(spec.density_data.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
-          sh_data(spec.sh_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>()),
-          links(spec.links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>()),
+        :
+          density_data(spec.density_data.data_ptr<float>()),
+          sh_data(spec.sh_data.data_ptr<float>()),
+          links(spec.links.data_ptr<int32_t>()),
+          size{(int)spec.links.size(0),
+               (int)spec.links.size(1),
+               (int)spec.links.size(2)},
+          stride_x{(int)spec.links.stride(0)},
           basis_dim(spec.basis_dim),
+          sh_data_dim((int)spec.sh_data.size(1)),
           _offset{spec._offset.data_ptr<float>()[0],
                   spec._offset.data_ptr<float>()[1],
                   spec._offset.data_ptr<float>()[2]},
@@ -21,10 +27,13 @@ struct PackedSparseGridSpec {
                    spec._scaling.data_ptr<float>()[2]} {
     }
 
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> density_data;
-    torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> sh_data;
-    torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links;
-    int basis_dim;
+    float* __restrict__ density_data;
+    float* __restrict__ sh_data;
+    const int32_t* __restrict__ links;
+
+    int size[3], stride_x;
+
+    int basis_dim, sh_data_dim;
     const float _offset[3];
     const float _scaling[3];
 };
@@ -66,6 +75,9 @@ struct SingleRaySpec {
     float origin[3];
     float dir[3];
     float tmin, tmax, world_step;
+
+    float pos[3];
+    int32_t l[3];
 };
 
 }  // namespace device

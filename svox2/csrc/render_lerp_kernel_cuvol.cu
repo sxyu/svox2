@@ -18,94 +18,69 @@ typedef cub::WarpReduce<float> WarpReducef;
 
 namespace device {
 
-template<class data_index_t>
+template<class data_type_t, class voxel_index_t>
 __device__ __inline__ float trilerp_cuvol_one(
-        torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
-        torch::GenericPackedTensorAccessor<float, 2, torch::RestrictPtrTraits, data_index_t> data,
-        const int32_t* __restrict__ l,
+        const int32_t* __restrict__ links,
+        const data_type_t* __restrict__ data,
+        int offx, int offy, size_t stride,
+        const voxel_index_t* __restrict__ l,
         const float* __restrict__ pos,
         const int idx) {
-    const float val000 = (links[l[0]][l[1]][l[2]] >= 0 ?
-                          data[links[l[0]][l[1]][l[2]]][idx] : 0.f),
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
 
-               val001 = (links[l[0]][l[1]][l[2] + 1] >= 0 ?
-                          data[links[l[0]][l[1]][l[2] + 1]][idx] : 0.f),
-
-               val010 = (links[l[0]][l[1] + 1][l[2]] >= 0 ?
-                          data[links[l[0]][l[1] + 1][l[2]]][idx] : 0.f),
-
-               val011 = (links[l[0]][l[1] + 1][l[2] + 1] >= 0 ?
-                          data[links[l[0]][l[1] + 1][l[2] + 1]][idx] : 0.f),
-
-               val100 = (links[l[0] + 1][l[1]][l[2]] >= 0 ?
-                          data[links[l[0] + 1][l[1]][l[2]]][idx] : 0.f),
-
-               val101 = (links[l[0] + 1][l[1]][l[2] + 1] >= 0 ?
-                          data[links[l[0] + 1][l[1]][l[2] + 1]][idx] : 0.f),
-
-               val110 = (links[l[0] + 1][l[1] + 1][l[2]] >= 0 ?
-                          data[links[l[0] + 1][l[1] + 1][l[2]]][idx] : 0.f),
-
-               val111 = (links[l[0] + 1][l[1] + 1][l[2] + 1] >= 0 ?
-                          data[links[l[0] + 1][l[1] + 1][l[2] + 1]][idx] : 0.f);
-    const float ix0y0 = lerp(val000, val001, pos[2]);
-    const float ix0y1 = lerp(val010, val011, pos[2]);
-    const float ix1y0 = lerp(val100, val101, pos[2]);
-    const float ix1y1 = lerp(val110, val111, pos[2]);
+#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u] * stride + idx] : 0.f)
+    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);
+    const float ix0y1 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), pos[2]);
     const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+    const float ix1y0 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), pos[2]);
+    const float ix1y1 = lerp(MAYBE_READ_LINK(offy + offx),
+                             MAYBE_READ_LINK(offy + offx + 1), pos[2]);
     const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
     return lerp(ix0, ix1, pos[0]);
+#undef MAYBE_READ_LINK
 }
 
+template<class data_type_t, class voxel_index_t>
 __device__ __inline__ void trilerp_backward_cuvol_one(
-        torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
-        float* __restrict__ grad_data,
-        const int32_t* __restrict__ l,
+        const int32_t* __restrict__ links,
+        data_type_t* __restrict__ grad_data,
+        int offx, int offy, size_t stride,
+        const voxel_index_t* __restrict__ l,
         const float* __restrict__ pos,
         float grad_out,
-        const int64_t stride,
         const int idx) {
     const float ay = 1.f - pos[1], az = 1.f - pos[2];
     float xo = (1.0f - pos[0]) * grad_out;
-    if (links[l[0]][l[1]][l[2]] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0]][l[1]][l[2]] + idx, ay * az * xo);
-    }
-    if (links[l[0]][l[1]][l[2] + 1] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0]][l[1]][l[2] + 1] + idx, ay * pos[2] * xo);
-    }
-    if (links[l[0]][l[1] + 1][l[2]] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0]][l[1] + 1][l[2]] + idx, pos[1] * az * xo);
-    }
-    if (links[l[0]][l[1] + 1][l[2] + 1] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0]][l[1] + 1][l[2] + 1] + idx, pos[1] * pos[2] * xo);
-    }
+
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+
+#define MAYBE_ADD_LINK(u, val) if (link_ptr[u] >= 0) { \
+              atomicAdd(&grad_data[link_ptr[u] * stride + idx], val); \
+        }
+    MAYBE_ADD_LINK(0, ay * az * xo);
+    MAYBE_ADD_LINK(1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK(offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK(offy + 1, pos[1] * pos[2] * xo);
 
     xo = pos[0] * grad_out;
-    if (links[l[0] + 1][l[1]][l[2]] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0] + 1][l[1]][l[2]] + idx, ay * az * xo);
-    }
-    if (links[l[0] + 1][l[1]][l[2] + 1] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0] + 1][l[1]][l[2] + 1] + idx, ay * pos[2] * xo);
-    }
-    if (links[l[0] + 1][l[1] + 1][l[2]] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0] + 1][l[1] + 1][l[2]] + idx, pos[1] * az * xo);
-    }
-    if (links[l[0] + 1][l[1] + 1][l[2] + 1] >= 0) {
-        atomicAdd(grad_data + stride * links[l[0] + 1][l[1] + 1][l[2] + 1] + idx, pos[1] * pos[2] * xo);
-    }
+    MAYBE_ADD_LINK(offx + 0, ay * az * xo);
+    MAYBE_ADD_LINK(offx + 1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK(offx + offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK(offx + offy + 1, pos[1] * pos[2] * xo);
+#undef MAYBE_ADD_LINK
 }
 
 
 // * For ray rendering
 __device__ __inline__ void trace_ray_cuvol(
         const PackedSparseGridSpec& __restrict__ grid,
-        const SingleRaySpec& __restrict__ ray,
+        SingleRaySpec& __restrict__ ray,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
         float* __restrict__ sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
         float* __restrict__ out) {
-    if (lane_id >= grid.sh_data.size(1))
+    if (lane_id >= grid.sh_data_dim)
         return;
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
@@ -119,22 +94,30 @@ __device__ __inline__ void trace_ray_cuvol(
     float outv = 0.f;
 
     float light_intensity = 0.f;
-    float pos[3];
-    int32_t l[3];
     while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            pos[j] = ray.origin[j] + t * ray.dir[j];
-            pos[j] = min(max(pos[j], 0.f), grid.links.size(j) - 1.f);
-            l[j] = (int32_t) pos[j];
-            l[j] = min(l[j], (int32_t)grid.links.size(j) - 2);
-            pos[j] -= l[j];
+            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
+            ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
+            ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
 
-        const float sigma = trilerp_cuvol_one(grid.links, grid.density_data, l, pos, 0);
+        const float sigma = trilerp_cuvol_one(
+                grid.links, grid.density_data,
+                grid.stride_x,
+                grid.size[2],
+                1,
+                ray.l, ray.pos,
+                0);
         if (sigma > opt.sigma_thresh) {
-            float lane_color = trilerp_cuvol_one(grid.links,
-                            grid.sh_data, l, pos, lane_id);
+            float lane_color = trilerp_cuvol_one(
+                            grid.links,
+                            grid.sh_data,
+                            grid.stride_x,
+                            grid.size[2],
+                            grid.sh_data_dim,
+                            ray.l, ray.pos, lane_id);
             lane_color *= sphfunc_val[lane_colorgrp_id];
 
             const float pcnt = ray.world_step * sigma;
@@ -144,6 +127,9 @@ __device__ __inline__ void trace_ray_cuvol(
             float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            lane_color, lane_colorgrp_id == 0);
             outv += weight * _SIGMOID(lane_color_total);
+            if (_EXP(light_intensity) < opt.stop_thresh) {
+                break;
+            }
         }
         t += opt.step_size;
     }
@@ -157,7 +143,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         const PackedSparseGridSpec& __restrict__ grid,
         const float* __restrict__ grad_output,
         const float* __restrict__ color_cache,
-        const SingleRaySpec& __restrict__ ray,
+        SingleRaySpec& __restrict__ ray,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
         float* __restrict__ sphfunc_val,
@@ -165,7 +151,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         float* __restrict__ grad_density_data_out,
         float* __restrict__ grad_sh_data_out
         ) {
-    if (lane_id >= grid.sh_data.size(1))
+    if (lane_id >= grid.sh_data_dim)
         return;
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
@@ -173,30 +159,39 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     if (ray.tmin > ray.tmax) return;
     float t = ray.tmin;
 
-    float pos[3];
-    int32_t l[3];
     float gout = grad_output[lane_colorgrp];
 
-    float accum = color_cache[0] * grad_output[0] +
-                  color_cache[1] * grad_output[1] +
-                  color_cache[2] * grad_output[2];
+    float accum = fmaf(color_cache[0], grad_output[0],
+                      fmaf(color_cache[1], grad_output[1],
+                           color_cache[2] * grad_output[2]));
 
     float light_intensity = 0.f;
     // remat samples
     while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            pos[j] = ray.origin[j] + t * ray.dir[j];
-            pos[j] = min(max(pos[j], 0.f), grid.links.size(j) - 1.f);
-            l[j] = (int32_t) pos[j];
-            l[j] = min(l[j], grid.links.size(j) - 2);
-            pos[j] -= l[j];
+            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
+            ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
+            ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
 
-        const float sigma = trilerp_cuvol_one(grid.links, grid.density_data, l, pos, 0);
+        const float sigma = trilerp_cuvol_one(
+                grid.links,
+                grid.density_data,
+                grid.stride_x,
+                grid.size[2],
+                1,
+                ray.l, ray.pos,
+                0);
         if (sigma > opt.sigma_thresh) {
-            float lane_color = trilerp_cuvol_one(grid.links,
-                            grid.sh_data, l, pos, lane_id);
+            float lane_color = trilerp_cuvol_one(
+                            grid.links,
+                            grid.sh_data,
+                            grid.stride_x,
+                            grid.size[2],
+                            grid.sh_data_dim,
+                            ray.l, ray.pos, lane_id);
             lane_color *= sphfunc_val[lane_colorgrp_id];
 
             const float pcnt = ray.world_step * sigma;
@@ -236,11 +231,21 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             accum -= weight * total_color;
             float curr_grad_sigma = ray.world_step * (
                     total_color * _EXP(light_intensity) - accum);
-            trilerp_backward_cuvol_one(grid.links, grad_sh_data_out, l, pos,
-                    curr_grad_color, grid.sh_data.size(1), lane_id);
+            trilerp_backward_cuvol_one(grid.links, grad_sh_data_out,
+                    grid.stride_x,
+                    grid.size[2],
+                    grid.sh_data_dim,
+                    ray.l, ray.pos,
+                    curr_grad_color, lane_id);
             if (lane_id == 0) {
                 trilerp_backward_cuvol_one(grid.links, grad_density_data_out,
-                        l, pos, curr_grad_sigma, 1, 0);
+                        grid.stride_x,
+                        grid.size[2],
+                        1,
+                        ray.l, ray.pos, curr_grad_sigma, 0);
+            }
+            if (_EXP(light_intensity) < opt.stop_thresh) {
+                break;
             }
         }
         t += opt.step_size;
@@ -250,6 +255,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
 // BEGIN KERNELS
 
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, 2)
 __global__ void render_ray_kernel(
         PackedSparseGridSpec grid,
         PackedRaysSpec rays,
@@ -281,6 +287,7 @@ __global__ void render_ray_kernel(
         out[ray_id].data());
 }
 
+__launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, 2)
 __global__ void render_ray_backward_kernel(
     PackedSparseGridSpec grid,
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
@@ -319,6 +326,7 @@ __global__ void render_ray_backward_kernel(
         grad_sh_data_out);
 }
 
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, 2)
 __global__ void render_image_kernel(
         PackedSparseGridSpec grid,
         PackedCameraSpec cam,
@@ -351,6 +359,7 @@ __global__ void render_image_kernel(
         &out[iy][ix][0]);
 }
 
+__launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, 2)
 __global__ void render_image_backward_kernel(
         PackedSparseGridSpec grid,
         const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>

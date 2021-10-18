@@ -71,7 +71,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(py::init<>())
       .def_readwrite("background_brightness",
                      &RenderOptions::background_brightness)
-      .def_readwrite("step_epsilon", &RenderOptions::step_epsilon)
+      // .def_readwrite("step_epsilon", &RenderOptions::step_epsilon)
       .def_readwrite("step_size", &RenderOptions::step_size)
       .def_readwrite("sigma_thresh", &RenderOptions::sigma_thresh)
       .def_readwrite("stop_thresh", &RenderOptions::stop_thresh);

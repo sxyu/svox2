@@ -17,7 +17,6 @@ class RenderOptions:
     available:
     :param backend: str, one of lerp, cuvol, nn
     :param background_brightness: float
-    :param step_epsilon: float
     :param step_size: float, step size for backend lerp or cuvol only
                       (for estimating the integral; in nearest-neighbor case the integral is exactly computed)
     :param sigma_thresh: float
@@ -30,12 +29,6 @@ class RenderOptions:
                                       # lerp is coalesced lerp (fast for larger batch)
 
     background_brightness : float = 1.0   # [0, 1], the background color black-white
-
-    step_epsilon : float = 1e-3           # Epsilon added to voxel steps, in normalized voxels
-                                          #  (i.e. 1 = 1 voxel width, different from svox where 1 = grid width!)
-                                          #  (needed in current traversal method for safety,
-                                          #   set it to something like 1e-1 for fast rendering.
-                                          #   Probably do not set it below 1e-4, increase if getting stuck)
 
     step_size : float = 0.5               # Step size, in normalized voxels; only used if backend = lerp or cuvol
                                           #  (i.e. 1 = 1 voxel width, different from svox where 1 = grid width!)
@@ -53,7 +46,6 @@ class RenderOptions:
         """
         opt = _C.RenderOptions()
         opt.background_brightness = self.background_brightness
-        opt.step_epsilon = self.step_epsilon
         opt.step_size = self.step_size
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
