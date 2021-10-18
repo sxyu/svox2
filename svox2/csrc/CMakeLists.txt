@@ -42,6 +42,7 @@ endif (POLICY CMP0072)
 
 project( svox2 )
 
+set(CMAKE_CXX_STANDARD 14)
 enable_language(CUDA)
 message(STATUS "CUDA enabled")
 set( CMAKE_CUDA_STANDARD 14 )

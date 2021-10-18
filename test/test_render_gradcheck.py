@@ -2,7 +2,8 @@ import svox2
 import torch
 from util import Timing
 
-torch.random.manual_seed(0)
+#  torch.random.manual_seed(0)
+torch.random.manual_seed(1234)
 
 device = 'cuda:0'
 dtype = torch.float32
@@ -57,7 +58,7 @@ if ENABLE_TORCH_CHECK:
     print('err', torch.abs(samps - sampt).max())
     print('err_sh_grad\n', E.max())
     print(' mean\n', E.mean())
-    print('err_density_grad_c\n', Ed.max())
+    print('err_density_grad\n', Ed.max())
     print(' mean\n', Ed.mean())
     print()
     print('g_ours min/max\n', grid_sh_grad_s.min(), grid_sh_grad_s.max())

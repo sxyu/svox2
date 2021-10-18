@@ -15,7 +15,7 @@ g.sh_data.data.normal_()
 g.density_data.data[..., 0] = 1.5
 g.sh_data.data[..., 0] += 1.0
 
-N_RAYS = 1
+N_RAYS = 5000
 
 origins = torch.zeros(N_RAYS, 3, device=device) #torch.randn(N_RAYS, 3) * 0.01
 dirs = torch.randn(N_RAYS, 3, device=device)

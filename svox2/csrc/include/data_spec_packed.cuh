@@ -2,6 +2,10 @@
 #pragma once
 #include <torch/extension.h>
 #include "data_spec.hpp"
+#include "cuda_util.cuh"
+
+namespace {
+namespace device {
 
 struct PackedSparseGridSpec {
     PackedSparseGridSpec(SparseGridSpec& spec)
@@ -9,12 +13,12 @@ struct PackedSparseGridSpec {
           sh_data(spec.sh_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>()),
           links(spec.links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>()),
           basis_dim(spec.basis_dim),
-          _offset{spec._offset.data<float>()[0],
-                  spec._offset.data<float>()[1],
-                  spec._offset.data<float>()[2]},
-          _scaling{spec._scaling.data<float>()[0],
-                   spec._scaling.data<float>()[1],
-                   spec._scaling.data<float>()[2]} {
+          _offset{spec._offset.data_ptr<float>()[0],
+                  spec._offset.data_ptr<float>()[1],
+                  spec._offset.data_ptr<float>()[2]},
+          _scaling{spec._scaling.data_ptr<float>()[0],
+                   spec._scaling.data_ptr<float>()[1],
+                   spec._scaling.data_ptr<float>()[2]} {
     }
 
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> density_data;
@@ -50,17 +54,19 @@ struct SingleRaySpec {
     SingleRaySpec() = default;
     __device__ SingleRaySpec(const float* __restrict__ origin, const float* __restrict__ dir)
         : origin{origin[0], origin[1], origin[2]},
-          dir{dir[0], dir[1], dir[2]},
-          vdir(dir) {}
+          dir{dir[0], dir[1], dir[2]} {}
     __device__ void set(const float* __restrict__ origin, const float* __restrict__ dir) {
-        vdir = dir;
 #pragma unroll 3
         for (int i = 0; i < 3; ++i) {
             this->origin[i] = origin[i];
             this->dir[i] = dir[i];
         }
     }
+
     float origin[3];
     float dir[3];
-    const float* __restrict__ vdir;
+    float tmin, tmax, world_step;
 };
+
+}  // namespace device
+}  // namespace

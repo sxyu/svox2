@@ -4,6 +4,7 @@
 #include "cuda_util.cuh"
 #include "data_spec_packed.cuh"
 
+namespace {
 namespace device {
 
 __global__ void sample_grid_sh_kernel(
@@ -175,6 +176,7 @@ __global__ void sample_grid_density_backward_kernel(
     MAYBE_ADD_GRAD_LINK_PTR_D(offx + offy + 1, tmp * zb);
 }
 }  // namespace device
+}  // namespace
 
 
 std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch::Tensor points) {

@@ -49,15 +49,16 @@ __device__ __inline__ void calc_sh(
     const float xx = x * x, yy = y * y, zz = z * z;
     const float xy = x * y, yz = y * z, xz = x * z;
     switch (basis_dim) {
-        case 16:
-            out[9] = C3[0] * y * (3 * xx - yy);
-            out[10] = C3[1] * xy * z;
-            out[11] = C3[2] * y * (4 * zz - xx - yy);
-            out[12] = C3[3] * z * (2 * zz - 3 * xx - 3 * yy);
-            out[13] = C3[4] * x * (4 * zz - xx - yy);
-            out[14] = C3[5] * z * (xx - yy);
-            out[15] = C3[6] * x * (xx - 3 * yy);
-            [[fallthrough]];
+        // 16 not supported rn due to warp size
+        // case 16:
+        //     out[9] = C3[0] * y * (3 * xx - yy);
+        //     out[10] = C3[1] * xy * z;
+        //     out[11] = C3[2] * y * (4 * zz - xx - yy);
+        //     out[12] = C3[3] * z * (2 * zz - 3 * xx - 3 * yy);
+        //     out[13] = C3[4] * x * (4 * zz - xx - yy);
+        //     out[14] = C3[5] * z * (xx - yy);
+        //     out[15] = C3[6] * x * (xx - 3 * yy);
+        //     [[fallthrough]];
         case 9:
             out[4] = C2[0] * xy;
             out[5] = C2[1] * yz;
@@ -72,9 +73,23 @@ __device__ __inline__ void calc_sh(
     }
 }
 
-__host__ __device__ __inline__ static float _norm(
+enum SphFuncType {
+    SPHFUNC_TYPE_SH = 0,
+};
+
+__device__ __inline__ void calc_sphfunc(
+    const int sphfunc_type,  // Placeholder
+    const int basis_dim,
+    const float* __restrict__ dir,
+    float* __restrict__ out) {
+    // Placeholder
+    return calc_sh(basis_dim, dir, out);
+}
+
+__device__ __inline__ static float _norm(
                 float* dir) {
-    return sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    // return sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    return norm3df(dir[0], dir[1], dir[2]);
 }
 
 __device__ __inline__ float _intersect_aabb_unit(
@@ -119,6 +134,29 @@ __device__ __inline__ void cam2world_ray(
     dir[1] = cam.c2w[1][0] * x + cam.c2w[1][1] * y + cam.c2w[1][2] * z;
     dir[2] = cam.c2w[2][0] * x + cam.c2w[2][1] * y + cam.c2w[2][2] * z;
     origin[0] = cam.c2w[0][3]; origin[1] = cam.c2w[1][3]; origin[2] = cam.c2w[2][3];
+}
+
+__device__ __inline__ void ray_find_bounds(
+        SingleRaySpec& __restrict__ ray,
+        const PackedSparseGridSpec& __restrict__ grid,
+        const RenderOptions& __restrict__ opt) {
+    // Warning: modifies ray.origin
+    transform_coord(ray.origin, grid._scaling, grid._offset);
+    // Warning: modifies ray.dir
+    ray.world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
+
+    ray.tmin = 0.0f;
+    ray.tmax = 1e9f;
+#pragma unroll 3
+    for (int i = 0; i < 3; ++i) {
+        const float invdir = 1.0 / ray.dir[i];
+        const float t1 = (- ray.origin[i]) * invdir;
+        const float t2 = (grid.links.size(i) - 1.f  - ray.origin[i]) * invdir;
+        if (ray.dir[i] != 0.f) {
+            ray.tmin = max(ray.tmin, min(t1, t2));
+            ray.tmax = min(ray.tmax, max(t1, t2));
+        }
+    }
 }
 
 } // namespace device

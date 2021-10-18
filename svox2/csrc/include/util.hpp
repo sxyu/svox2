@@ -10,9 +10,13 @@
   CHECK_CPU(x);                                                                \
   CHECK_CONTIGUOUS(x)
 
-#if !defined(__CUDA_ARCH__)
+#if defined(__CUDACC__)
+#define _EXP(x) __expf(x)
+#define _SIGMOID(x) (1 / (1 + _EXP(-(x))))
+
+#else
+
 #define _EXP(x) expf(x)
 #define _SIGMOID(x) (1 / (1 + expf(-(x))))
-// CUDA version is in cuda_util.cuh
 #endif
 #define _SQR(x) ((x) * (x))

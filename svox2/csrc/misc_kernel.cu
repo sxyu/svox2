@@ -354,7 +354,7 @@ torch::Tensor tv(torch::Tensor links, torch::Tensor data,
             1.f / nl,
             Q,
             // Output
-            result.data<float>());
+            result.data_ptr<float>());
     CUDA_CHECK_ERRORS;
     return result;
 }
@@ -387,7 +387,7 @@ void tv_grad(torch::Tensor links, torch::Tensor data,
             scale / nl,
             Q,
             // Output
-            grad_data.data<float>());
+            grad_data.data_ptr<float>());
     CUDA_CHECK_ERRORS;
 }
 
@@ -419,7 +419,7 @@ void tv_aniso_grad(torch::Tensor links, torch::Tensor data,
             scale / nl,
             Q,
             // Output
-            grad_data.data<float>());
+            grad_data.data_ptr<float>());
     CUDA_CHECK_ERRORS;
 }
 
@@ -442,8 +442,8 @@ void grid_weight_render(
         data.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         cam,
         step_size,
-        offset.data<float>(),
-        scaling.data<float>(),
+        offset.data_ptr<float>(),
+        scaling.data_ptr<float>(),
         grid_weight_out.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 }
