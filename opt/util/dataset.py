@@ -23,11 +23,11 @@ class Dataset():
 
     def __init__(self, root, split,
                  device : Union[str, torch.device]='cpu',
-                 scene_scale : float = 1.0/1.5,
+                 scene_scale : float = 1.0,
                  factor : int = 1,
                  permutation : bool = True):
         assert path.isdir(root), f"'{root}' is not a directory"
-            
+
         self.device = device
         self.permutation = permutation
         all_c2w = []
@@ -36,9 +36,12 @@ class Dataset():
         split_name = split if split != 'test_train' else 'train'
         data_path = path.join(root, split_name)
         data_json = path.join(root, 'transforms_' + split_name + '.json')
+
         print('LOAD DATA', data_path)
+
         j = json.load(open(data_json, 'r'))
 
+        # OpenGL -> OpenCV
         cam_trans = torch.diag(torch.tensor([1, -1, -1, 1], dtype=torch.float32))
 
         for frame in tqdm(j['frames']):
@@ -46,20 +49,25 @@ class Dataset():
             c2w = torch.tensor(frame['transform_matrix'], dtype=torch.float32)
             c2w = c2w @ cam_trans  # To OpenCV
 
-            im_gt = imageio.imread(fpath).astype(np.float32) / 255.0
-            im_gt = im_gt[..., :3] * im_gt[..., 3:] + (1.0 - im_gt[..., 3:])
+            im_gt = imageio.imread(fpath)
             all_c2w.append(c2w)
             all_gt.append(torch.from_numpy(im_gt))
         self.focal_full = float(0.5 * all_gt[0].shape[1] / np.tan(0.5 * j['camera_angle_x']))
         self.c2w = torch.stack(all_c2w)
         self.c2w[:, :3, 3] *= scene_scale
-        self.gt = torch.stack(all_gt)
+
+        self.gt = torch.stack(all_gt).float() / 255.0
+        if self.gt.size(-1) == 4:
+            # Apply alpha channel
+            self.gt = self.gt[..., :3] * self.gt[..., 3:] + (1.0 - self.gt[..., 3:])
+
         self.n_images, self.h_full, self.w_full, _ = self.gt.shape
         self.split = split
         self.scene_scale = scene_scale
         if self.split == 'train':
             self.gen_rays(factor=factor)
         else:
+            # Rays are not needed for testing
             self.h, self.w, self.focal = self.h_full, self.w_full, self.focal_full
 
     def gen_rays(self, factor=1):
@@ -107,10 +115,8 @@ class Dataset():
             n_rays = self.rays.origins.size(0)
             if self.permutation:
                 print(" Shuffling rays")
-                perm = torch.randperm(n_rays)
+                perm = torch.randperm(n_rays, device=self.device)
             else:
                 print(" Randomizing rays")
-                perm = torch.randint(0, n_rays, (n_rays,))
-            self.rays = Rays(origins = self.rays_init.origins[perm].to(device=self.device),
-                    dirs = self.rays_init.dirs[perm].to(device=self.device),
-                    gt = self.rays_init.gt[perm].to(device=self.device))
+                perm = torch.randint(0, n_rays, (n_rays,), device=self.device)
+            self.rays = self.rays_init.to(device=self.device)[perm]

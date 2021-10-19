@@ -39,9 +39,8 @@ group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
 group.add_argument('--scene_scale', type=float, default=
-                           #  1/1.4, # ship
-                           #  1/1.3, # generic
-                           5/6, # lego, drums
+                           5/6,
+                           #  2/3,
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
 
 group = parser.add_argument_group("optimization")
@@ -49,26 +48,36 @@ group.add_argument('--batch_size', type=int, default=5000, help='batch size')
 
 
 # TODO: make the lr higher near the end
+group.add_argument('--use_rms_sigma', action='store_true', default=True, help="Use rmsprop on density")
 group.add_argument('--lr_sigma', type=float, default=1e1,#5e1,
                                             #5e1,#2e0,#1e8
-        help='SGD lr for sigma')
+        help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-1)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sigma_delay_steps', type=int, default=20000)
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
-
-group.add_argument('--lr_sh', type=float, default=1e-1, help='SGD lr for SH')
-group.add_argument('--lr_sh_final', type=float, default=5e-1)
+group.add_argument('--use_rms_sh', action='store_true', default=True, help="Use rmsprop on SH")
+group.add_argument('--lr_sh', type=float, default=#2e6,
+                    1e-1,
+                   help='SGD/rmsprop lr for SH')
+group.add_argument('--lr_sh_final', type=float,
+                      default=#2e6
+                      1e-3
+                    )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sh_delay_steps', type=int, default=20000)
+group.add_argument('--lr_sh_delay_steps', type=int, default=0)#20000)  # 0=disable
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
-#  group.add_argument('--lr_sh_upscale_factor', type=float, default=2)
+group.add_argument('--lr_sh_upscale_factor', type=float, default=2)
 
 group.add_argument('--n_epochs', type=int, default=55)
 group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--upsamp_every', type=int, default=4,
-                    help='upsample the grid every')
+                    help='upsample the grid every x epochs')
+group.add_argument('--save_every', type=int, default=0,
+                   help='save every x epochs')
+group.add_argument('--eval_every', type=int, default=1,
+                   help='evaluate every x epochs')
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
@@ -96,11 +105,9 @@ group.add_argument('--norand', action='store_true', default=True,
 
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not eval or save until the end)')
-group.add_argument('--no_save', action='store_true', default=False,
-                   help='do not save at all')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-3)
+group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
@@ -195,7 +202,7 @@ for epoch_id in range(args.n_epochs):
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    if epoch_id % factor == 0 and not args.tune_mode and not args.no_save:
+    if epoch_id % max(factor, args.eval_every) == 0:
         eval_step()
         gc.collect()
 
@@ -241,18 +248,25 @@ for epoch_id in range(args.n_epochs):
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
 
+                if args.weight_decay_sh < 1.0:
+                    grid.sh_data.data *= args.weight_decay_sigma
+                if args.weight_decay_sigma < 1.0:
+                    grid.density_data.data *= args.weight_decay_sh
+
             # Apply TV
             if args.lambda_tv > 0.0:
                 grid.inplace_tv_grad(grid.density_data.grad,
                         scaling=args.lambda_tv)
 
             # Manual SGD step
-            grid.rmsprop_density_step(args.rms_beta, lr_sigma)
-            grid.rmsprop_sh_step(args.rms_beta, lr_sh)
-            if args.weight_decay_sh < 1.0:
-                grid.density_data.data *= args.weight_decay_sh
-            if args.weight_decay_sigma < 1.0:
-                grid.sh_data.data[..., :1] *= args.weight_decay_sigma
+            if args.use_rms_sigma:
+                grid.rmsprop_density_step(args.rms_beta, lr_sigma)
+            else:
+                grid.sgd_density_step(lr_sigma)
+            if args.use_rms_sh:
+                grid.rmsprop_sh_step(args.rms_beta, lr_sh)
+            else:
+                grid.sgd_sh_step(lr_sh)
 
 
     train_step()
@@ -261,7 +275,7 @@ for epoch_id in range(args.n_epochs):
 
     #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
     # Overwrite prev checkpoints since they are very huge
-    if epoch_id % factor == 0 and not args.tune_mode:
+    if args.save_every > 0 and (epoch_id + 1) % max(factor, args.save_every) == 0 and not args.tune_mode:
         print('Saving', ckpt_path)
         grid.save(ckpt_path)
 
@@ -277,12 +291,12 @@ for epoch_id in range(args.n_epochs):
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=1, #use_sparsify,
                     cameras=resample_cameras)
-            #  if non_final:
+            if non_final:
                 #  if reso <= args.ref_reso:
                 #  lr_sigma_factor *= 8
                 #  else:
                 #  lr_sigma_factor *= 4
-                #  lr_sh_factor *= args.lr_sh_upscale_factor
+                lr_sh_factor *= args.lr_sh_upscale_factor
             print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
         if factor > 1 and reso < args.final_reso:
@@ -297,5 +311,5 @@ for epoch_id in range(args.n_epochs):
     if epoch_id == args.n_epochs - 1:
         print('Final eval and save')
         eval_step()
-        if not args.no_save:
+        if not args.tune_mode:
             grid.save(ckpt_path)

@@ -963,13 +963,10 @@ class SparseGrid(nn.Module):
         if self.density_rms is None or self.density_rms.shape != self.density_data.shape:
             del self.density_rms
             self.density_rms = torch.zeros_like(self.density_data.data)
-        indexer = self.sparse_grad_indexer
-        if indexer is None:
-            indexer = torch.empty((), device=self.density_data.device)
         _C.rmsprop_step(self.density_data.data,
                         self.density_rms,
                         self.density_data.grad,
-                        indexer,
+                        self._get_sparse_grad_indexer(),
                         beta,
                         lr,
                         epsilon)
@@ -985,16 +982,41 @@ class SparseGrid(nn.Module):
         if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
             del self.sh_rms
             self.sh_rms = torch.zeros_like(self.sh_data.data)
-        indexer = self.sparse_grad_indexer
-        if indexer is None:
-            indexer = torch.empty((), device=self.sh_data.device)
         _C.rmsprop_step(self.sh_data.data,
                         self.sh_rms,
                         self.sh_data.grad,
-                        indexer,
+                        self._get_sparse_grad_indexer(),
                         beta,
                         lr,
                         epsilon)
+
+
+    def sgd_density_step(self, lr: float):
+        """
+        Execute SGD step on density and zero the gradient
+        """
+        assert _C is not None and self.sh_data.is_cuda, \
+                "CUDA extension is currently required for sgd_step"
+        _C.sgd_step(self.density_data.data,
+                self.density_data.grad,
+                self._get_sparse_grad_indexer(),
+                lr)
+
+
+    def sgd_sh_step(self, lr: float):
+        """
+        Execute SGD step on SH and zero the gradient
+        """
+        assert _C is not None and self.sh_data.is_cuda, \
+                "CUDA extension is currently required for rmsprop_step"
+
+        if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
+            del self.sh_rms
+            self.sh_rms = torch.zeros_like(self.sh_data.data)
+        _C.sgd_step(self.sh_data.data,
+                self.sh_data.grad,
+                self._get_sparse_grad_indexer(),
+                lr)
 
 
     def __repr__(self):
@@ -1042,3 +1064,9 @@ class SparseGrid(nn.Module):
                         param.grad = torch.zeros_like(param.data)
             ret.append(param.grad)
         return ret
+
+    def _get_sparse_grad_indexer(self):
+        indexer = self.sparse_grad_indexer
+        if indexer is None:
+            indexer = torch.empty((), device=self.density_data.device)
+        return indexer
