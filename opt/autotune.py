@@ -43,9 +43,13 @@ def run_exp(env, train_dir, data_dir, flags):
     test_stats = [eval(x.split('eval stats:')[-1].strip())
                   for x in opt_ret.split('\n') if
                   x.startswith('eval stats: ')]
-    test_psnrs = [stats['psnr'] for stats in test_stats if 'psnr' in stats.keys()]
-    print('final psnrs', test_psnrs[-5:])
-    final_test_psnr = test_psnrs[-1]
+    if len(test_stats) == 0:
+        print('note: invalid config or crash')
+        final_test_psnr = 0.0
+    else:
+        test_psnrs = [stats['psnr'] for stats in test_stats if 'psnr' in stats.keys()]
+        print('final psnrs', test_psnrs[-5:])
+        final_test_psnr = test_psnrs[-1]
     with open(psnr_file_path, 'w') as f:
         f.write(str(final_test_psnr))
 
@@ -77,7 +81,7 @@ def randloglin(start, stop, num):
     return np.exp(lst).tolist()
 # End variable value list generation helpers
 
-def create_prodvars(variables):
+def create_prodvars(variables, noise_stds={}):
     """
     Create a dict for each setting of variable values
     (product across lists)
@@ -93,9 +97,12 @@ def create_prodvars(variables):
 
     variables = {varname:auto_list(variables[varname]) for varname in variables}
     print('variables (prod)', variables)
-    variables = [[(varname, val) for val in variables[varname]] for varname in variables]
-    prodvars = itertools.product(*variables)
-    prodvars = [{varname:val for varname, val in sample} for sample in prodvars]
+    varnames = list(variables.keys())
+    noise_stds = np.array([noise_stds.get(varname, 0.0) for varname in varnames])
+    variables = [[(i, val) for val in variables[varname]] for i, varname in enumerate(varnames)]
+    prodvars = list(itertools.product(*variables))
+    noise_vals = np.random.randn(len(prodvars), len(varnames)) * noise_stds
+    prodvars = [{varnames[i]:((val + n) if n != 0.0 else val) for (i, val), n in zip(sample, noise_vals_samp)} for sample, noise_vals_samp in zip(prodvars, noise_vals)]
     return prodvars
 
 
@@ -125,9 +132,10 @@ if __name__ == '__main__':
     print('Leaderboard path:', leaderboard_path)
 
     variables : Dict = tasks_file.get('variables', {})
+    noises : Dict = tasks_file.get('noises', {})
     assert isinstance(variables, dict), 'var must be dict'
 
-    prodvars : List[Dict] = create_prodvars(variables)
+    prodvars : List[Dict] = create_prodvars(variables, noises)
     del variables
 
     for task_templ in all_tasks_templ:

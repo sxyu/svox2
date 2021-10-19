@@ -59,11 +59,11 @@ group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--use_rms_sh', action='store_true', default=True, help="Use rmsprop on SH")
 group.add_argument('--lr_sh', type=float, default=#2e6,
-                    1e-1,
+                    5e-2,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=#2e6
-                      1e-3
+                      3e-4
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0)#20000)  # 0=disable
@@ -100,11 +100,11 @@ group.add_argument('--prox_l1_alpha', type=float, default=0.0,
                    help='proximal L1 per epoch; amount to subtract from sigma')
 group.add_argument('--prox_l0', action='store_true', default=False,
                    help='proximal L0 i.e., keep resampling after each epoch')
-group.add_argument('--norand', action='store_true', default=True,
-                   help='disable random')
+#  group.add_argument('--norand', action='store_true', default=True,
+#                     help='disable random')
 
 group.add_argument('--tune_mode', action='store_true', default=False,
-                   help='hypertuning mode (do not eval or save until the end)')
+                   help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
 group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
@@ -157,6 +157,8 @@ resample_cameras = [
     ] if args.use_weight_thresh else None
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
+assert args.lr_sigma_final <= args.lr_sigma
+assert args.lr_sh_final <= args.lr_sh
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,

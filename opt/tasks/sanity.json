@@ -1,0 +1,18 @@
+{
+    "data_root": "/home/sxyu/data/nerf_synthetic/lego",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_tune/fast_256_sweepup_and_lrcdec_10epoch",
+    "variables": {
+        "lr_sh_final": "loglin(1e-5, 5e-2, 10)",
+        "upsamp_every": [3, 4, 6]
+    },
+    "tasks": [{
+        "train_dir": "up{upsamp_every}_lrc5e-2-d{lr_sh_final:01.7f}",
+        "flags": [
+            "--n_epochs", "10",
+            "--init_reso", "256",
+            "--final_reso", "256",
+            "--upsamp_every", "{upsamp_every}",
+            "--lr_sh_final", "{lr_sh_final}"
+        ]
+    }]
+}

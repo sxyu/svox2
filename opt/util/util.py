@@ -11,14 +11,16 @@ class Rays:
     gt: torch.Tensor
 
     def to(self, *args, **kwargs):
-        self.origins = self.origins.to(*args, **kwargs)
-        self.dirs = self.dirs.to(*args, **kwargs)
-        self.gt = self.gt.to(*args, **kwargs)
+        origins = self.origins.to(*args, **kwargs)
+        dirs = self.dirs.to(*args, **kwargs)
+        gt = self.gt.to(*args, **kwargs)
+        return Rays(origins, dirs, gt)
 
     def __getitem__(self, key):
-        self.origins = self.origins[key]
-        self.dirs = self.dirs[key]
-        self.gt = self.gt[key]
+        origins = self.origins[key]
+        dirs = self.dirs[key]
+        gt = self.gt[key]
+        return Rays(origins, dirs, gt)
 
 class Timing:
     """
