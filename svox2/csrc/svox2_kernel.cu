@@ -213,16 +213,20 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch
     return std::tuple<torch::Tensor, torch::Tensor>{result_density, result_sh};
 }
 
-std::tuple<torch::Tensor, torch::Tensor> sample_grid_backward(
+void sample_grid_backward(
         SparseGridSpec& grid,
         torch::Tensor points,
         torch::Tensor grad_out_density,
-        torch::Tensor grad_out_sh) {
+        torch::Tensor grad_out_sh,
+        torch::Tensor grad_density_out,
+        torch::Tensor grad_sh_out) {
     DEVICE_GUARD(points);
     grid.check();
     CHECK_INPUT(points);
     CHECK_INPUT(grad_out_density);
     CHECK_INPUT(grad_out_sh);
+    CHECK_INPUT(grad_density_out);
+    CHECK_INPUT(grad_sh_out);
     TORCH_CHECK(points.ndimension() == 2);
     TORCH_CHECK(grad_out_density.ndimension() == 2);
     TORCH_CHECK(grad_out_sh.ndimension() == 2);
@@ -231,15 +235,6 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid_backward(
     const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
     const int blocks_density = CUDA_N_BLOCKS_NEEDED(points.size(0), cuda_n_threads);
-
-    torch::Tensor grad_sh_data = torch::zeros({grid.sh_data.requires_grad() ?
-                                             grid.sh_data.size(0) : 0,
-                                             grid.sh_data.size(1)},
-                                             points.options());
-    torch::Tensor grad_density_data = torch::zeros({grid.density_data.requires_grad() ?
-                                             grid.density_data.size(0) : 0,
-                                             grid.density_data.size(1)},
-                                             points.options());
 
     cudaStream_t stream_1, stream_2;
     cudaStreamCreate(&stream_1);
@@ -250,18 +245,17 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid_backward(
             points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             grad_out_density.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             // Output
-            grad_density_data.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+            grad_density_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
 
     device::sample_grid_sh_backward_kernel<<<blocks, cuda_n_threads, 0, stream_2>>>(
             grid,
             points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             grad_out_sh.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             // Output
-            grad_sh_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+            grad_sh_out.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
 
     cudaStreamSynchronize(stream_1);
     cudaStreamSynchronize(stream_2);
 
     CUDA_CHECK_ERRORS;
-    return std::tuple<torch::Tensor, torch::Tensor>{grad_density_data, grad_sh_data};
 }

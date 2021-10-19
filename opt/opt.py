@@ -100,8 +100,7 @@ group.add_argument('--no_save', action='store_true', default=False,
                    help='do not save at all')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=0.0)#,1e-5)
-group.add_argument('--aniso_tv', action='store_true', default=False)
+group.add_argument('--lambda_tv', type=float, default=1e-3)
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
@@ -132,8 +131,8 @@ grid = svox2.SparseGrid(reso=reso,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
                         device=device)
-grid.data.data[..., 1:] = args.init_rgb
-grid.data.data[..., :1] = args.init_sigma
+grid.sh_data.data[:] = args.init_rgb
+grid.density_data.data[:] = args.init_sigma
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
@@ -150,8 +149,6 @@ resample_cameras = [
                      dset.w, dset.h) for c2w in dset.c2w
     ] if args.use_weight_thresh else None
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
-
-rms : torch.Tensor = torch.zeros_like(grid.data)
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
@@ -203,7 +200,6 @@ for epoch_id in range(args.n_epochs):
         gc.collect()
 
     def train_step():
-        global rms
         print('Train step')
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
@@ -220,7 +216,7 @@ for epoch_id in range(args.n_epochs):
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
-            rgb_pred = grid.volume_render(rays, use_kernel=True, randomize=not args.norand)
+            rgb_pred = grid.volume_render_fused(rays, rgb_gt)
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
@@ -245,35 +241,18 @@ for epoch_id in range(args.n_epochs):
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
 
-            # Backprop
-            mse.backward()
-
             # Apply TV
             if args.lambda_tv > 0.0:
-                grid.inplace_tv_grad(grid.data.grad,
-                        scaling=args.lambda_tv,
-                        anisotropic=args.aniso_tv)
+                grid.inplace_tv_grad(grid.density_data.grad,
+                        scaling=args.lambda_tv)
 
             # Manual SGD step
-            tmp = grid.data.grad.clone()
-            tmp.square_()
-            tmp *= (1.0 - args.rms_beta)
-            rms[tmp != 0.0] *= args.rms_beta
-            rms += tmp
-            del tmp
-
-            grid.data.grad[..., 1:] *= lr_sh
-            grid.data.grad[..., :1] *= lr_sigma
-            grid.data.grad /= (torch.sqrt(rms) + 1e-8)
-            grid.data.data -= grid.data.grad
-
+            grid.rmsprop_density_step(args.rms_beta, lr_sigma)
+            grid.rmsprop_sh_step(args.rms_beta, lr_sh)
             if args.weight_decay_sh < 1.0:
-                grid.data.data[..., 1:] *= args.weight_decay_sh
-
+                grid.density_data.data *= args.weight_decay_sh
             if args.weight_decay_sigma < 1.0:
-                grid.data.data[..., :1] *= args.weight_decay_sigma
-
-            del grid.data.grad  # Save memory
+                grid.sh_data.data[..., :1] *= args.weight_decay_sigma
 
 
     train_step()
@@ -298,8 +277,6 @@ for epoch_id in range(args.n_epochs):
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=1, #use_sparsify,
                     cameras=resample_cameras)
-            del rms
-            rms : torch.Tensor = torch.zeros_like(grid.data[..., :1])
             #  if non_final:
                 #  if reso <= args.ref_reso:
                 #  lr_sigma_factor *= 8
@@ -315,7 +292,7 @@ for epoch_id in range(args.n_epochs):
 
     if args.prox_l1_alpha > 0.0:
         print('ProxL1: sigma -=', args.prox_l1_alpha)
-        grid.data.data[..., :1] -= args.prox_l1_alpha
+        grid.density_data.data -= args.prox_l1_alpha
 
     if epoch_id == args.n_epochs - 1:
         print('Final eval and save')

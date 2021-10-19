@@ -5,16 +5,34 @@
 #include "data_spec_packed.cuh"
 #include "render_util.cuh"
 
+#include <iostream>
 #include <cstdint>
 #include <tuple>
 
 namespace {
 const int WARP_SIZE = 32;
-const int TRACE_RAY_CUDA_THREADS = 768;
+
+const int TRACE_RAY_CUDA_THREADS = 256;
 const int TRACE_RAY_CUDA_RAYS_PER_BLOCK = TRACE_RAY_CUDA_THREADS / WARP_SIZE;
-const int TRACE_RAY_BKWD_CUDA_THREADS = 768;
+
+const int TRACE_RAY_BKWD_CUDA_THREADS = 256;
 const int TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK = TRACE_RAY_BKWD_CUDA_THREADS / WARP_SIZE;
+
+const int TRACE_RAY_FUSED_CUDA_THREADS = 256;
+const int TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK = TRACE_RAY_FUSED_CUDA_THREADS / WARP_SIZE;
+
+const int MIN_BLOCKS_PER_SM = 4;
 typedef cub::WarpReduce<float> WarpReducef;
+
+torch::Tensor init_mask(torch::Tensor ref_data) {
+    auto mask_options =
+        torch::TensorOptions()
+            .dtype(at::ScalarType::Bool)
+            .layout(torch::kStrided)
+            .device(ref_data.device())
+            .requires_grad(false);
+    return torch::zeros({ref_data.size(0)}, mask_options);
+}
 
 namespace device {
 
@@ -68,6 +86,37 @@ __device__ __inline__ void trilerp_backward_cuvol_one(
     MAYBE_ADD_LINK(offx + offy, pos[1] * az * xo);
     MAYBE_ADD_LINK(offx + offy + 1, pos[1] * pos[2] * xo);
 #undef MAYBE_ADD_LINK
+}
+
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ void trilerp_backward_cuvol_one_density(
+        const int32_t* __restrict__ links,
+        data_type_t* __restrict__ grad_data_out,
+        bool* __restrict__ mask_out,
+        int offx, int offy,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        float grad_out) {
+    const float ay = 1.f - pos[1], az = 1.f - pos[2];
+    float xo = (1.0f - pos[0]) * grad_out;
+
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+
+#define MAYBE_ADD_LINK_DEN(u, val) if (link_ptr[u] >= 0) { \
+              atomicAdd(&grad_data_out[link_ptr[u]], val); \
+              mask_out[link_ptr[u]] = true; \
+        }
+    MAYBE_ADD_LINK_DEN(0, ay * az * xo);
+    MAYBE_ADD_LINK_DEN(1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK_DEN(offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK_DEN(offy + 1, pos[1] * pos[2] * xo);
+
+    xo = pos[0] * grad_out;
+    MAYBE_ADD_LINK_DEN(offx + 0, ay * az * xo);
+    MAYBE_ADD_LINK_DEN(offx + 1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK_DEN(offx + offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK_DEN(offx + offy + 1, pos[1] * pos[2] * xo);
+#undef MAYBE_ADD_LINK_DEN
 }
 
 
@@ -148,6 +197,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         uint32_t lane_id,
         float* __restrict__ sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
+        bool* __restrict__ mask_out,
         float* __restrict__ grad_density_data_out,
         float* __restrict__ grad_sh_data_out
         ) {
@@ -160,7 +210,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     if (ray.tmin > ray.tmax) return;
     float t = ray.tmin;
 
-    float gout = grad_output[lane_colorgrp];
+    const float gout = grad_output[lane_colorgrp];
 
     float accum = fmaf(color_cache[0], grad_output[0],
                       fmaf(color_cache[1], grad_output[1],
@@ -239,11 +289,13 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                     ray.l, ray.pos,
                     curr_grad_color, lane_id);
             if (lane_id == 0) {
-                trilerp_backward_cuvol_one(grid.links, grad_density_data_out,
+                trilerp_backward_cuvol_one_density(
+                        grid.links,
+                        grad_density_data_out,
+                        mask_out,
                         grid.stride_x,
                         grid.size[2],
-                        1,
-                        ray.l, ray.pos, curr_grad_sigma, 0);
+                        ray.l, ray.pos, curr_grad_sigma);
             }
             if (_EXP(light_intensity) < opt.stop_thresh) {
                 break;
@@ -256,7 +308,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
 // BEGIN KERNELS
 
-__launch_bounds__(TRACE_RAY_CUDA_THREADS, 2)
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_kernel(
         PackedSparseGridSpec grid,
         PackedRaysSpec rays,
@@ -288,7 +340,7 @@ __global__ void render_ray_kernel(
         out[ray_id].data());
 }
 
-__launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, 2)
+__launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_backward_kernel(
     PackedSparseGridSpec grid,
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
@@ -296,6 +348,7 @@ __global__ void render_ray_backward_kernel(
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> color_cache,
         PackedRaysSpec rays,
         RenderOptions opt,
+    bool* __restrict__ mask_out,
     float* __restrict__ grad_density_data_out,
     float* __restrict__ grad_sh_data_out
         ) {
@@ -323,11 +376,73 @@ __global__ void render_ray_backward_kernel(
         lane_id,
         sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
+        mask_out,
         grad_density_data_out,
         grad_sh_data_out);
 }
 
-__launch_bounds__(TRACE_RAY_CUDA_THREADS, 2)
+__launch_bounds__(TRACE_RAY_FUSED_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void render_ray_fused_kernel(
+        PackedSparseGridSpec grid,
+        PackedRaysSpec rays,
+        RenderOptions opt,
+        const float* __restrict__ rgb_gt,
+        bool* __restrict__ mask_out,
+        float* __restrict__ rgb_out,
+        float* __restrict__ grad_density_data_out,
+        float* __restrict__ grad_sh_data_out) {
+    CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
+    const int ray_id = tid >> 5;
+    const int ray_blk_id = threadIdx.x >> 5;
+    const int lane_id = threadIdx.x & 0x1F;
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
+    __shared__ float sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][9];
+    __shared__ float rgb_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
+    __shared__ float grad_out[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
+    __shared__ SingleRaySpec ray_spec[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK];
+    __shared__ typename WarpReducef::TempStorage temp_storage[2][
+        TRACE_RAY_CUDA_RAYS_PER_BLOCK];
+    ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
+            rays.dirs[ray_id].data());
+    calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
+                 ray_spec[ray_blk_id].dir, sphfunc_val[ray_blk_id]);
+    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+
+    trace_ray_cuvol(
+        grid,
+        ray_spec[ray_blk_id],
+        opt,
+        lane_id,
+        sphfunc_val[ray_blk_id],
+        temp_storage[0][ray_blk_id],
+        rgb_val[ray_blk_id]);
+
+#pragma unroll 3
+    for (int i = 0; i < 3; ++i) {
+        const float resid = rgb_val[ray_blk_id][i] - rgb_gt[ray_id * 3 + i];
+        grad_out[ray_blk_id][i] = 2.f * resid / (3 * int(rays.origins.size(0)));
+    }
+    trace_ray_cuvol_backward(
+        grid,
+        grad_out[ray_blk_id],
+        rgb_val[ray_blk_id],
+        ray_spec[ray_blk_id],
+        opt,
+        lane_id,
+        sphfunc_val[ray_blk_id],
+        temp_storage[1][ray_blk_id],
+        mask_out,
+        grad_density_data_out,
+        grad_sh_data_out);
+    if (lane_id < 3) {
+        rgb_out[ray_id * 3 + lane_id] = rgb_val[ray_blk_id][lane_id];
+    }
+}
+
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_image_kernel(
         PackedSparseGridSpec grid,
         PackedCameraSpec cam,
@@ -344,12 +459,10 @@ __global__ void render_image_kernel(
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_CUDA_RAYS_PER_BLOCK];
-    if (lane_id == 0) {
-        ray_spec[ray_blk_id].set(origin, dir);
-        calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
-                     dir, sphfunc_val[ray_blk_id]);
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
-    }
+    ray_spec[ray_blk_id].set(origin, dir);
+    calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
+                 dir, sphfunc_val[ray_blk_id]);
+    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     trace_ray_cuvol(
         grid,
         ray_spec[ray_blk_id],
@@ -360,7 +473,7 @@ __global__ void render_image_kernel(
         &out[iy][ix][0]);
 }
 
-__launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, 2)
+__launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_image_backward_kernel(
         PackedSparseGridSpec grid,
         const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
@@ -368,6 +481,7 @@ __global__ void render_image_backward_kernel(
         torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color_cache,
         PackedCameraSpec cam,
         RenderOptions opt,
+        bool* __restrict__ mask_out,
         float* __restrict__ grad_density_data_out,
         float* __restrict__ grad_sh_data_out) {
     CUDA_GET_THREAD_ID(tid, cam.width * cam.height * WARP_SIZE);
@@ -381,12 +495,10 @@ __global__ void render_image_backward_kernel(
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK];
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
-    if (lane_id == 0) {
-        ray_spec[ray_blk_id].set(origin, dir);
-        calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
-                     dir, sphfunc_val[ray_blk_id]);
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
-    }
+    ray_spec[ray_blk_id].set(origin, dir);
+    calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
+                 dir, sphfunc_val[ray_blk_id]);
+    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     trace_ray_cuvol_backward(
         grid,
         grad_output[iy][ix].data(),
@@ -396,6 +508,7 @@ __global__ void render_image_backward_kernel(
         lane_id,
         sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
+        mask_out,
         grad_density_data_out,
         grad_sh_data_out);
 }
@@ -421,23 +534,27 @@ torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOp
     return results;
 }
 
-std::tuple<torch::Tensor,torch::Tensor> volume_render_cuvol_backward(
+torch::Tensor volume_render_cuvol_backward(
         SparseGridSpec& grid,
         RaysSpec& rays,
         RenderOptions& opt,
         torch::Tensor grad_out,
-        torch::Tensor color_cache) {
+        torch::Tensor color_cache,
+        torch::Tensor grad_density_out,
+        torch::Tensor grad_sh_out) {
 
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     rays.check();
+    CHECK_INPUT(grad_density_out);
+    CHECK_INPUT(grad_sh_out);
     const auto Q = rays.origins.size(0);
 
     const int cuda_n_threads_render_backward = TRACE_RAY_BKWD_CUDA_THREADS;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads_render_backward);
 
-    torch::Tensor result_density = torch::zeros_like(grid.density_data);
-    torch::Tensor result_sh = torch::zeros_like(grid.sh_data);
+    torch::Tensor sparse_mask = init_mask(grid.density_data);
+
     device::render_ray_backward_kernel<<<blocks,
            cuda_n_threads_render_backward>>>(
             grid,
@@ -445,10 +562,50 @@ std::tuple<torch::Tensor,torch::Tensor> volume_render_cuvol_backward(
             color_cache.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             rays, opt,
             // Output
-            result_density.data_ptr<float>(),
-            result_sh.data_ptr<float>());
+            sparse_mask.data_ptr<bool>(),
+            grad_density_out.data_ptr<float>(),
+            grad_sh_out.data_ptr<float>());
+    
     CUDA_CHECK_ERRORS;
-    return std::tuple<torch::Tensor, torch::Tensor>{result_density, result_sh};
+    return sparse_mask;
+}
+
+torch::Tensor volume_render_cuvol_fused(
+        SparseGridSpec& grid,
+        RaysSpec& rays,
+        RenderOptions& opt,
+        torch::Tensor rgb_gt,
+        torch::Tensor rgb_out,
+        torch::Tensor grad_density_out,
+        torch::Tensor grad_sh_out) {
+
+    DEVICE_GUARD(grid.sh_data);
+    CHECK_INPUT(rgb_gt);
+    CHECK_INPUT(rgb_out);
+    CHECK_INPUT(grad_density_out);
+    CHECK_INPUT(grad_sh_out);
+    TORCH_CHECK(grad_density_out.size(0) == grid.density_data.size(0));
+    TORCH_CHECK(grad_sh_out.size(0) == grid.sh_data.size(0));
+    grid.check();
+    rays.check();
+    const auto Q = rays.origins.size(0);
+
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_FUSED_CUDA_THREADS);
+
+    torch::Tensor sparse_mask = init_mask(grid.density_data);
+
+    device::render_ray_fused_kernel<<<blocks, TRACE_RAY_FUSED_CUDA_THREADS>>>(
+            grid,
+            rays,
+            opt,
+            rgb_gt.data_ptr<float>(),
+            // Output
+            sparse_mask.data_ptr<bool>(),
+            rgb_out.data_ptr<float>(),
+            grad_density_out.data_ptr<float>(),
+            grad_sh_out.data_ptr<float>());
+    CUDA_CHECK_ERRORS;
+    return sparse_mask;
 }
 
 torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, RenderOptions& opt) {
@@ -470,20 +627,26 @@ torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, R
     return result;
 }
 
-std::tuple<torch::Tensor,torch::Tensor> volume_render_cuvol_image_backward(
+torch::Tensor volume_render_cuvol_image_backward(
         SparseGridSpec& grid,
         CameraSpec& cam,
         RenderOptions& opt,
         torch::Tensor grad_out,
-        torch::Tensor color_cache) {
+        torch::Tensor color_cache,
+        torch::Tensor grad_density_out,
+        torch::Tensor grad_sh_out) {
 
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     cam.check();
+    CHECK_INPUT(grad_density_out);
+    CHECK_INPUT(grad_sh_out);
     const size_t Q = size_t(cam.width) * cam.height;
 
     const int cuda_n_threads_render_backward = TRACE_RAY_BKWD_CUDA_THREADS;
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads_render_backward);
+
+    torch::Tensor sparse_mask = init_mask(grid.density_data);
 
     torch::Tensor result_density = torch::zeros_like(grid.density_data);
     torch::Tensor result_sh = torch::zeros_like(grid.sh_data);
@@ -495,8 +658,10 @@ std::tuple<torch::Tensor,torch::Tensor> volume_render_cuvol_image_backward(
             cam,
             opt,
             // Output
-            result_density.data_ptr<float>(),
-            result_sh.data_ptr<float>());
+            sparse_mask.data_ptr<bool>(),
+            grad_density_out.data_ptr<float>(),
+            grad_sh_out.data_ptr<float>());
+
     CUDA_CHECK_ERRORS;
-    return std::tuple<torch::Tensor, torch::Tensor>{result_density, result_sh};
+    return sparse_mask;
 }

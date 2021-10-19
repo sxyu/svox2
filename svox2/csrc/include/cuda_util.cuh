@@ -67,4 +67,9 @@ __device__ __inline__ void transform_coord(float* __restrict__ point,
 }
 
 // Subtract and fused multiply-add
-#define lerp(a, b, w) fmaf(w, b - a, a)
+// (1-w) a + w b
+template<class T>
+__device__ __inline__ T lerp(T a, T b, T w) {
+    return fmaf(w, b - a, a);
+}
+// #define lerp(a, b, w)

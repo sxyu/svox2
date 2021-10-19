@@ -114,10 +114,14 @@ class _SampleGridAutogradFunction(autograd.Function):
     @staticmethod
     def backward(ctx, grad_out_density, grad_out_sh):
         points, = ctx.saved_tensors
-        grad_density_grid, grad_sh_grid = _C.sample_grid_backward(
+        grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
+        grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        _C.sample_grid_backward(
             ctx.grid, points,
             grad_out_density.contiguous(),
-            grad_out_sh.contiguous()
+            grad_out_sh.contiguous(),
+            grad_density_grid,
+            grad_sh_grid,
         )
         if not ctx.needs_input_grad[0]:
             grad_density_grid = None
@@ -148,10 +152,15 @@ class _VolumeRenderFunction(autograd.Function):
     def backward(ctx, grad_out):
         color_cache, = ctx.saved_tensors
         cu_fn = _C.__dict__[f'volume_render_{ctx.backend}_backward']
-        grad_density_grid, grad_sh_grid = cu_fn(
+        grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
+        grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        # TODO save the sparse mask
+        sparse_mask = cu_fn(
             ctx.grid, ctx.rays, ctx.opt,
             grad_out.contiguous(),
             color_cache,
+            grad_density_grid,
+            grad_sh_grid,
         )
         ctx.grid = ctx.rays = ctx.opt = None
         if not ctx.needs_input_grad[0]:
@@ -183,10 +192,15 @@ class _VolumeRenderImageFunction(autograd.Function):
     def backward(ctx, grad_out):
         color_cache, = ctx.saved_tensors
         cu_fn = _C.__dict__[f'volume_render_{ctx.backend}_image_backward']
-        grad_density_grid, grad_sh_grid = cu_fn(
+        grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
+        grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        # TODO save the sparse mask
+        sparse_mask = cu_fn(
             ctx.grid, ctx.cam, ctx.opt,
             grad_out.contiguous(),
             color_cache,
+            grad_density_grid,
+            grad_sh_grid,
         )
         ctx.grid = ctx.cam = ctx.opt = None
         if not ctx.needs_input_grad[0]:
@@ -314,7 +328,9 @@ class SparseGrid(nn.Module):
         self.register_buffer("links", init_links.view(reso))
         self.links : torch.Tensor
         self.opt = RenderOptions()
-
+        self.sparse_grad_indexer : Optional[torch.Tensor] = None
+        self.density_rms : Optional[torch.Tensor] = None
+        self.sh_rms : Optional[torch.Tensor] = None
 
     @property
     def data_dim(self):
@@ -524,7 +540,8 @@ class SparseGrid(nn.Module):
 
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
-        :return: (N, 3) RGB
+        :param randomize: bool, whether to use randomness (now ignored)
+        :return: (N, 3), predicted RGB
         """
         assert self.opt.backend in ['cuvol']#, 'lerp', 'nn']
         if use_kernel and self.links.is_cuda and _C is not None:
@@ -539,6 +556,44 @@ class SparseGrid(nn.Module):
             warn("Using slow volume rendering, should only be used for debugging")
             return self._volume_render_gradcheck_lerp(rays)
 
+    def volume_render_fused(self,
+                            rays : Rays,
+                            rgb_gt : torch.Tensor,
+                            randomize : bool = False):
+        """
+        Standard volume rendering with fused MSE gradient generation,
+            given a ground truth color for each pixel.
+        Parameter gradients will be updated (no need for backward()).
+
+        See grid.opt.* (RenderOptions) for configs.
+        Requires CUDA. Always uses cuvol backend.
+
+        :param rays: Rays, (origins (N, 3), dirs (N, 3))
+        :param rgb_gt: (N, 3), GT pixel colors, each channel in [0, 1]
+        :param randomize: bool, whether to use randomness (now ignored)
+        :return: (N, 3), predicted RGB
+        """
+        assert _C is not None and self.sh_data.is_cuda, \
+                "CUDA extension is currently required for fused"
+        assert rays.is_cuda
+        grad_density, grad_sh = self._get_data_grads()
+        rgb_out = torch.zeros_like(rgb_gt)
+        self.sparse_grad_indexer : torch.Tensor = _C.volume_render_cuvol_fused(
+            self._to_cpp(),
+            rays._to_cpp(),
+            self.opt._to_cpp(),
+            rgb_gt,
+            rgb_out,
+            grad_density,
+            grad_sh,
+        )
+        if torch.count_nonzero(self.sparse_grad_indexer).item() < \
+                self.sparse_grad_indexer.size(0) // 4:
+            # Highly sparse (use index)
+            self.sparse_grad_indexer = torch.nonzero(self.sparse_grad_indexer.flatten(),
+                    as_tuple=False).flatten()
+        return rgb_out
+
     def volume_render_image(self, camera : Camera,
                             use_kernel : bool = True,
                             randomize : bool = False):
@@ -546,9 +601,10 @@ class SparseGrid(nn.Module):
         Standard volume rendering (entire image version).
         See grid.opt.* (RenderOptions) for configs.
 
-        :param camera: Camera, (origins (N, 3), dirs (N, 3))
+        :param camera: Camera
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
-        :return: (N, 3) RGB
+        :param randomize: bool, whether to use randomness (now ignored)
+        :return: (H, W, 3), predicted RGB image
         """
         assert self.opt.backend in ['cuvol']#, 'lerp', 'nn']
         if use_kernel and self.links.is_cuda and _C is not None:
@@ -631,6 +687,8 @@ class SparseGrid(nn.Module):
             all_sample_vals_mask.append(sample_vals_mask)
         del self.density_data
         del self.sh_data
+        self.density_rms = None
+        self.sh_rms = None
 
         sample_vals_mask = torch.cat(all_sample_vals_mask, dim=0)
         if use_weight_thresh:
@@ -708,6 +766,7 @@ class SparseGrid(nn.Module):
             new_data[..., remap] = old_data
         new_data = new_data.to(device=device)
         self.sh_data = nn.Parameter(new_data)
+        self.sh_rms = None
 
 
     def world2grid(self, points):
@@ -859,24 +918,23 @@ class SparseGrid(nn.Module):
         return _TotalVariationFunction.apply(self.sh_data, self.links, start_dim, end_dim)
 
     def inplace_tv_grad(self, grad : torch.Tensor,
-                        scaling : float = 1.0,
-                        anisotropic : bool = False):
+                        scaling : float = 1.0):
         """
         Add gradient of total variation for sigma as in Neural Volumes
         [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
         """
-        assert _C is not None and self.data.is_cuda and grad.is_cuda, \
+        assert _C is not None and self.density_data.is_cuda and grad.is_cuda, \
                 "CUDA extension is currently required for total variation"
-        cu_fn = _C.tv_aniso_grad if anisotropic else _C.tv_grad
-        cu_fn(self.links, self.density_data, 0, 1, scaling, grad)
+        # TODO sparse TV
+        _C.tv_grad(self.links, self.density_data,
+                   0, 1, scaling, grad)
 
 
     def inplace_tv_color_grad(self, grad : torch.Tensor,
                               start_dim : int = 0,
                               end_dim : Optional[int] = None,
-                              scaling : float = 1.0,
-                              anisotropic : bool = False):
+                              scaling : float = 1.0):
         """
         Add gradient of total variation for color
         directly into the gradient tensor, multiplied by 'scaling'
@@ -886,14 +944,58 @@ class SparseGrid(nn.Module):
         :param end_dim: int, last color channel dimension to compute TV over (exclusive).
                           Default None = all dimensions until the end.
         """
-        assert _C is not None and self.data.is_cuda and grad.is_cuda, \
+        assert _C is not None and self.sh_data.is_cuda and grad.is_cuda, \
                 "CUDA extension is currently required for total variation"
         if end_dim is None:
             end_dim = self.sh_data.size(1)
         end_dim = end_dim + self.sh_data.size(1) if end_dim < 0 else end_dim
         start_dim = start_dim + self.sh_data.size(1) if start_dim < 0 else start_dim
-        cu_fn = _C.tv_aniso_grad if anisotropic else _C.tv_grad
-        cu_fn(self.links, self.sh_data, start_dim, end_dim, scaling, grad)
+        # TODO sparse TV
+        _C.tv_grad(self.links, self.sh_data, start_dim, end_dim, scaling, grad)
+
+    def rmsprop_density_step(self, beta: float, lr: float, epsilon: float = 1e-8):
+        """
+        Execute RMSprop step on density
+        """
+        assert _C is not None and self.sh_data.is_cuda, \
+                "CUDA extension is currently required for rmsprop_step"
+
+        if self.density_rms is None or self.density_rms.shape != self.density_data.shape:
+            del self.density_rms
+            self.density_rms = torch.zeros_like(self.density_data.data)
+        indexer = self.sparse_grad_indexer
+        if indexer is None:
+            indexer = torch.empty((), device=self.density_data.device)
+        _C.rmsprop_step(self.density_data.data,
+                        self.density_rms,
+                        self.density_data.grad,
+                        indexer,
+                        beta,
+                        lr,
+                        epsilon)
+
+
+    def rmsprop_sh_step(self, beta: float, lr: float, epsilon: float = 1e-8):
+        """
+        Execute RMSprop step on SH
+        """
+        assert _C is not None and self.sh_data.is_cuda, \
+                "CUDA extension is currently required for rmsprop_step"
+
+        if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
+            del self.sh_rms
+            self.sh_rms = torch.zeros_like(self.sh_data.data)
+        indexer = self.sparse_grad_indexer
+        if indexer is None:
+            indexer = torch.empty((), device=self.sh_data.device)
+        _C.rmsprop_step(self.sh_data.data,
+                        self.sh_rms,
+                        self.sh_data.grad,
+                        indexer,
+                        beta,
+                        lr,
+                        epsilon)
+
 
     def __repr__(self):
         return (f"svox2.SparseGrid(basis_dim={self.basis_dim}, " +
@@ -928,3 +1030,15 @@ class SparseGrid(nn.Module):
 
     def _grid_size(self):
         return torch.tensor(self.links.shape, device='cpu', dtype=torch.float32)
+
+    def _get_data_grads(self):
+        ret = []
+        for subitem in ['density_data', 'sh_data']:
+            param = self.__getattr__(subitem)
+            if not hasattr(param, 'grad') or param.grad is None or \
+               param.grad.shape != param.data.shape:
+                   if hasattr(param, 'grad'):
+                        del param.grad
+                        param.grad = torch.zeros_like(param.data)
+            ret.append(param.grad)
+        return ret

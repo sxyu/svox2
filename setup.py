@@ -18,6 +18,8 @@ try:
             'svox2/csrc/svox2_kernel.cu',
             'svox2/csrc/render_lerp_kernel_cuvol.cu',
             'svox2/csrc/misc_kernel.cu',
+            'svox2/csrc/loss_kernel.cu',
+            'svox2/csrc/optim_kernel.cu',
         ], include_dirs=[osp.join(ROOT_DIR, "svox2", "csrc", "include"),],
         optional=True),
     ]

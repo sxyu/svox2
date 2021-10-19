@@ -1,3 +1,4 @@
+#pragma once
 // Changed from x.type().is_cuda() due to deprecation
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CPU(x) TORCH_CHECK(!x.is_cuda(), #x " must be a CPU tensor")
@@ -11,7 +12,7 @@
   CHECK_CONTIGUOUS(x)
 
 #if defined(__CUDACC__)
-#define _EXP(x) __expf(x)
+#define _EXP(x) expf(x)
 #define _SIGMOID(x) (1 / (1 + _EXP(-(x))))
 
 #else
