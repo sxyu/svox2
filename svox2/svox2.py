@@ -329,7 +329,7 @@ class SparseGrid(nn.Module):
 
         n3: int = reduce(lambda x, y: x * y, reso)
         if use_z_order:
-            init_links = gen_morton(reso[0], device=device, dtype=torch.int32)
+            init_links = gen_morton(reso[0], device=device, dtype=torch.int32).flatten()
         else:
             init_links = torch.arange(n3, device=device, dtype=torch.int32)
 
@@ -342,6 +342,7 @@ class SparseGrid(nn.Module):
             gsz = torch.tensor(reso)
             roffset = 1.0 / gsz - 1.0
             rscaling = 2.0 / gsz
+            print(points.dtype, roffset.dtype, rscaling.dtype)
             points = torch.addcmul(
                 roffset.to(device=points.device),
                 points,
@@ -375,6 +376,7 @@ class SparseGrid(nn.Module):
         self.links: torch.Tensor
         self.opt = RenderOptions()
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
+        self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
 
@@ -648,6 +650,7 @@ class SparseGrid(nn.Module):
             grad_density,
             grad_sh,
         )
+        self.sparse_sh_grad_indexer = self.sparse_grad_indexer.clone()
         return rgb_out
 
     def volume_render_image(
@@ -1086,7 +1089,7 @@ class SparseGrid(nn.Module):
         if rand_cells is not None:
             _C.tv_grad_sparse(self.links, self.sh_data,
                               rand_cells,
-                              self._get_sparse_grad_indexer(),
+                              self._get_sparse_sh_grad_indexer(),
                               start_dim, end_dim, scaling,
                               logalpha,
                               logalpha_delta,
@@ -1096,7 +1099,7 @@ class SparseGrid(nn.Module):
                     logalpha,
                     logalpha_delta,
                     grad)
-            self.sparse_grad_indexer = None
+            self.sparse_sh_grad_indexer = None
 
     def rmsprop_density_step(self, beta: float, lr: float, epsilon: float = 1e-8):
         """
@@ -1138,7 +1141,7 @@ class SparseGrid(nn.Module):
             self.sh_data.data,
             self.sh_rms,
             self.sh_data.grad,
-            self._get_sparse_grad_indexer(),
+            self._get_sparse_sh_grad_indexer(),
             beta,
             lr,
             epsilon,
@@ -1171,7 +1174,7 @@ class SparseGrid(nn.Module):
             del self.sh_rms
             self.sh_rms = torch.zeros_like(self.sh_data.data)
         _C.sgd_step(
-            self.sh_data.data, self.sh_data.grad, self._get_sparse_grad_indexer(), lr
+            self.sh_data.data, self.sh_data.grad, self._get_sparse_sh_grad_indexer(), lr
         )
 
     def __repr__(self):
@@ -1231,12 +1234,19 @@ class SparseGrid(nn.Module):
             indexer = torch.empty((), device=self.density_data.device)
         return indexer
 
+    def _get_sparse_sh_grad_indexer(self):
+        indexer = self.sparse_sh_grad_indexer
+        if indexer is None:
+            indexer = torch.empty((), device=self.density_data.device)
+        return indexer
+
     def _maybe_convert_sparse_grad_indexer(self):
         """
         Automatically convert sparse grad indexer from mask to
         indices, if it is efficient
         """
         if (
+            self.sparse_grad_indexer is not None and
             self.sparse_grad_indexer.dtype == torch.bool and
             torch.count_nonzero(self.sparse_grad_indexer).item()
             < self.sparse_grad_indexer.size(0) // 8
@@ -1246,12 +1256,28 @@ class SparseGrid(nn.Module):
                 self.sparse_grad_indexer.flatten(), as_tuple=False
             ).flatten()
 
+    def _maybe_convert_sparse_sh_grad_indexer(self):
+        """
+        Automatically convert sparse grad indexer from mask to
+        indices, if it is efficient
+        """
+        if (
+            self.sparse_sh_grad_indexer is not None and
+            self.sparse_sh_grad_indexer.dtype == torch.bool and
+            torch.count_nonzero(self.sparse_sh_grad_indexer).item()
+            < self.sparse_sh_grad_indexer.size(0) // 8
+        ):
+            # Highly sparse (use index)
+            self.sparse_sh_grad_indexer = torch.nonzero(
+                self.sparse_sh_grad_indexer.flatten(), as_tuple=False
+            ).flatten()
+
     def _get_rand_cells(self, sparse_frac: float):
         if sparse_frac < 1.0:
             assert self.sparse_grad_indexer is None or self.sparse_grad_indexer.dtype == torch.bool, \
                    "please call sparse loss after rendering and before gradient updates"
             grid_size = (self.links.size(0) - 1) * (self.links.size(1) - 1) * (self.links.size(2) - 1)
             sparse_num = max(int(sparse_frac * grid_size), 1)
-            return torch.randint(0, grid_size, (sparse_num,), dtype=torch.long, device=
-                                 self.links.device)
+            return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
+                                            self.links.device)
         return None

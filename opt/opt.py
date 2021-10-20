@@ -39,9 +39,8 @@ group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
 group.add_argument('--sh_dim', type=int, default=9, help='SH dimensions, must be square number >=1, <= 16')
 group.add_argument('--scene_scale', type=float, default=
-                           5/6,
-                           #  2/3,
-                           help='Scene scale; generally 2/3, can be 5/6 for lego')
+                           2/3,
+                           help='Scene scale; generally 2/3, can be 5/6 for lego (no longer doing this)')
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=
@@ -53,12 +52,15 @@ group.add_argument('--batch_size', type=int, default=
 
 # TODO: make the lr higher near the end
 group.add_argument('--use_rms_sigma', action='store_true', default=True, help="Use rmsprop on density")
-group.add_argument('--lr_sigma', type=float, default=1e1,#5e1,
+group.add_argument('--lr_sigma', type=float, default=
+                                            #  1e1,
+                                            2e1,
+                                            #5e1,
                                             #5e1,#2e0,#1e8
         help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-1)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=20000, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_sigma_delay_steps', type=int, default=15000, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--use_rms_sh', action='store_true', default=True, help="Use rmsprop on SH")
@@ -72,7 +74,7 @@ group.add_argument('--lr_sh_final', type=float,
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
-group.add_argument('--lr_sh_upscale_factor', type=float, default=1)
+group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--n_epochs', type=int, default=30)
 group.add_argument('--print_every', type=int, default=20, help='print every')
@@ -112,14 +114,20 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
-group.add_argument('--tv_sparsity', type=float, default=0.1)
-group.add_argument('--lambda_tv_sh', type=float, default=0.0)#1e-3)
-group.add_argument('--tv_sh_sparsity', type=float, default=0.05)
+group.add_argument('--lambda_tv', type=float, default=
+                    1e-2)
+                    #  1e-3)
+group.add_argument('--tv_sparsity', type=float, default=
+                        #  0.001)
+                        0.01)
+                        #  1.0)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-2)
+group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
+group.add_argument('--use_sphere_bound', action='store_true', default=True)
 args = parser.parse_args()
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
@@ -148,7 +156,8 @@ grid = svox2.SparseGrid(reso=reso,
                         radius=1.0,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
-                        device=device)
+                        device=device,
+                        use_sphere_bound=args.use_sphere_bound)
 grid.sh_data.data[:] = args.init_rgb
 grid.density_data.data[:] = args.init_sigma
 
@@ -302,7 +311,7 @@ for epoch_id in range(args.n_epochs):
         print('Saving', ckpt_path)
         grid.save(ckpt_path)
 
-    if (gstep_id_base - last_upsamp_step) > args.upsamp_every:
+    if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
         last_upsamp_step = gstep_id_base
         if reso < args.final_reso or args.prox_l0:
             print('* Upsampling from', reso, 'to', reso * 2)

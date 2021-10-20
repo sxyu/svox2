@@ -19,11 +19,8 @@ parser.add_argument('data_dir', type=str)
 parser.add_argument('--n_eval', '-n', type=int, default=200, help='images to evaluate (equal interval), at most evals every image')
 parser.add_argument('--train', action='store_true', default=False, help='render train set')
 parser.add_argument('--scene_scale', type=float, default=
-                                                5/6,
-                                                #1/1.3,
-                                                #  1/1.4,
-                                                #2/3,
-                   help='Scene scale; generally 2/3, can be 5/6 for lego')
+                                                2/3,
+                   help='Scene scale; generally 2/3, can be 5/6 for lego (no longer doing this)')
 args = parser.parse_args()
 device = 'cuda:0'
 

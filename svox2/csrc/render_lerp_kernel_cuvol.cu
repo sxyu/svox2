@@ -565,7 +565,7 @@ torch::Tensor volume_render_cuvol_backward(
             sparse_mask.data_ptr<bool>(),
             grad_density_out.data_ptr<float>(),
             grad_sh_out.data_ptr<float>());
-    
+
     CUDA_CHECK_ERRORS;
     return sparse_mask;
 }
