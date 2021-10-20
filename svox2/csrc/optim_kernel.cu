@@ -15,7 +15,7 @@ namespace device {
 __inline__ __device__ void rmsprop_once(
         float* __restrict__ ptr_data,
         float* __restrict__ ptr_rms,
-        float* __restrict__ ptr_grad, 
+        float* __restrict__ ptr_grad,
         const float beta, const float lr, const float epsilon) {
     float rms = lerp(_SQR(*ptr_grad), *ptr_rms, beta);
     *ptr_rms = rms;
@@ -32,7 +32,8 @@ __global__ void rmsprop_step_kernel(
         float lr,
         float epsilon) {
     CUDA_GET_THREAD_ID(tid, all_data.size(0) * all_data.size(1));
-    rmsprop_once(all_data.data() + tid, all_rms.data() + tid,
+    rmsprop_once(all_data.data() + tid,
+                 all_rms.data() + tid,
                  all_grad.data() + tid,
                  beta,
                  lr,
@@ -50,8 +51,9 @@ __global__ void rmsprop_mask_step_kernel(
         float lr,
         float epsilon) {
     CUDA_GET_THREAD_ID(tid, all_data.size(0) * all_data.size(1));
-    if (mask != nullptr && mask[tid / all_data.size(1)] == false) return;
-    rmsprop_once(all_data.data() + tid, all_rms.data() + tid,
+    if (mask[tid / all_data.size(1)] == false) return;
+    rmsprop_once(all_data.data() + tid,
+                 all_rms.data() + tid,
                  all_grad.data() + tid,
                  beta,
                  lr,
@@ -82,7 +84,7 @@ __global__ void rmsprop_index_step_kernel(
 // SGD
 __inline__ __device__ void sgd_once(
         float* __restrict__ ptr_data,
-        float* __restrict__ ptr_grad, 
+        float* __restrict__ ptr_grad,
         const float lr) {
     *ptr_data -= lr * (*ptr_grad);
     *ptr_grad = 0.f;
@@ -106,7 +108,7 @@ __global__ void sgd_mask_step_kernel(
         const bool* __restrict__ mask,
         float lr) {
     CUDA_GET_THREAD_ID(tid, all_data.size(0) * all_data.size(1));
-    if (mask != nullptr && mask[tid / all_data.size(1)] == false) return;
+    if (mask[tid / all_data.size(1)] == false) return;
     sgd_once(all_data.data() + tid,
              all_grad.data() + tid,
              lr);

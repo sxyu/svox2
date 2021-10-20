@@ -227,3 +227,18 @@ def xyz2cubemap(xyz :  torch.Tensor):
     uv = uv / max_axis.unsqueeze(-1)
     return index, uv
 
+
+def memlog(device='cuda'):
+    # Memory debugging
+    print(torch.cuda.memory_summary(device))
+    import gc
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj) or (
+                    hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                if str(obj.device) != 'cpu':
+                    print(obj.device, '{: 10}'.format(obj.numel()),
+                            obj.dtype,
+                            obj.size(), type(obj))
+        except:
+            pass

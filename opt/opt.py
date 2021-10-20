@@ -44,7 +44,11 @@ group.add_argument('--scene_scale', type=float, default=
                            help='Scene scale; generally 2/3, can be 5/6 for lego')
 
 group = parser.add_argument_group("optimization")
-group.add_argument('--batch_size', type=int, default=5000, help='batch size')
+group.add_argument('--batch_size', type=int, default=
+                     5000,
+                     #100000,
+                     #  2000,
+                   help='batch size')
 
 
 # TODO: make the lr higher near the end
@@ -54,26 +58,27 @@ group.add_argument('--lr_sigma', type=float, default=1e1,#5e1,
         help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-1)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=20000)
+group.add_argument('--lr_sigma_delay_steps', type=int, default=20000, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--use_rms_sh', action='store_true', default=True, help="Use rmsprop on SH")
 group.add_argument('--lr_sh', type=float, default=#2e6,
-                    5e-2,
+                    1e-1,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=#2e6
-                      3e-4
+                      1e-3
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sh_delay_steps', type=int, default=0)#20000)  # 0=disable
+group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
-group.add_argument('--lr_sh_upscale_factor', type=float, default=2)
+group.add_argument('--lr_sh_upscale_factor', type=float, default=1)
 
-group.add_argument('--n_epochs', type=int, default=55)
+group.add_argument('--n_epochs', type=int, default=30)
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=4,
-                    help='upsample the grid every x epochs')
+group.add_argument('--upsamp_every', type=int, default=
+                     8 * 12800,
+                    help='upsample the grid every x iters')
 group.add_argument('--save_every', type=int, default=0,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
@@ -166,6 +171,8 @@ lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_st
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_sigma_factor = 1.0
 lr_sh_factor = 1.0
+
+last_upsamp_step = 0
 
 for epoch_id in range(args.n_epochs):
     epoch_size = dset.rays.origins.size(0)
@@ -282,7 +289,8 @@ for epoch_id in range(args.n_epochs):
         print('Saving', ckpt_path)
         grid.save(ckpt_path)
 
-    if (epoch_id + 1) % args.upsamp_every == 0:
+    if (gstep_id_base - last_upsamp_step) > args.upsamp_every:
+        last_upsamp_step = gstep_id_base
         if reso < args.final_reso or args.prox_l0:
             print('* Upsampling from', reso, 'to', reso * 2)
             non_final = reso < args.final_reso

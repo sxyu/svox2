@@ -32,12 +32,19 @@ def run_exp(env, train_dir, data_dir, flags):
     ]
     log_file_path = path.join(train_dir, 'log')
     psnr_file_path = path.join(train_dir, PSNR_FILE_NAME)
+    if path.isfile(psnr_file_path):
+        print('! SKIP', train_dir)
+        return
     print('********************************************')
     print('! RUN opt.py -t', train_dir)
     opt_cmd = ' '.join(opt_base_cmd + flags)
     print(opt_cmd)
-    opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
-            sys.stdout.encoding)
+    try:
+        opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
+                sys.stdout.encoding)
+    except subprocess.CalledProcessError:
+        print('Error occurred while running exp', train_dir)
+        return
     with open(log_file_path, 'w') as f:
         f.write(opt_ret)
     test_stats = [eval(x.split('eval stats:')[-1].strip())
