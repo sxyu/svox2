@@ -77,9 +77,9 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1)
 group.add_argument('--n_epochs', type=int, default=30)
 group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--upsamp_every', type=int, default=
-                     8 * 12800,
+                     3 * 12800,
                     help='upsample the grid every x iters')
-group.add_argument('--save_every', type=int, default=0,
+group.add_argument('--save_every', type=int, default=5,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
@@ -113,6 +113,9 @@ group.add_argument('--tune_mode', action='store_true', default=False,
 
 group.add_argument('--rms_beta', type=float, default=0.9)
 group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
+group.add_argument('--tv_sparsity', type=float, default=0.1)
+group.add_argument('--lambda_tv_sh', type=float, default=0.0)#1e-3)
+group.add_argument('--tv_sh_sparsity', type=float, default=0.05)
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
@@ -255,6 +258,10 @@ for epoch_id in range(args.n_epochs):
                     with torch.no_grad():
                         tv = grid.tv()
                     summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
+                if args.lambda_tv_sh > 0.0:
+                    with torch.no_grad():
+                        tv_sh = grid.tv_color()
+                    summary_writer.add_scalar("loss_tv_sh", tv_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
 
@@ -266,7 +273,12 @@ for epoch_id in range(args.n_epochs):
             # Apply TV
             if args.lambda_tv > 0.0:
                 grid.inplace_tv_grad(grid.density_data.grad,
-                        scaling=args.lambda_tv)
+                        scaling=args.lambda_tv,
+                        sparse_frac=args.tv_sparsity)
+            if args.lambda_tv_sh > 0.0:
+                grid.inplace_tv_color_grad(grid.sh_data.grad,
+                        scaling=args.lambda_tv_sh,
+                        sparse_frac=args.tv_sh_sparsity)
 
             # Manual SGD step
             if args.use_rms_sigma:
@@ -285,7 +297,8 @@ for epoch_id in range(args.n_epochs):
 
     #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
     # Overwrite prev checkpoints since they are very huge
-    if args.save_every > 0 and (epoch_id + 1) % max(factor, args.save_every) == 0 and not args.tune_mode:
+    if args.save_every > 0 and (epoch_id + 1) % max(
+            factor, args.save_every) == 0 and not args.tune_mode:
         print('Saving', ckpt_path)
         grid.save(ckpt_path)
 

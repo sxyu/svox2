@@ -31,9 +31,10 @@ Tensor volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
 // Returns MSE
 
 Tensor dilate(Tensor);
-Tensor tv(Tensor, Tensor, int, int);
-void tv_grad(Tensor, Tensor, int, int, float, Tensor);
-void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, Tensor);
+Tensor tv(Tensor, Tensor, int, int, bool, float);
+void tv_grad(Tensor, Tensor, int, int, float, bool, float, Tensor);
+void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
+                    float, Tensor);
 void grid_weight_render(Tensor, CameraSpec &, float, Tensor, Tensor, Tensor);
 
 void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float);
