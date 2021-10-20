@@ -10,7 +10,6 @@
         "flags": [
             "--n_epochs", "10",
             "--init_reso", "256",
-            "--final_reso", "256",
             "--upsamp_every", "{upsamp_every}",
             "--lr_sh_final", "{lr_sh_final}"
         ]

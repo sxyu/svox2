@@ -114,6 +114,9 @@ group.add_argument('--weight_decay_sh', type=float, default=1.0)
 group.add_argument('--lr_decay', action='store_true', default=True)
 args = parser.parse_args()
 
+assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
+assert args.lr_sh_final <= args.lr_sh, "lr_sh must be >= lr_sh_final"
+
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
@@ -157,8 +160,6 @@ resample_cameras = [
     ] if args.use_weight_thresh else None
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
-assert args.lr_sigma_final <= args.lr_sigma
-assert args.lr_sh_final <= args.lr_sh
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
