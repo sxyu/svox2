@@ -1,5 +1,7 @@
 from setuptools import setup
+import os
 import os.path as osp
+import warnings
 
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
@@ -10,6 +12,26 @@ exec(open('svox2/version.py', 'r').read())
 
 CUDA_FLAGS = []
 INSTALL_REQUIREMENTS = []
+include_dirs = [osp.join(ROOT_DIR, "svox2", "csrc", "include")]
+
+# From PyTorch3D
+cub_home = os.environ.get("CUB_HOME", None)
+if cub_home is None:
+	prefix = os.environ.get("CONDA_PREFIX", None)
+	if prefix is not None and os.path.isdir(prefix + "/include/cub"):
+		cub_home = prefix + "/include"
+
+if cub_home is None:
+	warnings.warn(
+		"The environment variable `CUB_HOME` was not found."
+		"Installation will fail if your system CUDA toolkit version is less than 11."
+		"NVIDIA CUB can be downloaded "
+		"from `https://github.com/NVIDIA/cub/releases`. You can unpack "
+		"it to a location of your choice and set the environment variable "
+		"`CUB_HOME` to the folder containing the `CMakeListst.txt` file."
+	)
+else:
+	include_dirs.append(os.path.realpath(cub_home).replace("\\ ", " "))
 
 try:
     ext_modules = [
@@ -20,8 +42,8 @@ try:
             'svox2/csrc/misc_kernel.cu',
             'svox2/csrc/loss_kernel.cu',
             'svox2/csrc/optim_kernel.cu',
-        ], include_dirs=[osp.join(ROOT_DIR, "svox2", "csrc", "include"),],
-        optional=True),
+        ], include_dirs=include_dirs,
+        optional=False),
     ]
 except:
     import warnings
