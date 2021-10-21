@@ -205,7 +205,7 @@ class _VolumeRenderFunction(autograd.Function):
         if not ctx.needs_input_grad[2]:
             grad_basis = None
 
-        return grad_density_grid, grad_sh_grid, grad_basis, None, None, None
+        return grad_density_grid, grad_sh_grid, grad_basis, None, None, None, None
 
 
 class _VolumeRenderImageFunction(autograd.Function):

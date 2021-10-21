@@ -241,7 +241,6 @@ __device__ __inline__ void calc_sphfunc(
                     l, p,
                     lane_id);
         }
-        __syncwarp((1U << (3 * grid.basis_dim)) - 1U);
 
     } else {
         calc_sh(grid.basis_dim, dir, out);
@@ -267,16 +266,15 @@ __device__ __inline__ void calc_sphfunc_backward(
             p[j] -= static_cast<float>(l[j]);
         }
 
-        __syncwarp((1U << (3 * grid.basis_dim)) - 1U);
+        __syncwarp();
         if (lane_id < grid.basis_dim) {
-            trilerp_backward_one(grad_out,
+            trilerp_backward_one<float, int32_t>(grad_out,
                     grid.basis_reso,
                     grid.basis_dim,
                     l, p,
                     grad_output[lane_id],
                     lane_id);
         }
-        // __syncwarp((1U << (3 * grid.basis_dim)) - 1U);
 
     } else {
         // nothing needed

@@ -177,9 +177,20 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             total_color += total_color_c1;
 
             sigmoid = __shfl_sync(0xffffffff, sigmoid, lane_colorgrp * grid.basis_dim);
-            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] *
-                                weight * sigmoid *
+            const float grad_common = weight * sigmoid *
                                 (1.f - sigmoid) * gout;
+            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common;
+
+            float curr_grad_sphfunc = lane_color * grad_common;
+            const float curr_grad_up2 = __shfl_down_sync(0xffffffff,
+                                                curr_grad_sphfunc, 2 * grid.basis_dim);
+            curr_grad_sphfunc += __shfl_down_sync(0xffffffff,
+                                            curr_grad_sphfunc, grid.basis_dim);
+            curr_grad_sphfunc += curr_grad_up2;
+            if (lane_id < grid.basis_dim) {
+                grad_sphfunc_val[lane_id] += curr_grad_sphfunc;
+            }
+
 
             accum -= weight * total_color;
             float curr_grad_sigma = ray.world_step * (
@@ -229,7 +240,10 @@ __global__ void render_ray_kernel(
     calc_sphfunc(grid, lane_id,
                  ray_spec[ray_blk_id].dir,
                  sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp();
 
     trace_ray_cuvol(
         grid,
@@ -267,8 +281,14 @@ __global__ void render_ray_backward_kernel(
     const float vdir[3] = {ray_spec[ray_blk_id].dir[0],
                      ray_spec[ray_blk_id].dir[1],
                      ray_spec[ray_blk_id].dir[2] };
+    if (lane_id < grid.basis_dim) {
+        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
+    }
     calc_sphfunc(grid, lane_id, vdir, sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp();
     trace_ray_cuvol_backward(
         grid,
         grad_output[ray_id].data(),
@@ -312,15 +332,21 @@ __global__ void render_ray_fused_kernel(
     __shared__ float rgb_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
     __shared__ float grad_out[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK];
-    __shared__ typename WarpReducef::TempStorage temp_storage[2][
+    __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
             rays.dirs[ray_id].data());
     float vdir[3] = {ray_spec[ray_blk_id].dir[0],
                      ray_spec[ray_blk_id].dir[1],
                      ray_spec[ray_blk_id].dir[2] };
+    if (lane_id < grid.basis_dim) {
+        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
+    }
     calc_sphfunc(grid, lane_id, vdir, sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp();
 
     trace_ray_cuvol(
         grid,
@@ -328,8 +354,10 @@ __global__ void render_ray_fused_kernel(
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
-        temp_storage[0][ray_blk_id],
+        temp_storage[ray_blk_id],
         rgb_val[ray_blk_id]);
+
+    __syncwarp();
 
 #pragma unroll 3
     for (int i = 0; i < 3; ++i) {
@@ -345,7 +373,7 @@ __global__ void render_ray_fused_kernel(
         lane_id,
         sphfunc_val[ray_blk_id],
         grad_sphfunc_val[ray_blk_id],
-        temp_storage[1][ray_blk_id],
+        temp_storage[ray_blk_id],
         mask_out,
         grad_density_data_out,
         grad_sh_data_out);
@@ -379,7 +407,10 @@ __global__ void render_image_kernel(
     ray_spec[ray_blk_id].set(origin, dir);
     calc_sphfunc(grid, lane_id,
                  dir, sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp();
     trace_ray_cuvol(
         grid,
         ray_spec[ray_blk_id],
@@ -415,9 +446,15 @@ __global__ void render_image_backward_kernel(
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     ray_spec[ray_blk_id].set(origin, dir);
+    if (lane_id < grid.basis_dim) {
+        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
+    }
     calc_sphfunc(grid, lane_id,
                  dir, sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp();
     trace_ray_cuvol_backward(
         grid,
         grad_output[iy][ix].data(),
