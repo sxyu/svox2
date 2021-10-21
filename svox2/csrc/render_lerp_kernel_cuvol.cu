@@ -46,8 +46,6 @@ __device__ __inline__ void trace_ray_cuvol(
         float* __restrict__ sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
         float* __restrict__ out) {
-    if (lane_id >= grid.sh_data_dim)
-        return;
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
 
@@ -119,8 +117,6 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         float* __restrict__ grad_density_data_out,
         float* __restrict__ grad_sh_data_out
         ) {
-    if (lane_id >= grid.sh_data_dim)
-        return;
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim));
@@ -161,14 +157,14 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                             grid.size[2],
                             grid.sh_data_dim,
                             ray.l, ray.pos, lane_id);
-            lane_color *= sphfunc_val[lane_colorgrp_id];
+            float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
 
             const float pcnt = ray.world_step * sigma;
             const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
             light_intensity -= pcnt;
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                           lane_color, lane_colorgrp_id == 0);
+                                           weighted_lane_color, lane_colorgrp_id == 0);
             float sigmoid = _SIGMOID(lane_color_total);
 
             float total_color = sigmoid * gout;
@@ -176,15 +172,15 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
             total_color += total_color_c1;
 
-            sigmoid = __shfl_sync(0xffffffff, sigmoid, lane_colorgrp * grid.basis_dim);
+            sigmoid = __shfl_sync((1U << grid.sh_data_dim) - 1, sigmoid, lane_colorgrp * grid.basis_dim);
             const float grad_common = weight * sigmoid *
                                 (1.f - sigmoid) * gout;
             const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common;
 
             float curr_grad_sphfunc = lane_color * grad_common;
-            const float curr_grad_up2 = __shfl_down_sync(0xffffffff,
+            const float curr_grad_up2 = __shfl_down_sync((1U << grid.sh_data_dim) - 1,
                                                 curr_grad_sphfunc, 2 * grid.basis_dim);
-            curr_grad_sphfunc += __shfl_down_sync(0xffffffff,
+            curr_grad_sphfunc += __shfl_down_sync((1U << grid.sh_data_dim) - 1,
                                             curr_grad_sphfunc, grid.basis_dim);
             curr_grad_sphfunc += curr_grad_up2;
             if (lane_id < grid.basis_dim) {
@@ -231,6 +227,10 @@ __global__ void render_ray_kernel(
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
     __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][10];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     __shared__ typename WarpReducef::TempStorage temp_storage[
@@ -243,7 +243,7 @@ __global__ void render_ray_kernel(
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
-    __syncwarp();
+    __syncwarp((1U << grid.sh_data_dim) - 1);
 
     trace_ray_cuvol(
         grid,
@@ -271,6 +271,10 @@ __global__ void render_ray_backward_kernel(
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
     __shared__ float sphfunc_val[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK][10];
     __shared__ float grad_sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][10];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK];
@@ -288,7 +292,7 @@ __global__ void render_ray_backward_kernel(
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
-    __syncwarp();
+    __syncwarp((1U << grid.sh_data_dim) - 1);
     trace_ray_cuvol_backward(
         grid,
         grad_output[ray_id].data(),
@@ -346,7 +350,7 @@ __global__ void render_ray_fused_kernel(
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
-    __syncwarp();
+    __syncwarp((1U << grid.sh_data_dim) - 1);
 
     trace_ray_cuvol(
         grid,
@@ -357,7 +361,7 @@ __global__ void render_ray_fused_kernel(
         temp_storage[ray_blk_id],
         rgb_val[ray_blk_id]);
 
-    __syncwarp();
+    __syncwarp((1U << grid.sh_data_dim) - 1);
 
 #pragma unroll 3
     for (int i = 0; i < 3; ++i) {
@@ -397,6 +401,10 @@ __global__ void render_image_kernel(
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
     int iy = ray_id / cam.width, ix = ray_id % cam.width;
     float dir[3], origin[3];
     cam2world_ray(ix, iy, dir, origin, cam);
@@ -410,7 +418,7 @@ __global__ void render_image_kernel(
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
-    __syncwarp();
+    __syncwarp((1U << grid.sh_data_dim) - 1);
     trace_ray_cuvol(
         grid,
         ray_spec[ray_blk_id],
@@ -437,6 +445,10 @@ __global__ void render_image_backward_kernel(
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
     int iy = ray_id / cam.width, ix = ray_id % cam.width;
     float dir[3], origin[3];
     cam2world_ray(ix, iy, dir, origin, cam);
@@ -454,7 +466,7 @@ __global__ void render_image_backward_kernel(
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
-    __syncwarp();
+    __syncwarp((1U << grid.sh_data_dim) - 1);
     trace_ray_cuvol_backward(
         grid,
         grad_output[iy][ix].data(),

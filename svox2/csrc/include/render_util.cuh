@@ -266,7 +266,7 @@ __device__ __inline__ void calc_sphfunc_backward(
             p[j] -= static_cast<float>(l[j]);
         }
 
-        __syncwarp();
+        __syncwarp((1U << grid.sh_data_dim) - 1);
         if (lane_id < grid.basis_dim) {
             trilerp_backward_one<float, int32_t>(grad_out,
                     grid.basis_reso,

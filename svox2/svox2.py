@@ -535,7 +535,10 @@ class SparseGrid(nn.Module):
         delta_scale = 1.0 / dirs.norm(dim=1)
         dirs *= delta_scale.unsqueeze(-1)
 
-        sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
+        if self.use_learned_basis:
+            sh_mult = self._eval_learned_bases(viewdirs)
+        else:
+            sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
         invdirs = 1.0 / dirs
         invdirs[dirs == 0] = 1e9
 
@@ -1347,3 +1350,9 @@ class SparseGrid(nn.Module):
             return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
                                             self.links.device)
         return None
+
+    def _eval_learned_bases(self, dirs: torch.Tensor):
+        basis_data = self.basis_data.permute([3, 2, 1, 0])[None]
+        samples = F.grid_sample(basis_data, dirs[None, None, None], mode='bilinear', padding_mode='zeros', align_corners=True)
+        samples = samples[0, :, 0, 0, :].permute([1, 0])
+        return samples
