@@ -7,6 +7,150 @@
 namespace {
 namespace device {
 
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ float trilerp_one(
+        const data_type_t* __restrict__ data,
+        int reso, int stride,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        const int idx) {
+    const int offz = stride;
+    const int offy = reso * stride;
+    const int offx = reso * offy;
+    const data_type_t* __restrict__ data_ptr = data + (offx * l[0] +
+                                                    offy * l[1] +
+                                                    offz * l[2]
+                                                    + idx);
+
+    const float ix0y0 = lerp(data_ptr[0], data_ptr[offz], pos[2]);
+    const float ix0y1 = lerp(data_ptr[offy], data_ptr[offy + offz], pos[2]);
+    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+    const float ix1y0 = lerp(data_ptr[offx], data_ptr[offx + offz], pos[2]);
+    const float ix1y1 = lerp(data_ptr[offy + offx],
+                             data_ptr[offy + offx + offz], pos[2]);
+    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+    return lerp(ix0, ix1, pos[0]);
+}
+
+// trilerp with links
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ float trilerp_cuvol_one(
+        const int32_t* __restrict__ links,
+        const data_type_t* __restrict__ data,
+        int offx, int offy, size_t stride,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        const int idx) {
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+
+#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u] * stride + idx] : 0.f)
+    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);
+    const float ix0y1 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), pos[2]);
+    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+    const float ix1y0 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), pos[2]);
+    const float ix1y1 = lerp(MAYBE_READ_LINK(offy + offx),
+                             MAYBE_READ_LINK(offy + offx + 1), pos[2]);
+    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+    return lerp(ix0, ix1, pos[0]);
+#undef MAYBE_READ_LINK
+}
+
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ void trilerp_backward_one(
+        data_type_t* __restrict__ grad_data,
+        int reso, int stride,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        float grad_out,
+        const int idx) {
+    const float ay = 1.f - pos[1], az = 1.f - pos[2];
+    float xo = (1.0f - pos[0]) * grad_out;
+
+    const int offz = stride;
+    const int offy = reso * stride;
+    const int offx = reso * offy;
+    data_type_t* __restrict__ grad_data_ptr = grad_data + (offx * l[0] +
+                                                    offy * l[1] +
+                                                    offz * l[2]
+                                                    + idx);
+
+#define ADD_WT(u, val) atomicAdd(&grad_data_ptr[u], val)
+    ADD_WT(0, ay * az * xo);
+    ADD_WT(offz, ay * pos[2] * xo);
+    ADD_WT(offy, pos[1] * az * xo);
+    ADD_WT(offy + offz, pos[1] * pos[2] * xo);
+
+    xo = pos[0] * grad_out;
+    ADD_WT(offx, ay * az * xo);
+    ADD_WT(offx + offz, ay * pos[2] * xo);
+    ADD_WT(offx + offy, pos[1] * az * xo);
+    ADD_WT(offx + offy + offz, pos[1] * pos[2] * xo);
+#undef ADD_WT
+}
+
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ void trilerp_backward_cuvol_one(
+        const int32_t* __restrict__ links,
+        data_type_t* __restrict__ grad_data,
+        int offx, int offy, size_t stride,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        float grad_out,
+        const int idx) {
+    const float ay = 1.f - pos[1], az = 1.f - pos[2];
+    float xo = (1.0f - pos[0]) * grad_out;
+
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+
+#define MAYBE_ADD_LINK(u, val) if (link_ptr[u] >= 0) { \
+              atomicAdd(&grad_data[link_ptr[u] * stride + idx], val); \
+        }
+    MAYBE_ADD_LINK(0, ay * az * xo);
+    MAYBE_ADD_LINK(1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK(offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK(offy + 1, pos[1] * pos[2] * xo);
+
+    xo = pos[0] * grad_out;
+    MAYBE_ADD_LINK(offx + 0, ay * az * xo);
+    MAYBE_ADD_LINK(offx + 1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK(offx + offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK(offx + offy + 1, pos[1] * pos[2] * xo);
+#undef MAYBE_ADD_LINK
+}
+
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ void trilerp_backward_cuvol_one_density(
+        const int32_t* __restrict__ links,
+        data_type_t* __restrict__ grad_data_out,
+        bool* __restrict__ mask_out,
+        int offx, int offy,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        float grad_out) {
+    const float ay = 1.f - pos[1], az = 1.f - pos[2];
+    float xo = (1.0f - pos[0]) * grad_out;
+
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+
+#define MAYBE_ADD_LINK_DEN(u, val) if (link_ptr[u] >= 0) { \
+              atomicAdd(&grad_data_out[link_ptr[u]], val); \
+              mask_out[link_ptr[u]] = true; \
+        }
+    MAYBE_ADD_LINK_DEN(0, ay * az * xo);
+    MAYBE_ADD_LINK_DEN(1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK_DEN(offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK_DEN(offy + 1, pos[1] * pos[2] * xo);
+
+    xo = pos[0] * grad_out;
+    MAYBE_ADD_LINK_DEN(offx + 0, ay * az * xo);
+    MAYBE_ADD_LINK_DEN(offx + 1, ay * pos[2] * xo);
+    MAYBE_ADD_LINK_DEN(offx + offy, pos[1] * az * xo);
+    MAYBE_ADD_LINK_DEN(offx + offy + 1, pos[1] * pos[2] * xo);
+#undef MAYBE_ADD_LINK_DEN
+}
+
+// Spherical functions
+
 // SH Coefficients from https://github.com/google/spherical-harmonics
 __device__ __constant__ const float C0 = 0.28209479177387814;
 __device__ __constant__ const float C1 = 0.4886025119029199;
@@ -73,17 +217,70 @@ __device__ __inline__ void calc_sh(
     }
 }
 
-enum SphFuncType {
-    SPHFUNC_TYPE_SH = 0,
-};
-
 __device__ __inline__ void calc_sphfunc(
-    const int sphfunc_type,  // Placeholder
-    const int basis_dim,
-    const float* __restrict__ dir,
+    const PackedSparseGridSpec& grid,
+    const int lane_id,
+    const float* __restrict__ dir, // Pre-normalized
     float* __restrict__ out) {
     // Placeholder
-    return calc_sh(basis_dim, dir, out);
+    if (grid.use_learned_basis) {
+        float p[3];
+        int32_t l[3];
+        for (int j = 0; j < 3; ++j) {
+            // Note: this is align_corners=True behavior
+            // (vs align_corners=False in the sigma/coeff grid trilerp)
+            p[j] = (dir[j] * 0.5f + 0.5f) * (grid.basis_reso - 1.f);
+            p[j] = min(max(p[j], 0.f), grid.basis_reso - 1.f);
+            l[j] = min(static_cast<int32_t>(p[j]), grid.basis_reso - 2);
+            p[j] -= static_cast<float>(l[j]);
+        }
+
+        if (lane_id < grid.basis_dim) {
+            out[lane_id] = trilerp_one(grid.basis_data,
+                    grid.basis_reso, grid.basis_dim,
+                    l, p,
+                    lane_id);
+        }
+        __syncwarp((1U << (3 * grid.basis_dim)) - 1U);
+
+    } else {
+        calc_sh(grid.basis_dim, dir, out);
+    }
+}
+
+__device__ __inline__ void calc_sphfunc_backward(
+    const PackedSparseGridSpec& grid,
+    const int lane_id,
+    const float* __restrict__ dir, // Pre-normalized
+    const float* __restrict__ grad_output,
+    float* __restrict__ grad_out) {
+    // Placeholder
+    if (grid.use_learned_basis) {
+        float p[3];
+        int32_t l[3];
+        for (int j = 0; j < 3; ++j) {
+            // Note: this is align_corners=True behavior
+            // (vs align_corners=False in the sigma/coeff grid trilerp)
+            p[j] = (dir[j] * 0.5f + 0.5f) * (grid.basis_reso - 1.f);
+            p[j] = min(max(p[j], 0.f), grid.basis_reso - 1.f);
+            l[j] = min(static_cast<int32_t>(p[j]), grid.basis_reso - 2);
+            p[j] -= static_cast<float>(l[j]);
+        }
+
+        __syncwarp((1U << (3 * grid.basis_dim)) - 1U);
+        if (lane_id < grid.basis_dim) {
+            trilerp_backward_one(grad_out,
+                    grid.basis_reso,
+                    grid.basis_dim,
+                    l, p,
+                    grad_output[lane_id],
+                    lane_id);
+        }
+        // __syncwarp((1U << (3 * grid.basis_dim)) - 1U);
+
+    } else {
+        // nothing needed
+    }
 }
 
 __device__ __inline__ static float _norm(

@@ -16,17 +16,17 @@ Tensor volume_render_cuvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
 
 Tensor volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &,
                                     RenderOptions &, Tensor, Tensor, Tensor,
-                                    Tensor);
+                                    Tensor, Tensor);
 
 Tensor volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                                 Tensor, Tensor, Tensor, Tensor);
+                                 Tensor, Tensor, Tensor, Tensor, Tensor);
 
 Tensor volume_render_cuvol_image(SparseGridSpec &, CameraSpec &,
                                  RenderOptions &);
 
 Tensor volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
                                           RenderOptions &, Tensor, Tensor,
-                                          Tensor, Tensor);
+                                          Tensor, Tensor, Tensor);
 
 // Returns MSE
 
@@ -65,7 +65,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("links", &SparseGridSpec::links)
       .def_readwrite("_offset", &SparseGridSpec::_offset)
       .def_readwrite("_scaling", &SparseGridSpec::_scaling)
-      .def_readwrite("basis_dim", &SparseGridSpec::basis_dim);
+      .def_readwrite("basis_dim", &SparseGridSpec::basis_dim)
+      .def_readwrite("use_learned_basis", &SparseGridSpec::use_learned_basis)
+      .def_readwrite("basis_data", &SparseGridSpec::basis_data);
 
   py::class_<CameraSpec>(m, "CameraSpec")
       .def(py::init<>())

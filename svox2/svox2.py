@@ -123,6 +123,7 @@ class _SampleGridAutogradFunction(autograd.Function):
         ctx,
         data_density: torch.Tensor,
         data_sh: torch.Tensor,
+        data_basis: torch.Tensor,
         grid,
         points: torch.Tensor,
     ):
@@ -137,6 +138,7 @@ class _SampleGridAutogradFunction(autograd.Function):
         (points,) = ctx.saved_tensors
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
         _C.sample_grid_backward(
             ctx.grid,
             points,
@@ -144,12 +146,16 @@ class _SampleGridAutogradFunction(autograd.Function):
             grad_out_sh.contiguous(),
             grad_density_grid,
             grad_sh_grid,
+            grad_basis,
         )
         if not ctx.needs_input_grad[0]:
             grad_density_grid = None
         if not ctx.needs_input_grad[1]:
             grad_sh_grid = None
-        return grad_density_grid, grad_sh_grid, None, None
+        if not ctx.needs_input_grad[2]:
+            grad_basis = None
+
+        return grad_density_grid, grad_sh_grid, grad_basis, None, None
 
 
 class _VolumeRenderFunction(autograd.Function):
@@ -158,6 +164,7 @@ class _VolumeRenderFunction(autograd.Function):
         ctx,
         data_density: torch.Tensor,
         data_sh: torch.Tensor,
+        data_basis: torch.Tensor,
         grid,
         rays,
         opt,
@@ -178,6 +185,7 @@ class _VolumeRenderFunction(autograd.Function):
         cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_backward"]
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
         # TODO save the sparse mask
         sparse_mask = cu_fn(
             ctx.grid,
@@ -187,13 +195,17 @@ class _VolumeRenderFunction(autograd.Function):
             color_cache,
             grad_density_grid,
             grad_sh_grid,
+            grad_basis,
         )
         ctx.grid = ctx.rays = ctx.opt = None
         if not ctx.needs_input_grad[0]:
             grad_density_grid = None
         if not ctx.needs_input_grad[1]:
             grad_sh_grid = None
-        return grad_density_grid, grad_sh_grid, None, None, None, None
+        if not ctx.needs_input_grad[2]:
+            grad_basis = None
+
+        return grad_density_grid, grad_sh_grid, grad_basis, None, None, None
 
 
 class _VolumeRenderImageFunction(autograd.Function):
@@ -278,6 +290,10 @@ class SparseGrid(nn.Module):
     :param reso: int or List[int, int, int], resolution for resampled grid, as in the constructor
     :param radius: float or List[float, float, float], the 1/2 side length of the grid, optionally in each direction
     :param center: float or List[float, float, float], the center of the grid
+    :param use_learned_basis: bool, whether to use learned spherical function (false = SH)
+    :param basis_dim: int, size of basis / number of SH components
+                           (must be square number in case of SH)
+    :param basis_reso: int, resolution of learned spherical function
     :param use_z_order: bool, if true, stores the data initially in a Z-order curve if possible
     :param device: torch.device, device to store the grid
     """
@@ -287,14 +303,17 @@ class SparseGrid(nn.Module):
         reso: Union[int, List[int]] = 128,
         radius: Union[float, List[float]] = 1.0,
         center: Union[float, List[float]] = [0.0, 0.0, 0.0],
-        basis_dim: int = 9,  # SH size; square number
-        use_z_order=False,
-        use_sphere_bound=False,
+        use_learned_basis: bool = True,
+        basis_dim: int = 9,  # SH/learned basis size; in SH case, square number
+        basis_reso: int = 16,  # Learned basis resolution (x^3 embedding grid)
+        use_z_order : bool=False,
+        use_sphere_bound : bool=False,
         device: Union[torch.device, str] = "cpu",
     ):
         super().__init__()
-
-        assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
+        self.use_learned_basis = use_learned_basis
+        if not use_learned_basis:
+            assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
         assert (
             basis_dim >= 1 and basis_dim <= MAX_SH_BASIS
         ), f"basis_dim 1-{MAX_SH_BASIS} supported"
@@ -366,11 +385,29 @@ class SparseGrid(nn.Module):
         self.density_data = nn.Parameter(
             torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
         )
+        # Called sh for legacy reasons, but it's just the coeffients for whatever
+        # representation
         self.sh_data = nn.Parameter(
             torch.zeros(
                 self.capacity, self.basis_dim * 3, dtype=torch.float32, device=device
             )
         )
+
+        if use_learned_basis:
+            # Unit sphere embedded in a cube
+            self.basis_data = nn.Parameter(
+                torch.zeros(
+                    basis_reso, basis_reso, basis_reso,
+                    self.basis_dim, dtype=torch.float32, device=device
+                )
+            )
+        else:
+            self.basis_data = nn.Parameter(
+                torch.zeros(
+                    (0,), dtype=torch.float32, device=device
+                ),
+                requires_grad=False
+            )
 
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
@@ -383,9 +420,18 @@ class SparseGrid(nn.Module):
     @property
     def data_dim(self):
         """
-        Get the number of channels in the data (data.size(1))
+        Get the number of channels in the data, including color + density
+        (similar to svox 1)
         """
         return self.sh_data.size(1) + 1
+
+    @property
+    def basis_reso(self):
+        """
+        Return the resolution of the learned spherical function data,
+        or 0 if only using SH
+        """
+        return self.basis_data.size(0) if self.use_learned_basis else 0
 
     @property
     def shape(self):
@@ -610,6 +656,7 @@ class SparseGrid(nn.Module):
             return _VolumeRenderFunction.apply(
                 self.density_data,
                 self.sh_data,
+                self.basis_data,
                 self._to_cpp(),
                 rays._to_cpp(),
                 self.opt._to_cpp(randomize=randomize),
@@ -639,7 +686,7 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for fused"
         assert rays.is_cuda
-        grad_density, grad_sh = self._get_data_grads()
+        grad_density, grad_sh, grad_basis = self._get_data_grads()
         rgb_out = torch.zeros_like(rgb_gt)
         self.sparse_grad_indexer: torch.Tensor = _C.volume_render_cuvol_fused(
             self._to_cpp(),
@@ -649,6 +696,7 @@ class SparseGrid(nn.Module):
             rgb_out,
             grad_density,
             grad_sh,
+            grad_basis,
         )
         self.sparse_sh_grad_indexer = self.sparse_grad_indexer.clone()
         return rgb_out
@@ -671,6 +719,7 @@ class SparseGrid(nn.Module):
             return _VolumeRenderImageFunction.apply(
                 self.density_data,
                 self.sh_data,
+                self.basis_data,
                 self._to_cpp(),
                 camera._to_cpp(),
                 self.opt._to_cpp(randomize=randomize),
@@ -896,13 +945,18 @@ class SparseGrid(nn.Module):
         Save to a path
         """
         save_fn = np.savez_compressed if compress else np.savez
+        data = {
+            "radius":self.radius.numpy(),
+            "center":self.center.numpy(),
+            "links":self.links.cpu().numpy(),
+            "density_data":self.density_data.data.cpu().numpy(),
+            "sh_data":self.sh_data.data.cpu().numpy().astype(np.float16),
+        }
+        if self.use_learned_basis:
+            data['basis_data'] = self.basis_data.data.cpu().numpy()
         save_fn(
             path,
-            radius=self.radius.numpy(),
-            center=self.center.numpy(),
-            links=self.links.cpu().numpy(),
-            density_data=self.density_data.data.cpu().numpy(),
-            sh_data=self.sh_data.data.cpu().numpy().astype(np.float16),
+            **data
         )
 
     @classmethod
@@ -930,6 +984,7 @@ class SparseGrid(nn.Module):
             basis_dim=basis_dim,
             use_z_order=False,
             device="cpu",
+            use_learned_basis=False
         )
         if sh_data.dtype != np.float32:
             sh_data = sh_data.astype(np.float32)
@@ -941,6 +996,12 @@ class SparseGrid(nn.Module):
         grid.density_data = nn.Parameter(density_data)
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.sh_data.size(0)
+
+        # Maybe load basis_data
+        if "basis_data" in z.keys():
+            basis_data = torch.from_numpy(z.f.basis_data).to(device=device)
+            grid.use_learned_basis = True
+            grid.basis_data = nn.Parameter(basis_data)
         return grid
 
     def to_svox1(self, device: Union[torch.device, str, None] = None):
@@ -1208,6 +1269,8 @@ class SparseGrid(nn.Module):
             gspec._offset = self._offset * gsz - 0.5
             gspec._scaling = self._scaling * gsz
         gspec.basis_dim = self.basis_dim
+        gspec.use_learned_basis = self.use_learned_basis
+        gspec.basis_data = self.basis_data
         return gspec
 
     def _grid_size(self):
@@ -1215,17 +1278,20 @@ class SparseGrid(nn.Module):
 
     def _get_data_grads(self):
         ret = []
-        for subitem in ["density_data", "sh_data"]:
+        for subitem in ["density_data", "sh_data", "basis_data"]:
             param = self.__getattr__(subitem)
-            if (
-                not hasattr(param, "grad")
-                or param.grad is None
-                or param.grad.shape != param.data.shape
-            ):
-                if hasattr(param, "grad"):
-                    del param.grad
+            if not param.requires_grad:
+                ret.append(torch.zeros_like(param.data))
+            else:
+                if (
+                    not hasattr(param, "grad")
+                    or param.grad is None
+                    or param.grad.shape != param.data.shape
+                ):
+                    if hasattr(param, "grad"):
+                        del param.grad
                     param.grad = torch.zeros_like(param.data)
-            ret.append(param.grad)
+                ret.append(param.grad)
         return ret
 
     def _get_sparse_grad_indexer(self):

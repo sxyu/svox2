@@ -18,7 +18,7 @@
 #define CUDA_CHECK_ERRORS \
     cudaError_t err = cudaGetLastError(); \
     if (err != cudaSuccess) \
-            printf("Error in svox.%s : %s\n", __FUNCTION__, cudaGetErrorString(err))
+            printf("Error in svox2.%s : %s\n", __FUNCTION__, cudaGetErrorString(err))
 
 #define CUDA_MAX_THREADS at::cuda::getCurrentDeviceProperties()->maxThreadsPerBlock
 
