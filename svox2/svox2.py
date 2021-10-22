@@ -1390,3 +1390,6 @@ class SparseGrid(nn.Module):
         samples = F.grid_sample(basis_data, dirs[None, None, None], mode='bilinear', padding_mode='zeros', align_corners=True)
         samples = samples[0, :, 0, 0, :].permute([1, 0])
         return samples
+
+    def _init_learned_bases(self):
+        pass

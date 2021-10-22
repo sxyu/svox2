@@ -16,8 +16,9 @@ import gc
 import numpy as np
 import math
 import argparse
+import cv2
 from util.dataset import Dataset
-from util.util import Timing, get_expon_lr_func
+from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -37,6 +38,8 @@ group.add_argument('--init_reso', type=int, default=256,
                    help='INITIAL grid resolution')
 group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
+group.add_argument('--basis_reso', type=int, default=32,
+                   help='basis grid resolution')
 group.add_argument('--sh_dim', type=int, default=9, help='learned basis dimensions (at most 10)')
 group.add_argument('--scene_scale', type=float, default=
                            2/3,
@@ -66,7 +69,7 @@ group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
 group.add_argument('--lr_sh', type=float, default=#2e6,
-                    1e-3,
+                    1e-2,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=#2e6
@@ -80,14 +83,16 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                    1e-3,
+                    1e-4,
+                    #  1e-5,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
                       default=#2e6
-                      1e-3
+                      #  1e-3
+                      1e-5
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
-group.add_argument('--lr_basis_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_basis_delay_steps', type=int, default=15000, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
 
@@ -104,9 +109,9 @@ group.add_argument('--eval_every', type=int, default=1,
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
 group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
-group.add_argument('--init_basis_mean', type=float, default=1.0,
+group.add_argument('--init_basis_mean', type=float, default=0.5,
                    help='initialization learned basis std')
-group.add_argument('--init_basis_std', type=float, default=0.1,
+group.add_argument('--init_basis_std', type=float, default=0.01,
                    help='initialization learned basis std')
 
 
@@ -144,7 +149,7 @@ group.add_argument('--tv_sparsity', type=float, default=
 group.add_argument('--lambda_tv_sh', type=float, default=0.0)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_basis', type=float, default=1e-5)
+group.add_argument('--lambda_tv_basis', type=float, default=0.0)
 
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
@@ -181,11 +186,13 @@ grid = svox2.SparseGrid(reso=reso,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
                         device=device,
-                        use_sphere_bound=args.use_sphere_bound)
+                        use_sphere_bound=args.use_sphere_bound,
+                        basis_reso=args.basis_reso)
 grid.sh_data.data[:] = args.init_rgb
 grid.density_data.data[:] = args.init_sigma
 grid.basis_data.data.normal_(mean=args.init_basis_mean, std=args.init_basis_std)
-grid.basis_data.data[..., 0] = args.init_basis_mean  # DC init
+#  grid.basis_data.data[..., 0] = 0.5  # DC init
+#  grid.basis_data.data[..., 1:] *= 0.1  # Hack
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
@@ -250,12 +257,32 @@ for epoch_id in range(args.n_epochs):
                 if i % img_save_interval == 0:
                     summary_writer.add_image(f'test/image_{img_id:04d}',
                             rgb_pred_test.cpu(), global_step=gstep_id_base, dataformats='HWC')
+
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
                 psnr = -10.0 * math.log10(mse_num)
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
                 n_images_gen += 1
+
+            # Add spherical map visualization
+            EQ_RESO = 256
+            eq_dirs = generate_dirs_equirect(EQ_RESO * 2, EQ_RESO)
+            eq_dirs = torch.from_numpy(eq_dirs).to(device=device).view(-1, 3)
+
+            sphfuncs = grid._eval_learned_bases(eq_dirs).view(EQ_RESO, EQ_RESO*2, -1)
+            sphfuncs = sphfuncs.permute([2, 0, 1]).cpu().numpy()
+            
+            stats = [(sphfunc.min(), sphfunc.mean(), sphfunc.max())
+                    for sphfunc in sphfuncs]
+            sphfuncs_cmapped = [viridis_cmap(sphfunc) for sphfunc in sphfuncs]
+            for im, (minv, meanv, maxv) in zip(sphfuncs_cmapped, stats):
+                cv2.putText(im, f"{minv=:.4f} {meanv=:.4f} {maxv=:.4f}", (10, 20),
+                            0, 0.5, [255, 0, 0])
+            sphfuncs_cmapped = np.concatenate(sphfuncs_cmapped, axis=0)
+            summary_writer.add_image(f'test/spheric',
+                    sphfuncs_cmapped, global_step=gstep_id_base, dataformats='HWC')
+            # END add spherical map visualization
 
             stats_test['mse'] /= n_images_gen
             stats_test['psnr'] /= n_images_gen
@@ -318,6 +345,7 @@ for epoch_id in range(args.n_epochs):
                 summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
+                summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
 
                 if args.weight_decay_sh < 1.0:
                     grid.sh_data.data *= args.weight_decay_sigma
