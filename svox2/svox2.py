@@ -123,7 +123,6 @@ class _SampleGridAutogradFunction(autograd.Function):
         ctx,
         data_density: torch.Tensor,
         data_sh: torch.Tensor,
-        data_basis: torch.Tensor,
         grid,
         points: torch.Tensor,
     ):
@@ -138,7 +137,6 @@ class _SampleGridAutogradFunction(autograd.Function):
         (points,) = ctx.saved_tensors
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
-        grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
         _C.sample_grid_backward(
             ctx.grid,
             points,
@@ -146,16 +144,13 @@ class _SampleGridAutogradFunction(autograd.Function):
             grad_out_sh.contiguous(),
             grad_density_grid,
             grad_sh_grid,
-            grad_basis,
         )
         if not ctx.needs_input_grad[0]:
             grad_density_grid = None
         if not ctx.needs_input_grad[1]:
             grad_sh_grid = None
-        if not ctx.needs_input_grad[2]:
-            grad_basis = None
 
-        return grad_density_grid, grad_sh_grid, grad_basis, None, None
+        return grad_density_grid, grad_sh_grid, None, None
 
 
 class _VolumeRenderFunction(autograd.Function):
@@ -214,6 +209,7 @@ class _VolumeRenderImageFunction(autograd.Function):
         ctx,
         data_density: torch.Tensor,
         data_sh: torch.Tensor,
+        data_basis: torch.Tensor,
         grid,
         cam,
         opt,
@@ -234,6 +230,7 @@ class _VolumeRenderImageFunction(autograd.Function):
         cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_image_backward"]
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
         # TODO save the sparse mask
         sparse_mask = cu_fn(
             ctx.grid,
@@ -243,13 +240,16 @@ class _VolumeRenderImageFunction(autograd.Function):
             color_cache,
             grad_density_grid,
             grad_sh_grid,
+            grad_basis,
         )
         ctx.grid = ctx.cam = ctx.opt = None
         if not ctx.needs_input_grad[0]:
             grad_density_grid = None
         if not ctx.needs_input_grad[1]:
             grad_sh_grid = None
-        return grad_density_grid, grad_sh_grid, None, None, None, None
+        if not ctx.needs_input_grad[2]:
+            grad_basis = None
+        return grad_density_grid, grad_sh_grid, grad_basis, None, None, None, None
 
 
 class _TotalVariationFunction(autograd.Function):
@@ -416,6 +416,7 @@ class SparseGrid(nn.Module):
         self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
+        self.basis_rms: Optional[torch.Tensor] = None
 
     @property
     def data_dim(self):
@@ -1093,6 +1094,13 @@ class SparseGrid(nn.Module):
         return _TotalVariationFunction.apply(
             self.sh_data, self.links, start_dim, end_dim, logalpha, logalpha_delta
         )
+        
+    def tv_basis(self):
+        bd = self.basis_data
+        return torch.mean(torch.sqrt(1e-5 +
+                    (bd[:-1, :-1, 1:] - bd[:-1, :-1, :-1]) ** 2 +
+                    (bd[:-1, 1:, :-1] - bd[:-1, :-1, :-1]) ** 2 +
+                    (bd[1:, :-1, :-1] - bd[:-1, :-1, :-1]) ** 2).sum(dim=-1))
 
     def inplace_tv_grad(self, grad: torch.Tensor,
                         scaling: float = 1.0,
@@ -1165,81 +1173,107 @@ class SparseGrid(nn.Module):
                     grad)
             self.sparse_sh_grad_indexer = None
 
-    def rmsprop_density_step(self, beta: float, lr: float, epsilon: float = 1e-8):
+    def inplace_tv_basis_grad(
+        self,
+        grad: torch.Tensor,
+        scaling: float = 1.0
+    ):
+        bd = self.basis_data
+        tv_val = torch.mean(torch.sqrt(1e-5 +
+                    (bd[:-1, :-1, 1:] - bd[:-1, :-1, :-1]) ** 2 +
+                    (bd[:-1, 1:, :-1] - bd[:-1, :-1, :-1]) ** 2 +
+                    (bd[1:, :-1, :-1] - bd[:-1, :-1, :-1]) ** 2).sum(dim=-1))
+        tv_val_scaled = tv_val * scaling
+        tv_val_scaled.backward()
+
+    def optim_density_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+                             optim : str='rmsprop'):
         """
-        Execute RMSprop step on density
+        Execute RMSprop or sgd step on density
         """
         assert (
             _C is not None and self.sh_data.is_cuda
-        ), "CUDA extension is currently required for rmsprop_step"
+        ), "CUDA extension is currently required for optimizers"
 
-        if (
-            self.density_rms is None
-            or self.density_rms.shape != self.density_data.shape
-        ):
-            del self.density_rms
-            self.density_rms = torch.zeros_like(self.density_data.data)
-        _C.rmsprop_step(
-            self.density_data.data,
-            self.density_rms,
-            self.density_data.grad,
-            self._get_sparse_grad_indexer(),
-            beta,
-            lr,
-            epsilon,
-        )
-
-    def rmsprop_sh_step(self, beta: float, lr: float, epsilon: float = 1e-8):
-        """
-        Execute RMSprop step on SH
-        """
-        assert (
-            _C is not None and self.sh_data.is_cuda
-        ), "CUDA extension is currently required for rmsprop_step"
-
-        if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
-            del self.sh_rms
-            self.sh_rms = torch.zeros_like(self.sh_data.data)
         self._maybe_convert_sparse_grad_indexer()
-        _C.rmsprop_step(
-            self.sh_data.data,
-            self.sh_rms,
-            self.sh_data.grad,
-            self._get_sparse_sh_grad_indexer(),
-            beta,
-            lr,
-            epsilon,
-        )
+        if optim == 'rmsprop':
+            if (
+                self.density_rms is None
+                or self.density_rms.shape != self.density_data.shape
+            ):
+                del self.density_rms
+                self.density_rms = torch.zeros_like(self.density_data.data)
+            _C.rmsprop_step(
+                self.density_data.data,
+                self.density_rms,
+                self.density_data.grad,
+                self._get_sparse_grad_indexer(),
+                beta,
+                lr,
+                epsilon,
+            )
+        elif optim == 'sgd':
+            _C.sgd_step(
+                self.density_data.data,
+                self.density_data.grad,
+                self._get_sparse_grad_indexer(),
+                lr,
+            )
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
 
-    def sgd_density_step(self, lr: float):
+    def optim_sh_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+                      optim: str = 'rmsprop'):
         """
-        Execute SGD step on density and zero the gradient
+        Execute RMSprop/SGD step on SH
         """
         assert (
             _C is not None and self.sh_data.is_cuda
-        ), "CUDA extension is currently required for sgd_step"
-        self._maybe_convert_sparse_grad_indexer()
-        _C.sgd_step(
-            self.density_data.data,
-            self.density_data.grad,
-            self._get_sparse_grad_indexer(),
-            lr,
-        )
+        ), "CUDA extension is currently required for optimizers"
 
-    def sgd_sh_step(self, lr: float):
+        if optim == 'rmsprop':
+            self._maybe_convert_sparse_sh_grad_indexer()
+            if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
+                del self.sh_rms
+                self.sh_rms = torch.zeros_like(self.sh_data.data)
+            _C.rmsprop_step(
+                self.sh_data.data,
+                self.sh_rms,
+                self.sh_data.grad,
+                self._get_sparse_sh_grad_indexer(),
+                beta,
+                lr,
+                epsilon,
+            )
+        elif optim == 'sgd':
+            _C.sgd_step(
+                self.sh_data.data, self.sh_data.grad, self._get_sparse_sh_grad_indexer(), lr
+            )
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+
+    def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+                         optim: str = 'rmsprop'):
         """
-        Execute SGD step on SH and zero the gradient
+        Execute RMSprop/SGD step on SH
         """
         assert (
             _C is not None and self.sh_data.is_cuda
-        ), "CUDA extension is currently required for rmsprop_step"
+        ), "CUDA extension is currently required for optimizers"
 
-        if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
-            del self.sh_rms
-            self.sh_rms = torch.zeros_like(self.sh_data.data)
-        _C.sgd_step(
-            self.sh_data.data, self.sh_data.grad, self._get_sparse_sh_grad_indexer(), lr
-        )
+        if optim == 'rmsprop':
+            if self.basis_rms is None or self.basis_rms.shape != self.basis_data.shape:
+                del self.basis_rms
+                self.basis_rms = torch.zeros_like(self.basis_data.data)
+            self.basis_rms.mul_(beta).addcmul_(self.basis_data.grad, self.basis_data.grad, value = 1.0 - beta)
+            denom = self.basis_rms.sqrt().add_(epsilon)
+            self.basis_data.data.addcdiv_(self.basis_data.grad, denom, value=-lr)
+        elif optim == 'sgd':
+            self.basis_data.grad.mul_(lr)
+            self.basis_data.data -= self.basis_data.grad
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+        self.basis_data.grad.zero_()
 
     def __repr__(self):
         return (
