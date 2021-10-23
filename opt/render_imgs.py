@@ -44,6 +44,7 @@ with torch.no_grad():
         cam = svox2.Camera(c2w, dset.focal, dset.focal,
                            dset.w, dset.h)
         im = grid.volume_render_image(cam, use_kernel=True)
+        im.clamp_(0.0, 1.0)
         im_gt = dset.gt[img_id].to(device=device)
         mse = (im - im_gt) ** 2
         #  all_rgbs = []

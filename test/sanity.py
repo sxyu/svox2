@@ -13,7 +13,8 @@ g.opt.stop_thresh = 0.0
 
 g.sh_data.data.normal_()
 g.density_data.data[..., 0] = 1.5
-g.sh_data.data[..., 0] += 1.0
+g.sh_data.data[..., 0] = 0.5
+g.sh_data.data[..., 1:] = 0.0
 g.basis_data.data.normal_()
 g.basis_data.data *= 10.0
 

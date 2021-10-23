@@ -242,3 +242,33 @@ def memlog(device='cuda'):
                             obj.size(), type(obj))
         except:
             pass
+
+
+def spher2cart(theta : torch.Tensor, phi : torch.Tensor):
+    """Convert spherical coordinates into Cartesian coordinates on unit sphere."""
+    x = torch.sin(theta) * torch.cos(phi)
+    y = torch.sin(theta) * torch.sin(phi)
+    z = torch.cos(theta)
+    return torch.stack([x, y, z], dim=-1)
+
+def eval_sg_at_dirs(sg_lambda : torch.Tensor, sg_mu : torch.Tensor, dirs : torch.Tensor):
+    """
+    Evaluate spherical Gaussian functions at unit directions
+    using learnable SG basis,
+    without taking linear combination
+    Works with torch.
+    ... Can be 0 or more batch dimensions.
+    N is the number of SG basis we use.
+    :math:`Output = \sigma_{i}{exp ^ {\lambda_i * (\dot(\mu_i, \dirs) - 1)}`
+
+    :param sg_lambda: The sharpness of the SG lobes. (N), positive
+    :param sg_mu: The directions of the SG lobes. (N, 3), unit vector
+    :param dirs: jnp.ndarray unit directions (..., 3)
+
+    :return: (..., N)
+    """
+    product = torch.einsum(
+        "ij,...j->...i", sg_mu, dirs)  # [..., N]
+    basis = torch.exp(torch.einsum(
+        "i,...i->...i", sg_lambda, product - 1))  # [..., N]
+    return basis

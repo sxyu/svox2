@@ -66,10 +66,10 @@ __device__ __inline__ void transform_coord(float* __restrict__ point,
     point[2] = fmaf(point[2], scaling[2], offset[2]); // a*b + c
 }
 
+// Linear interp
 // Subtract and fused multiply-add
 // (1-w) a + w b
 template<class T>
 __device__ __inline__ T lerp(T a, T b, T w) {
     return fmaf(w, b - a, a);
 }
-// #define lerp(a, b, w)

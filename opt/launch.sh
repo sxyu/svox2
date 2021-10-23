@@ -1,5 +1,4 @@
 #!/bin/bash
-conda activate plenoctree
 
 echo Launching experiment $1
 echo GPU $2

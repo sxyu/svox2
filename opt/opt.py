@@ -83,13 +83,13 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                    1e-4,
+                    1e-3,
                     #  1e-5,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
                       default=#2e6
-                      #  1e-3
-                      1e-5
+                      1e-4
+                      #  1e-6
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
 group.add_argument('--lr_basis_delay_steps', type=int, default=15000, help="Reverse cosine steps (0 means disable)")
@@ -107,12 +107,11 @@ group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
 
 group = parser.add_argument_group("initialization")
-group.add_argument('--init_rgb', type=float, default=0.0, help='initialization rgb (pre-sigmoid)')
 group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
-group.add_argument('--init_basis_mean', type=float, default=0.5,
-                   help='initialization learned basis std')
-group.add_argument('--init_basis_std', type=float, default=0.01,
-                   help='initialization learned basis std')
+#  group.add_argument('--init_basis_mean', type=float, default=0.5,
+#                     help='initialization learned basis std')
+#  group.add_argument('--init_basis_std', type=float, default=0.01,
+#                     help='initialization learned basis std')
 
 
 group = parser.add_argument_group("misc experiments")
@@ -138,17 +137,17 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=0.0) #1e-4)
+group.add_argument('--lambda_tv', type=float, default=1e-4)
                     #  1e-3)
 group.add_argument('--tv_sparsity', type=float, default=
                         #  0.001)
                         0.01)
                         #  1.0)
 
-group.add_argument('--lambda_sparsity', type=float, default=1e-5)
+group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=0.0) # 1e-4)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-4)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -190,11 +189,14 @@ grid = svox2.SparseGrid(reso=reso,
                         device=device,
                         use_sphere_bound=args.use_sphere_bound,
                         basis_reso=args.basis_reso)
-grid.sh_data.data[:] = args.init_rgb
+# DC -> gray; mind the SH scaling!
+grid.sh_data.data[..., 0] = 0.5 if grid.use_learned_basis else 1.772453850905516
+# Higher order -> 0
+grid.sh_data.data[..., 1:] = 0.0
 grid.density_data.data[:] = args.init_sigma
-grid.basis_data.data.normal_(mean=args.init_basis_mean, std=args.init_basis_std)
-#  grid.basis_data.data[..., 0] = 0.5  # DC init
-#  grid.basis_data.data[..., 1:] *= 0.1  # Hack
+
+#  grid.basis_data.data.normal_(mean=args.init_basis_mean, std=args.init_basis_std)
+grid.reinit_learned_bases_random_rbf(upper_hemi=True)
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
@@ -257,8 +259,10 @@ for epoch_id in range(args.n_epochs):
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
+                    img_pred = rgb_pred_test.cpu()
+                    img_pred.clamp_max_(1.0)
                     summary_writer.add_image(f'test/image_{img_id:04d}',
-                            rgb_pred_test.cpu(), global_step=gstep_id_base, dataformats='HWC')
+                            img_pred, global_step=gstep_id_base, dataformats='HWC')
 
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
@@ -274,7 +278,7 @@ for epoch_id in range(args.n_epochs):
 
             sphfuncs = grid._eval_learned_bases(eq_dirs).view(EQ_RESO, EQ_RESO*2, -1)
             sphfuncs = sphfuncs.permute([2, 0, 1]).cpu().numpy()
-            
+
             stats = [(sphfunc.min(), sphfunc.mean(), sphfunc.max())
                     for sphfunc in sphfuncs]
             sphfuncs_cmapped = [viridis_cmap(sphfunc) for sphfunc in sphfuncs]

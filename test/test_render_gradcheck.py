@@ -19,7 +19,9 @@ grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
 
 print(grid.sh_data.shape)
-grid.sh_data.data.normal_()
+#  grid.sh_data.data.normal_()
+grid.sh_data.data[..., 0] = 0.5
+grid.sh_data.data[..., 1:].normal_(std=0.01)
 grid.density_data.data[:] = 0.1
 grid.basis_data.data.normal_()
 grid.basis_data.data += 1.0

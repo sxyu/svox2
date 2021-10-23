@@ -3,6 +3,8 @@ from .utils import (
     eval_sh_bases,
     gen_morton,
     is_pow2,
+    spher2cart,
+    eval_sg_at_dirs,
     MAX_SH_BASIS,
     _get_c_extension,
 )
@@ -419,7 +421,7 @@ class SparseGrid(nn.Module):
             self.basis_data = nn.Parameter(
                 torch.zeros(
                     basis_reso, basis_reso, basis_reso,
-                    self.basis_dim, dtype=torch.float32, device=device
+                    self.basis_dim - 1, dtype=torch.float32, device=device
                 )
             )
         else:
@@ -641,8 +643,9 @@ class SparseGrid(nn.Module):
             )
             # [B', 3, n_sh_coeffs]
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.sigmoid(
-                torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1)
+            rgb = torch.clamp_min(
+                torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1),
+                0.0,
             )  # [B', 3]
             rgb = weight[:, None] * rgb[:, :3]
 
@@ -1127,7 +1130,7 @@ class SparseGrid(nn.Module):
         return _TotalVariationFunction.apply(
             self.sh_data, self.links, start_dim, end_dim, logalpha, logalpha_delta
         )
-        
+
     def tv_basis(self):
         bd = self.basis_data
         return torch.mean(torch.sqrt(1e-5 +
@@ -1162,7 +1165,7 @@ class SparseGrid(nn.Module):
                     logalpha, logalpha_delta,
                     grad)
             self.sparse_grad_indexer = None
-            
+
     def inplace_sparsity_grad(self, grad: torch.Tensor,
                               scaling: float = 1.0,
                               sparse_frac: float = 1.0,
@@ -1291,8 +1294,8 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for optimizers"
 
+        self._maybe_convert_sparse_sh_grad_indexer()
         if optim == 'rmsprop':
-            self._maybe_convert_sparse_sh_grad_indexer()
             if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
                 del self.sh_rms
                 self.sh_rms = torch.zeros_like(self.sh_data.data)
@@ -1449,7 +1452,40 @@ class SparseGrid(nn.Module):
         basis_data = self.basis_data.permute([3, 2, 1, 0])[None]
         samples = F.grid_sample(basis_data, dirs[None, None, None], mode='bilinear', padding_mode='zeros', align_corners=True)
         samples = samples[0, :, 0, 0, :].permute([1, 0])
+        dc = torch.ones_like(samples[:, :1])
+        samples = torch.cat([dc, samples], dim=-1)
         return samples
 
-    def _init_learned_bases(self):
-        pass
+    def reinit_learned_bases_random_rbf(self, sg_lambda: float = 1.0,
+                                        sg_sigma: float = 0.25,
+                                        upper_hemi: bool = False):
+        """
+        Initialize learned basis using random spherical Gaussians
+        with concentration parameter sg_lambda (max magnitude) and
+        normalization constant sg_sigma
+
+        Spherical Gaussians formula for reference:
+        :math:`Output = \sigma_{i}{exp ^ {\lambda_i * (\dot(\mu_i, \dirs) - 1)}`
+        """
+        n_comps = self.basis_dim - 1
+        # Low-disparity direction samping
+        u1 = torch.arange(0, n_comps) + torch.rand((n_comps,))
+        u1 /= n_comps
+        u1 = u1[torch.randperm(n_comps)]
+        u2 = torch.arange(0, n_comps) + torch.rand((n_comps,))
+        u2 /= n_comps
+        sg_dirvecs = spher2cart(u1 * np.pi, u2 * np.pi * 2)
+        if upper_hemi:
+            sg_dirvecs[..., 2] = -torch.abs(sg_dirvecs[..., 2])
+            
+        sg_lambdas = torch.full_like(sg_dirvecs[:, 0], fill_value=sg_lambda)
+
+        basis_reso = self.basis_data.size(0)
+        ax = torch.linspace(-1.0, 1.0, basis_reso, dtype=torch.float32)
+        X, Y, Z = torch.meshgrid(ax, ax, ax)
+        points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
+        points /= points.norm(dim=-1).unsqueeze(-1)
+        sg_vals = eval_sg_at_dirs(sg_lambdas, sg_dirvecs, points).view(
+                basis_reso, basis_reso, basis_reso, n_comps) * sg_sigma
+
+        self.basis_data.data[:] = sg_vals.to(device=self.basis_data.device)

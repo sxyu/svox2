@@ -380,7 +380,7 @@ __global__ void sparsity_grad_kernel(
     const int y = xy % links.size(1);
     const int x = xy / links.size(1);
 
-    const size_t lnk = links[x][y][z];
+    const int32_t lnk = links[x][y][z];
     if (lnk >= 0) {
         grad_data[lnk] += scale * delta * expf(-fmaxf(data.data()[lnk], 0.f) * delta);
     }

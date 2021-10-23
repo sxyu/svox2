@@ -90,7 +90,7 @@ __device__ __inline__ void trace_ray_cuvol(
 
             float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            lane_color, lane_colorgrp_id == 0);
-            outv += weight * _SIGMOID(lane_color_total);
+            outv += weight * fmaxf(lane_color_total, 0.f);  // Clamp to [+0, infty)
             if (_EXP(light_intensity) < opt.stop_thresh) {
                 break;
             }
@@ -165,28 +165,27 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            weighted_lane_color, lane_colorgrp_id == 0);
-            float sigmoid = _SIGMOID(lane_color_total);
+            float total_color = fmaxf(lane_color_total, 0.f);
+            float color_in_01 = total_color == lane_color_total;
+            total_color *= gout; // Clamp to [+0, 1]
 
-            float total_color = sigmoid * gout;
             float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim);
             total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
             total_color += total_color_c1;
 
-            sigmoid = __shfl_sync((1U << grid.sh_data_dim) - 1, sigmoid, lane_colorgrp * grid.basis_dim);
-            const float grad_common = weight * sigmoid *
-                                (1.f - sigmoid) * gout;
+            color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim);
+            const float grad_common = weight * color_in_01 * gout;
             const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common;
 
             float curr_grad_sphfunc = lane_color * grad_common;
             const float curr_grad_up2 = __shfl_down_sync((1U << grid.sh_data_dim) - 1,
-                                                curr_grad_sphfunc, 2 * grid.basis_dim);
+                    curr_grad_sphfunc, 2 * grid.basis_dim);
             curr_grad_sphfunc += __shfl_down_sync((1U << grid.sh_data_dim) - 1,
-                                            curr_grad_sphfunc, grid.basis_dim);
+                    curr_grad_sphfunc, grid.basis_dim);
             curr_grad_sphfunc += curr_grad_up2;
             if (lane_id < grid.basis_dim) {
                 grad_sphfunc_val[lane_id] += curr_grad_sphfunc;
             }
-
 
             accum -= weight * total_color;
             float curr_grad_sigma = ray.world_step * (
