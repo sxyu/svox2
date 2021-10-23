@@ -138,15 +138,17 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=
-                    1e-2)
+group.add_argument('--lambda_tv', type=float, default=0.0) #1e-4)
                     #  1e-3)
 group.add_argument('--tv_sparsity', type=float, default=
                         #  0.001)
                         0.01)
                         #  1.0)
 
-group.add_argument('--lambda_tv_sh', type=float, default=0.0)
+group.add_argument('--lambda_sparsity', type=float, default=1e-5)
+group.add_argument('--sparsity_sparsity', type=float, default=0.01)
+
+group.add_argument('--lambda_tv_sh', type=float, default=0.0) # 1e-4)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -336,6 +338,10 @@ for epoch_id in range(args.n_epochs):
                     with torch.no_grad():
                         tv = grid.tv()
                     summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
+                if args.lambda_sparsity > 0.0:
+                    with torch.no_grad():
+                        sparsity = grid.sparsity()
+                    summary_writer.add_scalar("loss_sparsity", sparsity, global_step=gstep_id)
                 if args.lambda_tv_sh > 0.0:
                     with torch.no_grad():
                         tv_sh = grid.tv_color()
@@ -352,11 +358,16 @@ for epoch_id in range(args.n_epochs):
                 if args.weight_decay_sigma < 1.0:
                     grid.density_data.data *= args.weight_decay_sh
 
-            # Apply TV
+            # Apply TV/Sparsity regularizers
             if args.lambda_tv > 0.0:
                 grid.inplace_tv_grad(grid.density_data.grad,
                         scaling=args.lambda_tv,
                         sparse_frac=args.tv_sparsity)
+            if args.lambda_sparsity > 0.0:
+                # Overkill
+                grid.inplace_sparsity_grad(grid.density_data.grad,
+                        scaling=args.lambda_sparsity,
+                        sparse_frac=args.sparsity_sparsity)
             if args.lambda_tv_sh > 0.0:
                 grid.inplace_tv_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_tv_sh,
