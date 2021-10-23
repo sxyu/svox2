@@ -28,13 +28,16 @@ Tensor volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
                                           RenderOptions &, Tensor, Tensor,
                                           Tensor, Tensor);
 
-// Returns MSE
-
 Tensor dilate(Tensor);
 Tensor tv(Tensor, Tensor, int, int, bool, float);
 void tv_grad(Tensor, Tensor, int, int, float, bool, float, Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, Tensor);
+
+Tensor sparsity(Tensor, Tensor, float);
+void sparsity_grad(Tensor, Tensor, float, float, Tensor);
+void sparsity_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
+
 void grid_weight_render(Tensor, CameraSpec &, float, Tensor, Tensor, Tensor);
 
 void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float);
@@ -49,11 +52,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(volume_render_cuvol_fused);
   _REG_FUNC(volume_render_cuvol_image);
   _REG_FUNC(volume_render_cuvol_image_backward);
-  _REG_FUNC(dilate);
+
+  // Loss
   _REG_FUNC(tv);
   _REG_FUNC(tv_grad);
   _REG_FUNC(tv_grad_sparse);
+  _REG_FUNC(sparsity);
+  _REG_FUNC(sparsity_grad);
+  _REG_FUNC(sparsity_grad_sparse);
+
+  // Misc
+  _REG_FUNC(dilate);
   _REG_FUNC(grid_weight_render);
+
+  // Optimizer
   _REG_FUNC(rmsprop_step);
   _REG_FUNC(sgd_step);
 #undef _REG_FUNC

@@ -331,6 +331,88 @@ __global__ void tv_logalpha_grad_sparse_kernel(
 #undef MAYBE_ADD_SET
 }
 
+// Sparsity loss 
+// TODO: simplify this. No need to go through links...
+
+__global__ void sparsity_kernel(
+        torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        float scale,
+        size_t Q,
+        float delta,
+        // Output
+        float* __restrict__ out) {
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+
+    typedef cub::BlockReduce<float, 1024> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+
+    const int xyz = tid;
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
+
+    const float val000 = (links[x][y][z] >= 0 ?
+                          data[links[x][y][z]][0] : 0.f);
+    // Obviously 1 - ... does nothing but it's helpful for interpretation
+    const float tresult = 1.f - expf(-fmaxf(val000, 0.f) * delta);
+
+    const float bresult = BlockReduce(temp_storage).Sum(tresult);
+    if (threadIdx.x == 0) {
+        atomicAdd(out, bresult * scale);
+    }
+}
+
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void sparsity_grad_kernel(
+        const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        float scale,
+        size_t Q,
+        float delta,
+        // Output
+        float* __restrict__ grad_data) {
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int xyz = tid;
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
+
+    const size_t lnk = links[x][y][z];
+    if (lnk >= 0) {
+        grad_data[lnk] += scale * delta * expf(-fmaxf(data.data()[lnk], 0.f) * delta);
+    }
+}
+
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void sparsity_grad_sparse_kernel(
+        const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        const int32_t* __restrict__ rand_cells,
+        float scale,
+        size_t Q,
+        float delta,
+        // Output
+        bool* __restrict__ mask_out,
+        float* __restrict__ grad_data) {
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int xyz = rand_cells[tid / data.size(1)];
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
+
+    const int32_t lnk = links[x][y][z];
+    if (lnk > 0) {
+        grad_data[lnk] += scale * delta * expf(-fmaxf(data.data()[lnk], 0.0f) * delta);
+        if (mask_out != nullptr) {
+            mask_out[lnk] = true;
+        }
+    }
+}
+
 }  // namespace device
 }  // namespace
 
@@ -449,7 +531,7 @@ void tv_grad_sparse(torch::Tensor links,
     TORCH_CHECK(links.ndimension() == 3);
     TORCH_CHECK(grad_data.ndimension() == 2);
 
-    int nl = (links.size(0) - 1) * (links.size(1) - 1) * (links.size(2) - 1);
+    int nl = rand_cells.size(0);
     size_t Q = rand_cells.size(0) * size_t(end_dim - start_dim);
 
     const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
@@ -480,5 +562,105 @@ void tv_grad_sparse(torch::Tensor links,
                 (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
                 grad_data.data_ptr<float>());
     }
+    CUDA_CHECK_ERRORS;
+}
+
+torch::Tensor sparsity(torch::Tensor links, torch::Tensor data, float delta) {
+    DEVICE_GUARD(data);
+    CHECK_INPUT(data);
+    CHECK_INPUT(links);
+    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+
+    int nl = links.size(0) * links.size(1) * links.size(2);
+    size_t Q = nl;
+
+    const int cuda_n_threads = 1024;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    torch::Tensor result = torch::zeros({}, data.options());
+    device::sparsity_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            1.f / nl,
+            Q,
+            delta,
+            // Output
+            result.data_ptr<float>());
+
+    CUDA_CHECK_ERRORS;
+    return result;
+}
+
+void sparsity_grad(torch::Tensor links,
+             torch::Tensor data,
+             float scale,
+             float delta,
+             torch::Tensor grad_data) {
+    DEVICE_GUARD(data);
+    CHECK_INPUT(data);
+    CHECK_INPUT(links);
+    CHECK_INPUT(grad_data);
+    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(grad_data.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(grad_data.ndimension() == 2);
+
+    int nl = links.size(0) * links.size(1) * links.size(2);
+    size_t Q = nl;
+
+    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+
+    device::sparsity_grad_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            scale / nl,
+            Q,
+            delta,
+            // Output
+            grad_data.data_ptr<float>());
+    CUDA_CHECK_ERRORS;
+}
+
+void sparsity_grad_sparse(torch::Tensor links,
+             torch::Tensor data,
+             torch::Tensor rand_cells,
+             torch::Tensor mask_out,
+             float scale,
+             float delta,
+             torch::Tensor grad_data) {
+    DEVICE_GUARD(data);
+    CHECK_INPUT(data);
+    CHECK_INPUT(links);
+    CHECK_INPUT(grad_data);
+    CHECK_INPUT(rand_cells);
+    CHECK_INPUT(mask_out);
+    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(grad_data.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(grad_data.ndimension() == 2);
+    TORCH_CHECK(rand_cells.size(0) > 0);
+
+    int nl = rand_cells.size(0);
+    size_t Q = rand_cells.size(0);
+
+    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    device::sparsity_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            rand_cells.data_ptr<int32_t>(),
+            scale / nl,
+            Q,
+            delta,
+            // Output
+            (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
+            grad_data.data_ptr<float>());
     CUDA_CHECK_ERRORS;
 }
