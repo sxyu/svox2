@@ -90,7 +90,7 @@ __device__ __inline__ void trace_ray_cuvol(
 
             float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            lane_color, lane_colorgrp_id == 0);
-            outv += weight * __saturatef(lane_color_total);  // Clamp to [+0, 1]
+            outv += weight * __saturatef(lane_color_total + 0.5f);  // Clamp to [+0, 1]
             if (_EXP(light_intensity) < opt.stop_thresh) {
                 break;
             }
@@ -164,7 +164,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             light_intensity -= pcnt;
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                           weighted_lane_color, lane_colorgrp_id == 0);
+                                           weighted_lane_color, lane_colorgrp_id == 0) + 0.5f;
             float total_color = __saturatef(lane_color_total);
             float color_in_01 = total_color == lane_color_total;
             total_color *= gout; // Clamp to [+0, 1]

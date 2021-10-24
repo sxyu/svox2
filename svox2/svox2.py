@@ -421,7 +421,7 @@ class SparseGrid(nn.Module):
             self.basis_data = nn.Parameter(
                 torch.zeros(
                     basis_reso, basis_reso, basis_reso,
-                    self.basis_dim - 1, dtype=torch.float32, device=device
+                    self.basis_dim, dtype=torch.float32, device=device
                 )
             )
         else:
@@ -644,7 +644,7 @@ class SparseGrid(nn.Module):
             # [B', 3, n_sh_coeffs]
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
             rgb = torch.clamp(
-                torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1),
+                torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
                 0.0,
                 1.0
             )  # [B', 3]
@@ -1453,40 +1453,53 @@ class SparseGrid(nn.Module):
         basis_data = self.basis_data.permute([3, 2, 1, 0])[None]
         samples = F.grid_sample(basis_data, dirs[None, None, None], mode='bilinear', padding_mode='zeros', align_corners=True)
         samples = samples[0, :, 0, 0, :].permute([1, 0])
-        dc = torch.ones_like(samples[:, :1])
-        samples = torch.cat([dc, samples], dim=-1)
+        #  dc = torch.ones_like(samples[:, :1])
+        #  samples = torch.cat([dc, samples], dim=-1)
         return samples
 
-    def reinit_learned_bases_random_rbf(self, sg_lambda: float = 1.0,
+    def reinit_learned_bases_random_rbf(self,
+                                        init_type: str = 'sh',
+                                        sg_lambda: float = 1.0,
                                         sg_sigma: float = 0.25,
                                         upper_hemi: bool = False):
         """
-        Initialize learned basis using random spherical Gaussians
+        Initialize learned basis using either SH orrandom spherical Gaussians
         with concentration parameter sg_lambda (max magnitude) and
         normalization constant sg_sigma
 
         Spherical Gaussians formula for reference:
         :math:`Output = \sigma_{i}{exp ^ {\lambda_i * (\dot(\mu_i, \dirs) - 1)}`
         """
-        n_comps = self.basis_dim - 1
-        # Low-disparity direction samping
-        u1 = torch.arange(0, n_comps) + torch.rand((n_comps,))
-        u1 /= n_comps
-        u1 = u1[torch.randperm(n_comps)]
-        u2 = torch.arange(0, n_comps) + torch.rand((n_comps,))
-        u2 /= n_comps
-        sg_dirvecs = spher2cart(u1 * np.pi, u2 * np.pi * 2)
-        if upper_hemi:
-            sg_dirvecs[..., 2] = -torch.abs(sg_dirvecs[..., 2])
-            
-        sg_lambdas = torch.full_like(sg_dirvecs[:, 0], fill_value=sg_lambda)
+
+        init_type = init_type.lower()
+        n_comps = self.basis_data.size(-1)
 
         basis_reso = self.basis_data.size(0)
         ax = torch.linspace(-1.0, 1.0, basis_reso, dtype=torch.float32)
         X, Y, Z = torch.meshgrid(ax, ax, ax)
         points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
         points /= points.norm(dim=-1).unsqueeze(-1)
-        sg_vals = eval_sg_at_dirs(sg_lambdas, sg_dirvecs, points).view(
-                basis_reso, basis_reso, basis_reso, n_comps) * sg_sigma
 
-        self.basis_data.data[:] = sg_vals.to(device=self.basis_data.device)
+        if init_type == 'sh':
+            assert isqrt(n_comps) is not None, \
+                   "n_comps (learned basis SH init) must be a square number; maybe try SG init"
+            sph_vals = eval_sh_bases(n_comps, points)
+        elif init_type == 'sg':
+            # Low-disparity direction samping
+            u1 = torch.arange(0, n_comps) + torch.rand((n_comps,))
+            u1 /= n_comps
+            u1 = u1[torch.randperm(n_comps)]
+            u2 = torch.arange(0, n_comps) + torch.rand((n_comps,))
+            u2 /= n_comps
+            sg_dirvecs = spher2cart(u1 * np.pi, u2 * np.pi * 2)
+            if upper_hemi:
+                sg_dirvecs[..., 2] = -torch.abs(sg_dirvecs[..., 2])
+
+            sg_lambdas = torch.full_like(sg_dirvecs[:, 0], fill_value=sg_lambda)
+
+            sph_vals = eval_sg_at_dirs(sg_lambdas, sg_dirvecs, points) * sg_sigma
+
+        else:
+            raise NotImplementedError("Unsupported initialization", init_type)
+        self.basis_data.data[:] = sph_vals.view(
+                    basis_reso, basis_reso, basis_reso, n_comps).to(device=self.basis_data.device)

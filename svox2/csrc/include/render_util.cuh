@@ -235,12 +235,11 @@ __device__ __inline__ void calc_sphfunc(
             p[j] -= static_cast<float>(l[j]);
         }
 
-        out[0] = 1.f;
-        if (lane_id < grid.basis_dim && lane_id > 0) {
+        if (lane_id < grid.basis_dim) {
             out[lane_id] = trilerp_one(grid.basis_data,
-                    grid.basis_reso, grid.basis_dim - 1,
+                    grid.basis_reso, grid.basis_dim,
                     l, p,
-                    lane_id - 1);
+                    lane_id);
         }
 
     } else {
@@ -268,13 +267,13 @@ __device__ __inline__ void calc_sphfunc_backward(
         }
 
         __syncwarp((1U << grid.sh_data_dim) - 1);
-        if (lane_id < grid.basis_dim && lane_id > 0) {
+        if (lane_id < grid.basis_dim) {
             trilerp_backward_one<float, int32_t>(grad_out,
                     grid.basis_reso,
-                    grid.basis_dim - 1,
+                    grid.basis_dim,
                     l, p,
                     grad_output[lane_id],
-                    lane_id - 1);
+                    lane_id);
         }
 
     } else {

@@ -68,12 +68,12 @@ group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', 
 group.add_argument('--lr_sh', type=float, default=
                     # 2e4,
                     1e-2,
-                    #  1e-2,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=
                     # 2e3
-                    1e-4
+                    1e-5
+                    #  5e-5,
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
@@ -83,13 +83,14 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-3,
+                      1e-5,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
-                      default=1e-5
+                      default=
+                      1e-6
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
-group.add_argument('--lr_basis_delay_steps', type=int, default=0,#20000,
+group.add_argument('--lr_basis_delay_steps', type=int, default=15000,
                    help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
@@ -135,13 +136,13 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
+group.add_argument('--lambda_tv', type=float, default=1e-3)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=0.0)#1e-3)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -184,13 +185,13 @@ grid = svox2.SparseGrid(reso=reso,
                         use_sphere_bound=args.use_sphere_bound,
                         basis_reso=args.basis_reso)
 # DC -> gray; mind the SH scaling!
-grid.sh_data.data[..., 0] = 0.5 if grid.use_learned_basis else 1.772453850905516
-# Higher order -> 0
-grid.sh_data.data[..., 1:] = 0.0
+#  grid.sh_data.data[..., 0] = 0.5 if grid.use_learned_basis else 1.772453850905516
+#  # Higher order -> 0
+grid.sh_data.data[:] = 0.0
 grid.density_data.data[:] = args.init_sigma
 
-#  grid.basis_data.data.normal_(mean=args.init_basis_mean, std=args.init_basis_std)
 grid.reinit_learned_bases_random_rbf(upper_hemi=True)
+#  grid.basis_data.data.normal_(mean=0.0, std=0.01)
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
