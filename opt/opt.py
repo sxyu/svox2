@@ -60,16 +60,20 @@ group.add_argument('--lr_sigma', type=float, default=
         help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-1)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=20000, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_sigma_delay_steps', type=int, default=15000, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 
-group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='sgd', help="SH optimizer")
+group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
 group.add_argument('--lr_sh', type=float, default=
-                    2e4,
+                    # 2e4,
+                    1e-2,
+                    #  1e-2,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
-                      default=2e3
+                      default=
+                    # 2e3
+                    1e-4
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
@@ -79,10 +83,10 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-5,
+                      1e-3,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
-                      default=1e-7
+                      default=1e-5
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
 group.add_argument('--lr_basis_delay_steps', type=int, default=0,#20000,

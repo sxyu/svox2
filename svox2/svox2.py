@@ -643,9 +643,10 @@ class SparseGrid(nn.Module):
             )
             # [B', 3, n_sh_coeffs]
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.clamp_min(
+            rgb = torch.clamp(
                 torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1),
                 0.0,
+                1.0
             )  # [B', 3]
             rgb = weight[:, None] * rgb[:, :3]
 
