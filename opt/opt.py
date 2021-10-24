@@ -56,24 +56,20 @@ group.add_argument('--batch_size', type=int, default=
 # TODO: make the lr higher near the end
 group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
 group.add_argument('--lr_sigma', type=float, default=
-                                            #  1e1,
                                             2e1,
-                                            #5e1,
-                                            #5e1,#2e0,#1e8
         help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-1)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=15000, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_sigma_delay_steps', type=int, default=20000, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 
-group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
-group.add_argument('--lr_sh', type=float, default=#2e6,
-                    1e-2,
+group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='sgd', help="SH optimizer")
+group.add_argument('--lr_sh', type=float, default=
+                    2e4,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
-                      default=#2e6
-                      1e-3
+                      default=2e3
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
@@ -83,25 +79,23 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                    1e-3,
-                    #  1e-5,
+                      1e-5,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
-                      default=#2e6
-                      1e-4
-                      #  1e-6
+                      default=1e-7
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
-group.add_argument('--lr_basis_delay_steps', type=int, default=15000, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_basis_delay_steps', type=int, default=0,#20000,
+                   help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
 
-group.add_argument('--n_epochs', type=int, default=30)
+group.add_argument('--n_epochs', type=int, default=20)
 group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--upsamp_every', type=int, default=
                      3 * 12800,
                     help='upsample the grid every x iters')
-group.add_argument('--save_every', type=int, default=5,
+group.add_argument('--save_every', type=int, default=2,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
@@ -137,17 +131,13 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-4)
-                    #  1e-3)
-group.add_argument('--tv_sparsity', type=float, default=
-                        #  0.001)
-                        0.01)
-                        #  1.0)
+group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
+group.add_argument('--tv_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-4)
+group.add_argument('--lambda_tv_sh', type=float, default=0.0)#1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -237,17 +227,17 @@ for epoch_id in range(args.n_epochs):
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
             # Standard set
-            #  N_IMGS_TO_SAVE = 5
-            #  N_IMGS_TO_EVAL = 20 if epoch_id > 0 else 5
-            #  img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
-            #  img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
-            #  img_ids = range(0, dset_test.n_images, img_eval_interval)
+            N_IMGS_TO_SAVE = 5
+            N_IMGS_TO_EVAL = 20 if epoch_id > 0 else 5
+            img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
+            img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
+            img_ids = range(0, dset_test.n_images, img_eval_interval)
 
-            # Special 'very hard' specular + fuzz set
-            img_ids = [2, 5, 7, 9, 21,
-                       44, 45, 47, 49, 56,
-                       80, 88, 99, 115, 120,
-                       154]
+            #  # Special 'very hard' specular + fuzz set
+            #  img_ids = [2, 5, 7, 9, 21,
+            #             44, 45, 47, 49, 56,
+            #             80, 88, 99, 115, 120,
+            #             154]
             img_save_interval = 1
 
             n_images_gen = 0
