@@ -83,16 +83,16 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-6,
+                      1e-5,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
                       default=
                       1e-6
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
-group.add_argument('--lr_basis_delay_steps', type=int, default=0,
+group.add_argument('--lr_basis_delay_steps', type=int, default=0,#15000,
                    help="Reverse cosine steps (0 means disable)")
-group.add_argument('--lr_basis_begin_step', type=int, default=0)
+group.add_argument('--lr_basis_begin_step', type=int, default=4 * 12800)
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
 
@@ -186,8 +186,8 @@ grid = svox2.SparseGrid(reso=reso,
                         use_sphere_bound=args.use_sphere_bound,
                         basis_reso=args.basis_reso)
 # DC -> gray; mind the SH scaling!
-#  grid.sh_data.data[:] = 0.0
-grid.sh_data.data.normal_(mean=0.0, std=0.001)
+grid.sh_data.data[:] = 0.0
+#  grid.sh_data.data.normal_(mean=0.0, std=0.001)
 grid.density_data.data[:] = args.init_sigma
 
 grid.reinit_learned_bases(init_type='sh')
