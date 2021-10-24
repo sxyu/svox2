@@ -62,7 +62,7 @@ def get_expon_lr_func(lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, ma
     :return HoF which takes step as input
     """
     def helper(step):
-        if lr_init == 0.0 and lr_final == 0.0:
+        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
             # Disable this parameter
             return 0.0
         if lr_delay_steps > 0:

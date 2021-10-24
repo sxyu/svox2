@@ -643,10 +643,10 @@ class SparseGrid(nn.Module):
             )
             # [B', 3, n_sh_coeffs]
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.clamp(
+            rgb = torch.clamp_min(
                 torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
                 0.0,
-                1.0
+                #  1.0
             )  # [B', 3]
             rgb = weight[:, None] * rgb[:, :3]
 
@@ -1457,11 +1457,10 @@ class SparseGrid(nn.Module):
         #  samples = torch.cat([dc, samples], dim=-1)
         return samples
 
-    def reinit_learned_bases_random_rbf(self,
-                                        init_type: str = 'sh',
-                                        sg_lambda: float = 1.0,
-                                        sg_sigma: float = 0.25,
-                                        upper_hemi: bool = False):
+    def reinit_learned_bases(self,
+            init_type: str = 'sh',
+            sg_lambda_max: float = 1.0,
+            upper_hemi: bool = False):
         """
         Initialize learned basis using either SH orrandom spherical Gaussians
         with concentration parameter sg_lambda (max magnitude) and
@@ -1469,6 +1468,8 @@ class SparseGrid(nn.Module):
 
         Spherical Gaussians formula for reference:
         :math:`Output = \sigma_{i}{exp ^ {\lambda_i * (\dot(\mu_i, \dirs) - 1)}`
+
+        :param upper_hemi: bool, (SG only) whether to only place Gaussians in z <= 0 (note directions are flipped)
         """
 
         init_type = init_type.lower()
@@ -1485,7 +1486,7 @@ class SparseGrid(nn.Module):
                    "n_comps (learned basis SH init) must be a square number; maybe try SG init"
             sph_vals = eval_sh_bases(n_comps, points)
         elif init_type == 'sg':
-            # Low-disparity direction samping
+            # Low-disparity direction sampling
             u1 = torch.arange(0, n_comps) + torch.rand((n_comps,))
             u1 /= n_comps
             u1 = u1[torch.randperm(n_comps)]
@@ -1495,9 +1496,36 @@ class SparseGrid(nn.Module):
             if upper_hemi:
                 sg_dirvecs[..., 2] = -torch.abs(sg_dirvecs[..., 2])
 
-            sg_lambdas = torch.full_like(sg_dirvecs[:, 0], fill_value=sg_lambda)
+            # Concentration parameters (0 = DC -> infty = point)
+            sg_lambdas = torch.rand_like(sg_dirvecs[:, 0]) * sg_lambda_max
+            sg_lambdas[0] = 0.0  # Assure DC
 
-            sph_vals = eval_sg_at_dirs(sg_lambdas, sg_dirvecs, points) * sg_sigma
+            # L2-Normalization
+            sg_sigmas : np.ndarray = np.sqrt(sg_lambdas / (np.pi * (1.0 - np.exp(-4 * sg_lambdas))))
+            sg_sigmas[sg_lambdas == 0.0] = 1.0 / np.sqrt(4 * np.pi)
+            # L1-Normalization
+            #  sg_sigmas : np.ndarray = sg_lambdas / (2 * np.pi * (1.0 - np.exp(-2 * sg_lambdas)))
+            #  sg_sigmas[sg_lambdas == 0.0] = 1.0 / (2 *  (1.0 - 1.0 / np.exp(1)) * np.pi)
+            sph_vals = eval_sg_at_dirs(sg_lambdas, sg_dirvecs, points) * sg_sigmas
+        elif init_type == 'fourier':
+            # Low-disparity direction sampling
+            u1 = torch.arange(0, n_comps) + torch.rand((n_comps,))
+            u1 /= n_comps
+            u1 = u1[torch.randperm(n_comps)]
+            u2 = torch.arange(0, n_comps) + torch.rand((n_comps,))
+            u2 /= n_comps
+            fourier_dirvecs = spher2cart(u1 * np.pi, u2 * np.pi * 2)
+            fourier_freqs = torch.linspace(0.0, 2.0, n_comps + 1)[:-1]
+            fourier_freqs += torch.rand_like(fourier_freqs) * (fourier_freqs[1] - fourier_freqs[0])
+            fourier_freqs = torch.exp(fourier_freqs)
+            fourier_freqs = fourier_freqs[torch.randperm(n_comps)]
+            fourier_scale = 1.0 / torch.sqrt(2 * np.pi - torch.cos(fourier_freqs) * torch.sin(fourier_freqs) / fourier_freqs)
+            four_phases = torch.rand_like(fourier_freqs) * np.pi * 2
+
+            dots = (points[:, None] * fourier_dirvecs[None]).sum(-1)
+            dots *= fourier_freqs
+            sins = torch.sin(dots + four_phases)
+            sph_vals = sins * fourier_scale
 
         else:
             raise NotImplementedError("Unsupported initialization", init_type)

@@ -72,7 +72,7 @@ group.add_argument('--lr_sh', type=float, default=
 group.add_argument('--lr_sh_final', type=float,
                       default=
                     # 2e3
-                    1e-5
+                    5e-5
                     #  5e-5,
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
@@ -83,15 +83,16 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-5,
+                      1e-6,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
                       default=
                       1e-6
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
-group.add_argument('--lr_basis_delay_steps', type=int, default=15000,
+group.add_argument('--lr_basis_delay_steps', type=int, default=0,
                    help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_basis_begin_step', type=int, default=0)
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
 
@@ -185,13 +186,15 @@ grid = svox2.SparseGrid(reso=reso,
                         use_sphere_bound=args.use_sphere_bound,
                         basis_reso=args.basis_reso)
 # DC -> gray; mind the SH scaling!
-#  grid.sh_data.data[..., 0] = 0.5 if grid.use_learned_basis else 1.772453850905516
-#  # Higher order -> 0
-grid.sh_data.data[:] = 0.0
+#  grid.sh_data.data[:] = 0.0
+grid.sh_data.data.normal_(mean=0.0, std=0.001)
 grid.density_data.data[:] = args.init_sigma
 
-grid.reinit_learned_bases_random_rbf(upper_hemi=True)
+grid.reinit_learned_bases(init_type='sh')
+#  grid.reinit_learned_bases(init_type='fourier')
+#  grid.reinit_learned_bases(init_type='sg', upper_hemi=True)
 #  grid.basis_data.data.normal_(mean=0.0, std=0.01)
+#  grid.basis_data.data += 0.28209479177387814
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
@@ -231,18 +234,18 @@ for epoch_id in range(args.n_epochs):
         with torch.no_grad():
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
-            # Standard set
-            N_IMGS_TO_SAVE = 5
-            N_IMGS_TO_EVAL = 20 if epoch_id > 0 else 5
-            img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
-            img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
-            img_ids = range(0, dset_test.n_images, img_eval_interval)
+            #  # Standard set
+            #  N_IMGS_TO_SAVE = 5
+            #  N_IMGS_TO_EVAL = 20 if epoch_id > 0 else 5
+            #  img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
+            #  img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
+            #  img_ids = range(0, dset_test.n_images, img_eval_interval)
 
-            #  # Special 'very hard' specular + fuzz set
-            #  img_ids = [2, 5, 7, 9, 21,
-            #             44, 45, 47, 49, 56,
-            #             80, 88, 99, 115, 120,
-            #             154]
+            # Special 'very hard' specular + fuzz set
+            img_ids = [2, 5, 7, 9, 21,
+                       44, 45, 47, 49, 56,
+                       80, 88, 99, 115, 120,
+                       154]
             img_save_interval = 1
 
             n_images_gen = 0
@@ -304,7 +307,7 @@ for epoch_id in range(args.n_epochs):
             gstep_id = iter_id + gstep_id_base
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
-            lr_basis = lr_basis_func(gstep_id) * lr_basis_factor
+            lr_basis = lr_basis_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             if not args.lr_decay:
                 lr_sigma = args.lr_sigma * lr_sigma_factor
                 lr_sh = args.lr_sh * lr_sh_factor
@@ -379,7 +382,8 @@ for epoch_id in range(args.n_epochs):
             # Manual SGD/rmsprop step
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
             grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)
+            if gstep_id >= args.lr_basis_begin_step:
+                grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)
 
     train_step()
     gc.collect()
