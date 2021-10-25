@@ -25,6 +25,9 @@ class Rays:
         gt = self.gt[key]
         return Rays(origins, dirs, gt)
 
+    def __len__(self):
+        return self.origins.size(0)
+
 @dataclass
 class Intrin:
     fx: float

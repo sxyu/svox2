@@ -27,7 +27,8 @@ struct PackedSparseGridSpec {
                   spec._offset.data_ptr<float>()[2]},
           _scaling{spec._scaling.data_ptr<float>()[0],
                    spec._scaling.data_ptr<float>()[1],
-                   spec._scaling.data_ptr<float>()[2]} {
+                   spec._scaling.data_ptr<float>()[2]},
+         _z_ratio{spec._z_ratio} {
     }
 
     float* __restrict__ density_data;
@@ -41,6 +42,7 @@ struct PackedSparseGridSpec {
     const int basis_dim, sh_data_dim, basis_reso;
     const float _offset[3];
     const float _scaling[3];
+    const float _z_ratio;
 };
 
 struct PackedCameraSpec {

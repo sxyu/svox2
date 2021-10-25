@@ -77,6 +77,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("links", &SparseGridSpec::links)
       .def_readwrite("_offset", &SparseGridSpec::_offset)
       .def_readwrite("_scaling", &SparseGridSpec::_scaling)
+      .def_readwrite("_z_ratio", &SparseGridSpec::_z_ratio)
       .def_readwrite("basis_dim", &SparseGridSpec::basis_dim)
       .def_readwrite("use_learned_basis", &SparseGridSpec::use_learned_basis)
       .def_readwrite("basis_data", &SparseGridSpec::basis_data);

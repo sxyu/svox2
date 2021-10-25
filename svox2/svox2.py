@@ -431,7 +431,7 @@ class SparseGrid(nn.Module):
         else:
             self.basis_data = nn.Parameter(
                 torch.zeros(
-                    (0,), dtype=torch.float32, device=device
+                    (0, 0, 0, 0), dtype=torch.float32, device=device
                 ),
                 requires_grad=False
             )
@@ -444,6 +444,9 @@ class SparseGrid(nn.Module):
         self.density_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
+
+        self.use_frustum = False
+        self._z_ratio = -1.0
 
     @property
     def data_dim(self):
@@ -570,9 +573,11 @@ class SparseGrid(nn.Module):
         invdirs = 1.0 / dirs
         invdirs[dirs == 0] = 1e9
 
+        z_ratio = self._z_ratio / self.links.size(2) if self.use_frustum else -1.0
+
         gsz = self._grid_size()
-        t1 = (-origins) * invdirs
-        t2 = (gsz.to(device=dirs.device) - 1.0 - origins) * invdirs
+        t1 = (-0.5 - origins) * invdirs
+        t2 = (gsz.to(device=dirs.device) - 0.5 - origins) * invdirs
         t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(0.0)
         tmax = torch.min(torch.max(t1, t2), dim=-1).values
 
@@ -589,8 +594,15 @@ class SparseGrid(nn.Module):
         sh_mult = sh_mult[mask]
         tmax = tmax[mask]
 
+        grid_cen_x = (self.links.size(0) - 1) * 0.5;
+        grid_cen_y = (self.links.size(1) - 1) * 0.5;
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
+            if self.use_frustum:
+                factor = 1.0 / (1.0 + z_ratio * (pos[:, 2] + 0.5))
+                pos[:, 0] = (pos[:, 0] - grid_cen_x) * factor + grid_cen_x;
+                pos[:, 1] = (pos[:, 1] - grid_cen_y) * factor + grid_cen_y;
+
             l = pos.to(torch.long)
             l.clamp_min_(0)
             l[:, 0].clamp_max_(gsz[0] - 2)
@@ -1358,6 +1370,11 @@ class SparseGrid(nn.Module):
         reso = self.links.shape
         return reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])
 
+    def set_frustum_bounds(self, z_near: float, z_far: float):
+        assert z_near > 0.0 and (z_far - z_near) > 0.0, "Invalid NDC"
+        self.use_frustum = True
+        self._z_ratio = (z_far - z_near) / z_near
+
     def _to_cpp(self, grid_coords: bool = False):
         """
         Generate object to pass to C++
@@ -1373,6 +1390,9 @@ class SparseGrid(nn.Module):
             gsz = self._grid_size()
             gspec._offset = self._offset * gsz - 0.5
             gspec._scaling = self._scaling * gsz
+        gspec._z_ratio = self._z_ratio / self.links.size(2) if self.use_frustum else -1.0
+        # need to divide centered x,y by  z_in_grid * _z_ratio
+
         gspec.basis_dim = self.basis_dim
         gspec.use_learned_basis = self.use_learned_basis
         gspec.basis_data = self.basis_data

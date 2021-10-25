@@ -40,7 +40,7 @@ class LLFFDataset(Dataset):
         scene_scale: float = 1.0, # ignored
         factor: int = 1,
         ref_img: str="",
-        scale : float=1.0,
+        scale : float=1.0/4.0,  # 4x downsample
         dmin : float=-1,
         dmax : int=-1,
         invz : int= 0,
@@ -150,9 +150,17 @@ class LLFFDataset(Dataset):
         self.c2w = torch.stack(all_c2w)
         self.z_bounds = [self.sfm.dmin, self.sfm.dmax]
 
+        fx = self.sfm.ref_cam['fx']
+        fy = self.sfm.ref_cam['fy']
+        width = self.sfm.ref_cam['width']
+        height = self.sfm.ref_cam['height']
+
+        x_max = self.z_bounds[0] * (width + 2 * self.sfm.offset) / (2 * fx)
+        y_max = self.z_bounds[0] * (height + 2 * self.sfm.offset) / (2 * fy)
+
         self.scene_center = [0.0, 0.0,
                              (self.z_bounds[0] + self.z_bounds[1]) * 0.5]
-        self.scene_radius = [0.0, 0.0,
+        self.scene_radius = [x_max, y_max,
                              (self.z_bounds[1] - self.z_bounds[0]) * 0.5]
         self.use_sphere_bound = False
 

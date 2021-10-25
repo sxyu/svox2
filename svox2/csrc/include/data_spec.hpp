@@ -11,6 +11,7 @@ struct SparseGridSpec {
   Tensor links;
   Tensor _offset;
   Tensor _scaling;
+  float _z_ratio;
 
   int basis_dim;
   bool use_learned_basis;

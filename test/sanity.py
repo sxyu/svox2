@@ -17,8 +17,9 @@ g.sh_data.data[..., 0] = 0.5
 g.sh_data.data[..., 1:] = 0.0
 g.basis_data.data.normal_()
 g.basis_data.data *= 10.0
+print('use frustum?', g.use_frustum)
 
-N_RAYS = 5000
+N_RAYS = 1
 
 origins = torch.zeros(N_RAYS, 3, device=device) #torch.randn(N_RAYS, 3) * 0.01
 dirs = torch.randn(N_RAYS, 3, device=device)

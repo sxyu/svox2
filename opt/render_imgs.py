@@ -7,7 +7,7 @@ import argparse
 import numpy as np
 import os
 from os import path
-from util.dataset import Dataset
+from util.dataset import datasets
 from util.util import Timing
 import imageio
 from tqdm import tqdm
@@ -15,12 +15,13 @@ from tqdm import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
 parser.add_argument('data_dir', type=str)
+parser.add_argument('--dataset_type',
+                     choices=list(datasets.keys()) + ["auto"],
+                     default="auto",
+                     help="Dataset type (specify type or use auto)")
 #  parser.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 parser.add_argument('--n_eval', '-n', type=int, default=200, help='images to evaluate (equal interval), at most evals every image')
 parser.add_argument('--train', action='store_true', default=False, help='render train set')
-parser.add_argument('--scene_scale', type=float, default=
-                                                2/3,
-                   help='Scene scale; generally 2/3, can be 5/6 for lego (no longer doing this)')
 args = parser.parse_args()
 device = 'cuda:0'
 
@@ -31,7 +32,7 @@ os.makedirs(render_dir, exist_ok=True)
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
 
-dset = Dataset(args.data_dir, split="test_train" if args.train else "test", scene_scale=args.scene_scale)
+dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test")
 #  dset.gen_rays()
 
 with torch.no_grad():
@@ -41,7 +42,8 @@ with torch.no_grad():
     n_images_gen = 0
     for img_id in tqdm(range(0, dset.n_images, img_eval_interval)):
         c2w = dset.c2w[img_id].to(device=device)
-        cam = svox2.Camera(c2w, dset.focal, dset.focal,
+        cam = svox2.Camera(c2w, dset.intrins.fx, dset.intrins.fy,
+                           dset.intrins.cx, dset.intrins.cy,
                            dset.w, dset.h)
         im = grid.volume_render_image(cam, use_kernel=True)
         im.clamp_(0.0, 1.0)

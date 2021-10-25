@@ -341,12 +341,12 @@ __device__ __inline__ void ray_find_bounds(
     ray.world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
 
     ray.tmin = 0.0f;
-    ray.tmax = 1e9f;
-#pragma unroll 3
-    for (int i = 0; i < 3; ++i) {
+    ray.tmax = 2e3f;
+    int start = grid._z_ratio > 0.f ? 2 : 0;
+    for (int i = start; i < 3; ++i) {
         const float invdir = 1.0 / ray.dir[i];
-        const float t1 = (- ray.origin[i]) * invdir;
-        const float t2 = (grid.size[i] - 1.f  - ray.origin[i]) * invdir;
+        const float t1 = (-0.5f - ray.origin[i]) * invdir;
+        const float t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;
         if (ray.dir[i] != 0.f) {
             ray.tmin = max(ray.tmin, min(t1, t2));
             ray.tmax = min(ray.tmax, max(t1, t2));

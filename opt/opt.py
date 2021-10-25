@@ -30,19 +30,21 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 parser = argparse.ArgumentParser()
 parser.add_argument('data_dir', type=str)
 parser.add_argument('--dataset_type',
-                     choices=datasets.keys(),
-                     default="nerf",
-                     help="Dataset type")
+                     choices=list(datasets.keys()) + ["auto"],
+                     default="auto",
+                     help="Dataset type (specify type or use auto)")
 
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-group.add_argument('--final_reso', type=int, default=512,
+group.add_argument('--final_reso', type=int, default=1024,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=256,
+group.add_argument('--init_reso', type=int, default=512,#256,
                    help='INITIAL grid resolution')
-group.add_argument('--ref_reso', type=int, default=256,
+group.add_argument('--ref_reso', type=int, default=512,
                    help='reference grid resolution (for adjusting lr)')
+group.add_argument('--z_reso_factor', type=float, default=192/1024,
+                   help='z dimension resolution factor')
 group.add_argument('--basis_reso', type=int, default=32,
                    help='basis grid resolution')
 group.add_argument('--sh_dim', type=int, default=9, help='learned basis dimensions (at most 10)')
@@ -85,7 +87,7 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-5,
+                      1e-6,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
                       default=
@@ -94,7 +96,7 @@ group.add_argument('--lr_basis_final', type=float,
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
 group.add_argument('--lr_basis_delay_steps', type=int, default=0,#15000,
                    help="Reverse cosine steps (0 means disable)")
-group.add_argument('--lr_basis_begin_step', type=int, default=4 * 12800)
+group.add_argument('--lr_basis_begin_step', type=int, default=0)#4 * 12800)
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
 
@@ -130,13 +132,13 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-3)
+group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
+group.add_argument('--lambda_tv_sh', type=float, default=0.0) #1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -172,22 +174,31 @@ dset = datasets[args.dataset_type](
                factor=factor)
 dset.shuffle_rays()
 dset_test = datasets[args.dataset_type](
-        args.data_dir, split="test", scene_scale=args.scene_scale)
+        args.data_dir, split="test")
 
-grid = svox2.SparseGrid(reso=reso,
+grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
+                             reso, reso, int(reso * args.z_reso_factor)],
                         center=dset.scene_center,
                         radius=dset.scene_radius,
                         use_sphere_bound=dset.use_sphere_bound,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
                         device=device,
-                        basis_reso=args.basis_reso)
+                        basis_reso=args.basis_reso,
+                        use_learned_basis=False)
+
+if hasattr(dset, 'z_bounds'):
+    print('Setting bounds', dset.z_bounds)
+    grid.set_frustum_bounds(dset.z_bounds[0], dset.z_bounds[1])
+    print(' ', grid._z_ratio)
+
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
 #  grid.sh_data.data.normal_(mean=0.0, std=0.001)
 grid.density_data.data[:] = args.init_sigma
 
-grid.reinit_learned_bases(init_type='sh')
+if grid.use_learned_basis:
+    grid.reinit_learned_bases(init_type='sh')
 #  grid.reinit_learned_bases(init_type='fourier')
 #  grid.reinit_learned_bases(init_type='sg', upper_hemi=True)
 #  grid.basis_data.data.normal_(mean=0.0, std=0.01)
@@ -199,6 +210,7 @@ step_size = 0.5  # 0.5 of a voxel!
 
 grid.opt.step_size = step_size
 grid.opt.sigma_thresh = 1e-8
+grid.opt.background_brightness = 0.0
 grid.opt.backend = 'cuvol'
 
 gstep_id_base = 0
@@ -236,18 +248,18 @@ for epoch_id in range(args.n_epochs):
         with torch.no_grad():
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
-            #  # Standard set
-            #  N_IMGS_TO_SAVE = 5
-            #  N_IMGS_TO_EVAL = 20 if epoch_id > 0 else 5
-            #  img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
-            #  img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
-            #  img_ids = range(0, dset_test.n_images, img_eval_interval)
+            # Standard set
+            N_IMGS_TO_SAVE = min(5, dset_test.n_images)
+            N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
+            img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
+            img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
+            img_ids = range(0, dset_test.n_images, img_eval_interval)
 
             # Special 'very hard' specular + fuzz set
-            img_ids = [2, 5, 7, 9, 21,
-                       44, 45, 47, 49, 56,
-                       80, 88, 99, 115, 120,
-                       154]
+            #  img_ids = [2, 5, 7, 9, 21,
+            #             44, 45, 47, 49, 56,
+            #             80, 88, 99, 115, 120,
+            #             154]
             img_save_interval = 1
 
             n_images_gen = 0
@@ -276,24 +288,25 @@ for epoch_id in range(args.n_epochs):
                 stats_test['psnr'] += psnr
                 n_images_gen += 1
 
-            # Add spherical map visualization
-            EQ_RESO = 256
-            eq_dirs = generate_dirs_equirect(EQ_RESO * 2, EQ_RESO)
-            eq_dirs = torch.from_numpy(eq_dirs).to(device=device).view(-1, 3)
+            if grid.use_learned_basis:
+                # Add spherical map visualization
+                EQ_RESO = 256
+                eq_dirs = generate_dirs_equirect(EQ_RESO * 2, EQ_RESO)
+                eq_dirs = torch.from_numpy(eq_dirs).to(device=device).view(-1, 3)
 
-            sphfuncs = grid._eval_learned_bases(eq_dirs).view(EQ_RESO, EQ_RESO*2, -1)
-            sphfuncs = sphfuncs.permute([2, 0, 1]).cpu().numpy()
+                sphfuncs = grid._eval_learned_bases(eq_dirs).view(EQ_RESO, EQ_RESO*2, -1)
+                sphfuncs = sphfuncs.permute([2, 0, 1]).cpu().numpy()
 
-            stats = [(sphfunc.min(), sphfunc.mean(), sphfunc.max())
-                    for sphfunc in sphfuncs]
-            sphfuncs_cmapped = [viridis_cmap(sphfunc) for sphfunc in sphfuncs]
-            for im, (minv, meanv, maxv) in zip(sphfuncs_cmapped, stats):
-                cv2.putText(im, f"{minv=:.4f} {meanv=:.4f} {maxv=:.4f}", (10, 20),
-                            0, 0.5, [255, 0, 0])
-            sphfuncs_cmapped = np.concatenate(sphfuncs_cmapped, axis=0)
-            summary_writer.add_image(f'test/spheric',
-                    sphfuncs_cmapped, global_step=gstep_id_base, dataformats='HWC')
-            # END add spherical map visualization
+                stats = [(sphfunc.min(), sphfunc.mean(), sphfunc.max())
+                        for sphfunc in sphfuncs]
+                sphfuncs_cmapped = [viridis_cmap(sphfunc) for sphfunc in sphfuncs]
+                for im, (minv, meanv, maxv) in zip(sphfuncs_cmapped, stats):
+                    cv2.putText(im, f"{minv=:.4f} {meanv=:.4f} {maxv=:.4f}", (10, 20),
+                                0, 0.5, [255, 0, 0])
+                sphfuncs_cmapped = np.concatenate(sphfuncs_cmapped, axis=0)
+                summary_writer.add_image(f'test/spheric',
+                        sphfuncs_cmapped, global_step=gstep_id_base, dataformats='HWC')
+                # END add spherical map visualization
 
             stats_test['mse'] /= n_images_gen
             stats_test['psnr'] /= n_images_gen
@@ -389,7 +402,7 @@ for epoch_id in range(args.n_epochs):
             # Manual SGD/rmsprop step
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
             grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            if gstep_id >= args.lr_basis_begin_step:
+            if grid.use_learned_basis and gstep_id >= args.lr_basis_begin_step:
                 grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)
 
     train_step()
@@ -411,7 +424,8 @@ for epoch_id in range(args.n_epochs):
             if non_final:
                 reso *= 2
             use_sparsify = True # reso >= args.ref_reso
-            grid.resample(reso=reso,
+            grid.resample(reso=reso if args.z_reso_factor == 1 else [
+                             reso, reso, int(reso * args.z_reso_factor)],
                     sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=1, #use_sparsify,
