@@ -17,7 +17,7 @@ import numpy as np
 import math
 import argparse
 import cv2
-from util.dataset import Dataset
+from util.dataset import datasets
 from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
 
 from torch.utils.tensorboard import SummaryWriter
@@ -29,6 +29,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
 parser.add_argument('data_dir', type=str)
+parser.add_argument('--dataset_type',
+                     choices=datasets.keys(),
+                     default="nerf",
+                     help="Dataset type")
+
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
@@ -41,9 +46,6 @@ group.add_argument('--ref_reso', type=int, default=256,
 group.add_argument('--basis_reso', type=int, default=32,
                    help='basis grid resolution')
 group.add_argument('--sh_dim', type=int, default=9, help='learned basis dimensions (at most 10)')
-group.add_argument('--scene_scale', type=float, default=
-                           2/3,
-                           help='Scene scale; generally 2/3, can be 5/6 for lego (no longer doing this)')
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=
@@ -108,11 +110,6 @@ group.add_argument('--eval_every', type=int, default=1,
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
-#  group.add_argument('--init_basis_mean', type=float, default=0.5,
-#                     help='initialization learned basis std')
-#  group.add_argument('--init_basis_std', type=float, default=0.01,
-#                     help='initialization learned basis std')
-
 
 group = parser.add_argument_group("misc experiments")
 group.add_argument('--perm', action='store_true', default=True,
@@ -126,10 +123,6 @@ group.add_argument('--weight_thresh', type=float,
                    help='Resample (upsample to 512) weight threshold')
 group.add_argument('--use_weight_thresh', action='store_true', default=True,
                     help='use weight thresholding')
-group.add_argument('--prox_l1_alpha', type=float, default=0.0,
-                   help='proximal L1 per epoch; amount to subtract from sigma')
-group.add_argument('--prox_l0', action='store_true', default=False,
-                   help='proximal L0 i.e., keep resampling after each epoch')
 #  group.add_argument('--norand', action='store_true', default=True,
 #                     help='disable random')
 
@@ -152,7 +145,6 @@ group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
-group.add_argument('--use_sphere_bound', action='store_true', default=True)
 args = parser.parse_args()
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
@@ -172,18 +164,23 @@ np.random.seed(20200823)
 reso = args.init_reso
 factor = args.ref_reso // reso
 
-dset = Dataset(args.data_dir, split="train", device=device, permutation=args.perm,
-               factor=factor,
-               scene_scale=args.scene_scale)
+dset = datasets[args.dataset_type](
+               args.data_dir,
+               split="train",
+               device=device,
+               permutation=args.perm,
+               factor=factor)
 dset.shuffle_rays()
-dset_test = Dataset(args.data_dir, split="test", scene_scale=args.scene_scale)
+dset_test = datasets[args.dataset_type](
+        args.data_dir, split="test", scene_scale=args.scene_scale)
 
 grid = svox2.SparseGrid(reso=reso,
-                        radius=1.0,
+                        center=dset.scene_center,
+                        radius=dset.scene_radius,
+                        use_sphere_bound=dset.use_sphere_bound,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
                         device=device,
-                        use_sphere_bound=args.use_sphere_bound,
                         basis_reso=args.basis_reso)
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
@@ -207,8 +204,13 @@ grid.opt.backend = 'cuvol'
 gstep_id_base = 0
 
 resample_cameras = [
-        svox2.Camera(c2w.to(device=device), dset.focal, dset.focal,
-                     dset.w, dset.h) for c2w in dset.c2w
+        svox2.Camera(c2w.to(device=device),
+                     dset.intrins.fx,
+                     dset.intrins.fy,
+                     dset.intrins.cx,
+                     dset.intrins.cy,
+                     dset.w,
+                     dset.h) for c2w in dset.c2w
     ] if args.use_weight_thresh else None
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
@@ -251,8 +253,13 @@ for epoch_id in range(args.n_epochs):
             n_images_gen = 0
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset_test.c2w[img_id].to(device=device)
-                cam = svox2.Camera(c2w, dset_test.focal, dset_test.focal,
-                                   dset_test.w, dset_test.h)
+                cam = svox2.Camera(c2w,
+                                   dset_test.intrins.fx,
+                                   dset_test.intrins.fy,
+                                   dset_test.intrins.cx,
+                                   dset_test.intrins.cy,
+                                   dset_test.w,
+                                   dset_test.h)
                 rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
@@ -398,7 +405,7 @@ for epoch_id in range(args.n_epochs):
 
     if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
         last_upsamp_step = gstep_id_base
-        if reso < args.final_reso or args.prox_l0:
+        if reso < args.final_reso:
             print('* Upsampling from', reso, 'to', reso * 2)
             non_final = reso < args.final_reso
             if non_final:
@@ -421,10 +428,6 @@ for epoch_id in range(args.n_epochs):
             factor //= 2
             dset.gen_rays(factor=factor)
             dset.shuffle_rays()
-
-    if args.prox_l1_alpha > 0.0:
-        print('ProxL1: sigma -=', args.prox_l1_alpha)
-        grid.density_data.data -= args.prox_l1_alpha
 
     if epoch_id == args.n_epochs - 1:
         print('Final eval and save')

@@ -79,6 +79,8 @@ class Camera:
     c2w: torch.Tensor  # OpenCV
     fx: float
     fy: float
+    cx: float
+    cy: float
     width: int
     height: int
 
@@ -90,6 +92,8 @@ class Camera:
         spec.c2w = self.c2w
         spec.fx = self.fx
         spec.fy = self.fy
+        spec.cx = self.cx
+        spec.cy = self.cy
         spec.width = self.width
         spec.height = self.height
         return spec

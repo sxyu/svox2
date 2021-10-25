@@ -40,6 +40,8 @@ struct CameraSpec {
   torch::Tensor c2w;
   float fx;
   float fy;
+  float cx;
+  float cy;
   int width;
   int height;
 

@@ -321,8 +321,8 @@ __device__ __inline__ void cam2world_ray(
     float* origin,
     const PackedCameraSpec& __restrict__ cam) {
     // OpenCV convention (contrary to svox 1, which uses OpenGL)
-    float x = (ix + 0.5f - 0.5f * cam.width) / cam.fx;
-    float y = (iy + 0.5f - 0.5f * cam.height) / cam.fy;
+    float x = (ix + 0.5f - cam.cx) / cam.fx;
+    float y = (iy + 0.5f - cam.cy) / cam.fy;
     float z = sqrtf(x * x + y * y + 1.0);
     x /= z; y /= z; z = 1.0f / z;
     dir[0] = cam.c2w[0][0] * x + cam.c2w[0][1] * y + cam.c2w[0][2] * z;

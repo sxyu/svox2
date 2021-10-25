@@ -86,6 +86,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("c2w", &CameraSpec::c2w)
       .def_readwrite("fx", &CameraSpec::fx)
       .def_readwrite("fy", &CameraSpec::fy)
+      .def_readwrite("cx", &CameraSpec::cx)
+      .def_readwrite("cy", &CameraSpec::cy)
       .def_readwrite("width", &CameraSpec::width)
       .def_readwrite("height", &CameraSpec::height);
 

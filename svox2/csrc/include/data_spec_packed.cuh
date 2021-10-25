@@ -46,11 +46,15 @@ struct PackedSparseGridSpec {
 struct PackedCameraSpec {
     PackedCameraSpec(CameraSpec& cam) :
         c2w(cam.c2w.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
-        fx(cam.fx), fy(cam.fy), width(cam.width), height(cam.height) {}
+        fx(cam.fx), fy(cam.fy),
+        cx(cam.cx), cy(cam.cy),
+        width(cam.width), height(cam.height) {}
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
         c2w;
     float fx;
     float fy;
+    float cx;
+    float cy;
     int width;
     int height;
 };

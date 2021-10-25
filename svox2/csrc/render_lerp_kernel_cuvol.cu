@@ -62,6 +62,7 @@ __device__ __inline__ void trace_ray_cuvol(
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+
             ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
             ray.pos[j] -= static_cast<float>(ray.l[j]);
