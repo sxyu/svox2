@@ -659,10 +659,10 @@ class SparseGrid(nn.Module):
             )
             # [B', 3, n_sh_coeffs]
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.clamp_min(
+            rgb = torch.clamp(
                 torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
                 0.0,
-                #  1.0
+                1.0
             )  # [B', 3]
             rgb = weight[:, None] * rgb[:, :3]
 
@@ -1373,7 +1373,7 @@ class SparseGrid(nn.Module):
     def set_frustum_bounds(self, z_near: float, z_far: float):
         assert z_near > 0.0 and (z_far - z_near) > 0.0, "Invalid NDC"
         self.use_frustum = True
-        self._z_ratio = (z_far - z_near) / z_near
+        self._z_ratio = (z_far - z_near) / ((z_near + z_far) * 0.5)
 
     def _to_cpp(self, grid_coords: bool = False):
         """

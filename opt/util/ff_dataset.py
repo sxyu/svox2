@@ -155,14 +155,20 @@ class LLFFDataset(Dataset):
         width = self.sfm.ref_cam['width']
         height = self.sfm.ref_cam['height']
 
-        x_max = self.z_bounds[0] * (width + 2 * self.sfm.offset) / (2 * fx)
-        y_max = self.z_bounds[0] * (height + 2 * self.sfm.offset) / (2 * fy)
+        zmid = (self.z_bounds[0] + self.z_bounds[1]) * 0.5
+        zrad = (self.z_bounds[1] - self.z_bounds[0]) * 0.5
 
-        self.scene_center = [0.0, 0.0,
-                             (self.z_bounds[0] + self.z_bounds[1]) * 0.5]
-        self.scene_radius = [x_max, y_max,
-                             (self.z_bounds[1] - self.z_bounds[0]) * 0.5]
+        scene_scale = 0.5 / zrad
+        zmid *= scene_scale
+        x_max = zmid * (width + 2 * self.sfm.offset) / (2 * fx)
+        y_max = zmid * (height + 2 * self.sfm.offset) / (2 * fy)
+
+        self.scene_center = [0.0, 0.0, zmid]
+        self.scene_radius = [x_max, y_max, 0.5]
+        self.z_bounds = [self.z_bounds[0] * scene_scale, self.z_bounds[1] * scene_scale]
         self.use_sphere_bound = False
+
+        self.c2w[:, :3, 3] *= scene_scale
 
     def gen_rays(self, factor=1):
         print(" Generating rays, scaling factor", factor)
@@ -354,8 +360,16 @@ class SfMData:
         ) = load_llff_data(
             dataset, factor=None, split_train_val=self.hold_every, render_style=self.render_style
         )
+
+        # NSVF-compatible sort key
+        def nsvf_sort_key(x):
+            if len(x) > 2 and x[1] == '_':
+                return x[2:]
+            else:
+                return x
+
         # get all image of this dataset
-        images_path = [os.path.join("images", f) for f in sorted(os.listdir(image_dir))]
+        images_path = [os.path.join("images", f) for f in sorted(os.listdir(image_dir), key=nsvf_sort_key)]
 
         # LLFF dataset has only single camera in dataset
         if len(intrinsic) == 3:
@@ -408,8 +422,11 @@ class SfMData:
             sh = nh / ocam["height"]
             cam["fx"] = ocam["fx"] * sw
             cam["fy"] = ocam["fy"] * sh
-            cam["px"] = (ocam["px"] + 0.5) * sw - 0.5
-            cam["py"] = (ocam["py"] + 0.5) * sh - 0.5
+            # TODO: What is the correct way?
+            #  cam["px"] = (ocam["px"] + 0.5) * sw - 0.5
+            #  cam["py"] = (ocam["py"] + 0.5) * sh - 0.5
+            cam["px"] = ocam["px"] * sw
+            cam["py"] = ocam["py"] * sh
             cam["width"] = nw
             cam["height"] = nh
 

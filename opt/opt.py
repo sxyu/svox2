@@ -37,11 +37,11 @@ parser.add_argument('--dataset_type',
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-group.add_argument('--final_reso', type=int, default=1024,
+group.add_argument('--final_reso', type=int, default=512,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=512,#256,
+group.add_argument('--init_reso', type=int, default=256,#256,
                    help='INITIAL grid resolution')
-group.add_argument('--ref_reso', type=int, default=512,
+group.add_argument('--ref_reso', type=int, default=256,
                    help='reference grid resolution (for adjusting lr)')
 group.add_argument('--z_reso_factor', type=float, default=192/1024,
                    help='z dimension resolution factor')
@@ -64,20 +64,18 @@ group.add_argument('--lr_sigma', type=float, default=
         help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-1)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=15000, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
+                   help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 
 group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
 group.add_argument('--lr_sh', type=float, default=
-                    # 2e4,
                     1e-2,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=
-                    # 2e3
                     5e-5
-                    #  5e-5,
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
@@ -111,7 +109,9 @@ group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
 
 group = parser.add_argument_group("initialization")
-group.add_argument('--init_sigma', type=float, default=0.1, help='initialization sigma')
+group.add_argument('--init_sigma', type=float,
+                   default=0.1,
+                   help='initialization sigma')
 
 group = parser.add_argument_group("misc experiments")
 group.add_argument('--perm', action='store_true', default=True,
@@ -196,6 +196,12 @@ if hasattr(dset, 'z_bounds'):
 grid.sh_data.data[:] = 0.0
 #  grid.sh_data.data.normal_(mean=0.0, std=0.001)
 grid.density_data.data[:] = args.init_sigma
+
+#  osh = grid.density_data.data.shape
+#  den = grid.density_data.data.view(grid.links.shape)
+#  den[:] = 0.01
+#  den[:, :, -1] = 1e9
+#  grid.density_data.data = den.view(osh)
 
 if grid.use_learned_basis:
     grid.reinit_learned_bases(init_type='sh')
