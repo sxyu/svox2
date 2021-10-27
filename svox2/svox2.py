@@ -56,6 +56,8 @@ class RenderOptions:
     #  probability is <= this much (forward only)
     #  make this higher for fast rendering
 
+    last_sample_opaque: bool = False   # Make the last sample opaque (for forward-facing)
+
     def _to_cpp(self, randomize: bool = False):
         """
         Generate object to pass to C++
@@ -65,6 +67,7 @@ class RenderOptions:
         opt.step_size = self.step_size
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
+        opt.last_sample_opaque = self.last_sample_opaque
         #  opt.randomize = randomize
         #  UINT32_MAX = 2**32-1
         #  opt._m1 = np.random.randint(0, UINT32_MAX)
@@ -876,9 +879,14 @@ class SparseGrid(nn.Module):
                 scaling = (self._scaling * gsz).to(device=device)
                 max_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
                 print(" Grid weight render", sigmas.shape)
+                z_ratio = self._z_ratio / reso[2] if self.use_frustum else -1.0
                 for cam in tqdm(cameras):
                     _C.grid_weight_render(
-                        sigmas, cam._to_cpp(), 0.5, offset, scaling, max_wt_grid
+                        sigmas, cam._to_cpp(),
+                        0.5,
+                        z_ratio,
+                        self.opt.last_sample_opaque,
+                        offset, scaling, max_wt_grid
                     )
                 sample_vals_mask = max_wt_grid.view(-1) > weight_thresh
                 del sigmas, max_wt_grid

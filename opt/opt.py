@@ -37,11 +37,11 @@ parser.add_argument('--dataset_type',
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-group.add_argument('--final_reso', type=int, default=512,
+group.add_argument('--final_reso', type=int, default=1024,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=256,#256,
+group.add_argument('--init_reso', type=int, default=512,
                    help='INITIAL grid resolution')
-group.add_argument('--ref_reso', type=int, default=256,
+group.add_argument('--ref_reso', type=int, default=1024,
                    help='reference grid resolution (for adjusting lr)')
 group.add_argument('--z_reso_factor', type=float, default=192/1024,
                    help='z dimension resolution factor')
@@ -62,7 +62,7 @@ group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop
 group.add_argument('--lr_sigma', type=float, default=
                                             2e1,
         help='SGD/rmsprop lr for sigma')
-group.add_argument('--lr_sigma_final', type=float, default=5e-1)
+group.add_argument('--lr_sigma_final', type=float, default=1e-2)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
                    help="Reverse cosine steps (0 means disable)")
@@ -71,11 +71,11 @@ group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
 group.add_argument('--lr_sh', type=float, default=
-                    1e-2,
+                    1e-3,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=
-                    5e-5
+                    5e-6
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
@@ -98,12 +98,12 @@ group.add_argument('--lr_basis_begin_step', type=int, default=0)#4 * 12800)
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
 
-group.add_argument('--n_epochs', type=int, default=20)
+group.add_argument('--n_iters', type=int, default=20 * 12800, help='number of iters to optimize for')
 group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--upsamp_every', type=int, default=
                      3 * 12800,
                     help='upsample the grid every x iters')
-group.add_argument('--save_every', type=int, default=2,
+group.add_argument('--save_every', type=int, default=5,#2,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
@@ -121,7 +121,7 @@ group.add_argument('--sigma_thresh', type=float,
                     default=2.5,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--weight_thresh', type=float,
-                    default=0.001,
+                    default=0.0005,
                    help='Resample (upsample to 512) weight threshold')
 group.add_argument('--use_weight_thresh', action='store_true', default=True,
                     help='use weight thresholding')
@@ -132,13 +132,13 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
+group.add_argument('--lambda_tv', type=float, default=1e-3)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=0.0) #1e-3)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -191,6 +191,7 @@ if hasattr(dset, 'z_bounds'):
     print('Setting bounds', dset.z_bounds)
     grid.set_frustum_bounds(dset.z_bounds[0], dset.z_bounds[1])
     print(' ', grid._z_ratio)
+    grid.opt.last_sample_opaque = True
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
@@ -216,7 +217,7 @@ step_size = 0.5  # 0.5 of a voxel!
 
 grid.opt.step_size = step_size
 grid.opt.sigma_thresh = 1e-8
-grid.opt.background_brightness = 0.0
+grid.opt.background_brightness = 1.0
 grid.opt.backend = 'cuvol'
 
 gstep_id_base = 0
@@ -244,7 +245,9 @@ lr_basis_factor = 1.0
 
 last_upsamp_step = 0
 
-for epoch_id in range(args.n_epochs):
+epoch_id = -1
+while True:
+    epoch_id += 1
     epoch_size = dset.rays.origins.size(0)
     batches_per_epoch = (epoch_size-1)//args.batch_size+1
     # Test
@@ -357,7 +360,7 @@ for epoch_id in range(args.n_epochs):
 
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
-                pbar.set_description(f'epoch {epoch_id}/{args.n_epochs} psnr={psnr:.2f}')
+                pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f}')
                 for stat_name in stats:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
@@ -449,8 +452,9 @@ for epoch_id in range(args.n_epochs):
             dset.gen_rays(factor=factor)
             dset.shuffle_rays()
 
-    if epoch_id == args.n_epochs - 1:
+    if gstep_id_base >= args.n_iters:
         print('Final eval and save')
         eval_step()
         if not args.tune_mode:
             grid.save(ckpt_path)
+        break

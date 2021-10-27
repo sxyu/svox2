@@ -80,13 +80,16 @@ __device__ __inline__ void trace_ray_cuvol(
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
 
-        const float sigma = trilerp_cuvol_one(
+        float sigma = trilerp_cuvol_one(
                 grid.links, grid.density_data,
                 grid.stride_x,
                 grid.size[2],
                 1,
                 ray.l, ray.pos,
                 0);
+        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
+            sigma += 1e9;
+        }
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
                             grid.links,
@@ -166,7 +169,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
 
-        const float sigma = trilerp_cuvol_one(
+        float sigma = trilerp_cuvol_one(
                 grid.links,
                 grid.density_data,
                 grid.stride_x,
@@ -174,6 +177,9 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                 1,
                 ray.l, ray.pos,
                 0);
+        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
+            sigma += 1e9;
+        }
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
                             grid.links,

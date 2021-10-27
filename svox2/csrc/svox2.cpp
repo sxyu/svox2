@@ -38,7 +38,8 @@ Tensor sparsity(Tensor, Tensor, float);
 void sparsity_grad(Tensor, Tensor, float, float, Tensor);
 void sparsity_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
 
-void grid_weight_render(Tensor, CameraSpec &, float, Tensor, Tensor, Tensor);
+void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
+                        Tensor, Tensor);
 
 void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float);
 void sgd_step(Tensor, Tensor, Tensor, float);
@@ -104,7 +105,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       // .def_readwrite("step_epsilon", &RenderOptions::step_epsilon)
       .def_readwrite("step_size", &RenderOptions::step_size)
       .def_readwrite("sigma_thresh", &RenderOptions::sigma_thresh)
-      .def_readwrite("stop_thresh", &RenderOptions::stop_thresh);
+      .def_readwrite("stop_thresh", &RenderOptions::stop_thresh)
+      .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("_m1", &RenderOptions::_m1)
   // .def_readwrite("_m2", &RenderOptions::_m2)
