@@ -155,16 +155,20 @@ class LLFFDataset(Dataset):
         width = self.sfm.ref_cam['width']
         height = self.sfm.ref_cam['height']
 
+        print('z_bounds from LLFF:', self.z_bounds)
+        
+
         zmid = (self.z_bounds[0] + self.z_bounds[1]) * 0.5
         zrad = (self.z_bounds[1] - self.z_bounds[0]) * 0.5
 
-        scene_scale = 0.5 / zrad
+        z_max = 1.0 # 0.5 
+        scene_scale = z_max / zrad
         zmid *= scene_scale
         x_max = zmid * (width + 2 * self.sfm.offset) / (2 * fx)
         y_max = zmid * (height + 2 * self.sfm.offset) / (2 * fy)
 
         self.scene_center = [0.0, 0.0, zmid]
-        self.scene_radius = [x_max, y_max, 0.5]
+        self.scene_radius = [x_max, y_max, z_max]
         self.z_bounds = [self.z_bounds[0] * scene_scale, self.z_bounds[1] * scene_scale]
         self.use_sphere_bound = False
 
