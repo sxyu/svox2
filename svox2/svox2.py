@@ -1051,6 +1051,8 @@ class SparseGrid(nn.Module):
             basis_data = torch.from_numpy(z.f.basis_data).to(device=device)
             grid.use_learned_basis = True
             grid.basis_data = nn.Parameter(basis_data)
+        else:
+            grid.basis_data = nn.Parameter(grid.basis_data.data.to(device=device))
         return grid
 
     def to_svox1(self, device: Union[torch.device, str, None] = None):
@@ -1101,7 +1103,7 @@ class SparseGrid(nn.Module):
         t[index, -1:] = self.density_data.data.to(device=device)
         return t
 
-    def tv(self, logalpha: bool=True, logalpha_delta: float=0.01):
+    def tv(self, logalpha: bool=True, logalpha_delta: float=2.0):
         """
         Compute total variation over sigma,
         similar to Neural Volumes [Lombardi et al., ToG 2019]
@@ -1129,7 +1131,7 @@ class SparseGrid(nn.Module):
 
     def tv_color(self,
                  start_dim: int = 0, end_dim: Optional[int] = None,
-                 logalpha: bool=False, logalpha_delta: float=0.01):
+                 logalpha: bool=False, logalpha_delta: float=2.0):
         """
         Compute total variation on color
 
@@ -1162,7 +1164,7 @@ class SparseGrid(nn.Module):
     def inplace_tv_grad(self, grad: torch.Tensor,
                         scaling: float = 1.0,
                         sparse_frac: float = 1.0,
-                        logalpha: bool=True, logalpha_delta: float=0.01
+                        logalpha: bool=True, logalpha_delta: float=2.0
                     ):
         """
         Add gradient of total variation for sigma as in Neural Volumes
@@ -1222,7 +1224,7 @@ class SparseGrid(nn.Module):
         scaling: float = 1.0,
         sparse_frac: float = 1.0,
         logalpha: bool=False,
-        logalpha_delta: float=0.01
+        logalpha_delta: float=2.0
     ):
         """
         Add gradient of total variation for color

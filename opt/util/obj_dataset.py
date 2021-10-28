@@ -88,6 +88,7 @@ class NeRFDataset:
         self.scene_radius = 1.0
         self.ndc_coeffs = (-1.0, -1.0)  # disable
         self.use_sphere_bound = True
+        self.last_sample_opaque = False
 
     def gen_rays(self, factor=1):
         print(" Generating rays, scaling factor", factor)

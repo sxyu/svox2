@@ -95,12 +95,13 @@ class LLFFDataset(Dataset):
                 "please feel free to extend"
 
         self.imgs = []
-        is_train_split = split.startswith('train')
+        is_train_split = split.endswith('train')
         for i, ind in enumerate(self.sfm.imgs):
             img = self.sfm.imgs[ind]
             img_train_split = ind % hold_every > 0
             if is_train_split == img_train_split:
                 self.imgs.append(img)
+        self.is_train_split = is_train_split
 
         self._load_images()
         self.n_images, self.h_full, self.w_full, _ = self.gt.shape
@@ -131,42 +132,55 @@ class LLFFDataset(Dataset):
         global_w2rc = np.concatenate([self.sfm.ref_img['r'], self.sfm.ref_img['t']], axis=1)
         global_w2rc = np.concatenate([global_w2rc, bottom], axis=0).astype(np.float64)
         for idx in tqdm(range(len(self.imgs))):
-            img_path = self.imgs[idx]["path"]
             R = self.imgs[idx]["R"].astype(np.float64)
             t = self.imgs[idx]["center"].astype(np.float64)
             c2w = np.concatenate([R, t], axis=1)
             c2w = np.concatenate([c2w, bottom], axis=0)
-            c2w = global_w2rc @ c2w
+            #  c2w = global_w2rc @ c2w
             all_c2w.append(torch.from_numpy(c2w.astype(np.float32)))
 
-            img_path = os.path.join(self.dataset, img_path)
-            if not os.path.exists(img_path):
-                path_noext = os.path.splitext(img_path)[0]
-                # Hack: also try png (NeRF-LLFF datasets have downscaled images
-                #  as .png )
-                if os.path.exists(path_noext + '.png'):
-                    img_path = path_noext + '.png'
-            img = imageio.imread(img_path)
-            if scale != 1 and not self.sfm.use_integral_scaling:
-                h, w = img.shape[:2]
-                if self.sfm.dataset_type == "deepview":
-                    newh = int(h * scale)  # always floor down height
-                    neww = round(w * scale)
-                else:
-                    newh = round(h * scale)
-                    neww = round(w * scale)
-                img = cv2.resize(img, (neww, newh), interpolation=cv2.INTER_AREA)
-            all_gt.append(torch.from_numpy(img))
+            if 'path' in self.imgs[idx]:
+                img_path = self.imgs[idx]["path"]
+                img_path = os.path.join(self.dataset, img_path)
+                if not os.path.exists(img_path):
+                    path_noext = os.path.splitext(img_path)[0]
+                    # Hack: also try png
+                    if os.path.exists(path_noext + '.png'):
+                        img_path = path_noext + '.png'
+                img = imageio.imread(img_path)
+                if scale != 1 and not self.sfm.use_integral_scaling:
+                    h, w = img.shape[:2]
+                    if self.sfm.dataset_type == "deepview":
+                        newh = int(h * scale)  # always floor down height
+                        neww = round(w * scale)
+                    else:
+                        newh = round(h * scale)
+                        neww = round(w * scale)
+                    img = cv2.resize(img, (neww, newh), interpolation=cv2.INTER_AREA)
+                all_gt.append(torch.from_numpy(img))
         self.gt = torch.stack(all_gt).float() / 255.0
         if self.gt.size(-1) == 4:
             # Apply alpha channel
             self.gt = self.gt[..., :3] * self.gt[..., 3:] + (1.0 - self.gt[..., 3:])
         self.c2w = torch.stack(all_c2w)
-        bds_scale = 1.0 / (self.sfm.dmin * 0.75) # 0.9
-        #  bds_scale = 1.0
+        #  bds_scale = 1.0 / (self.sfm.dmin * 0.9) # 0.9
+        bds_scale = 1.0
         print('scene rescale', bds_scale)
         self.z_bounds = [self.sfm.dmin * bds_scale, self.sfm.dmax * bds_scale]
         self.c2w[:, :3, 3] *= bds_scale
+
+        if not self.is_train_split:
+            render_c2w = []
+            for idx in tqdm(range(len(self.sfm.render_poses))):
+                R = self.sfm.render_poses[idx]["R"].astype(np.float64)
+                t = self.sfm.render_poses[idx]["center"].astype(np.float64)
+                c2w = np.concatenate([R, t], axis=1)
+                c2w = np.concatenate([c2w, bottom], axis=0)
+                render_c2w.append(torch.from_numpy(c2w.astype(np.float32)))
+            self.render_c2w = torch.stack(render_c2w)
+            self.render_c2w[:, :3, 3] *= bds_scale
+
+        #  self.render_c2w[:, :3, 3] *= bds_scale
         fx = self.sfm.ref_cam['fx']
         fy = self.sfm.ref_cam['fy']
         width = self.sfm.ref_cam['width']
@@ -181,6 +195,7 @@ class LLFFDataset(Dataset):
         self.scene_radius = [radx, rady, 1.0]
         print('scene_radius', self.scene_radius)
         self.use_sphere_bound = False
+        self.last_sample_opaque = False
 
 
     def gen_rays(self, factor=1):
@@ -392,7 +407,8 @@ class SfMData:
             poses,
             intrinsic
         ) = load_llff_data(
-            dataset, factor=None, split_train_val=self.hold_every, render_style=self.render_style
+            dataset, factor=None, split_train_val=self.hold_every,
+            render_style=self.render_style
         )
 
         # NSVF-compatible sort key

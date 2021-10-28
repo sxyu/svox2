@@ -125,8 +125,6 @@ group.add_argument('--weight_thresh', type=float,
                    help='Resample (upsample to 512) weight threshold')
 group.add_argument('--use_weight_thresh', action='store_true', default=True,
                     help='use weight thresholding')
-#  group.add_argument('--norand', action='store_true', default=True,
-#                     help='disable random')
 
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
@@ -134,12 +132,12 @@ group.add_argument('--tune_mode', action='store_true', default=False,
 group.add_argument('--rms_beta', type=float, default=0.9)
 group.add_argument('--lambda_tv', type=float, default=1e-3)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
-group.add_argument('--tv_logalpha', action='store_true', default=False, help='Use log(1-exp(-delta * sigma)) as in neural volumes')
+group.add_argument('--tv_logalpha', action='store_true', default=True, help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
 group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-2)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)#1e-2)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -148,7 +146,6 @@ group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
-group.add_argument('--last_sample_opaque', action='store_true', default=True)
 args = parser.parse_args()
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
@@ -189,7 +186,7 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         basis_reso=args.basis_reso,
                         use_learned_basis=False)
 
-grid.opt.last_sample_opaque = args.last_sample_opaque
+grid.opt.last_sample_opaque = dset.last_sample_opaque
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0

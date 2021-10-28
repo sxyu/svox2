@@ -168,9 +168,11 @@ __global__ void tv_grad_sparse_kernel(
 #undef MAYBE_ADD_SET
 }
 
-#define _LOGALPHA(x)  logf(1.0 - expf(-delta * fmaxf(x, 0)) + 1e-3)
-#define _D_LOGALPHA(x)  ((delta * expf(-delta * fmaxf(x, 0)) * (x > 0.f)) / \
-                         (1.0 - expf(-delta * fmaxf(x, 0)) + 1e-3))
+// Cauchy
+#define _LOGALPHA(x)  logf(1.0 + delta * x * x + 1e-3)
+#define _D_LOGALPHA(x)  (delta * 2 * x) / (1.0 + delta * x * x + 1e-3)
+// ((delta * expf(-delta * fmaxf(x, 0)) * (x > 0.f)) / \
+//  (1.0 - expf(-delta * fmaxf(x, 0)) + 1e-3))
 
 __global__ void tv_logalpha_kernel(
         torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
@@ -315,7 +317,8 @@ __global__ void tv_logalpha_grad_sparse_kernel(
     const float dy = v010 - v000;
     const float dz = v001 - v000;
     const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
-#define MAYBE_ADD_SET(gp, val) if (links_ptr[gp] >= 0 && val != 0.f) { \
+#define MAYBE_ADD_SET(gp, expr) float val = (expr);\
+    if (links_ptr[gp] >= 0 && val != 0.f) { \
     atomicAdd(&grad_data[links_ptr[gp] * data.size(1) + idx], val * idelta); \
     if (mask_out != nullptr) { \
         mask_out[links_ptr[gp]] = true; \
@@ -331,7 +334,7 @@ __global__ void tv_logalpha_grad_sparse_kernel(
 #undef MAYBE_ADD_SET
 }
 
-// Sparsity loss 
+// Sparsity loss
 // TODO: simplify this. No need to go through links...
 
 __global__ void sparsity_kernel(
