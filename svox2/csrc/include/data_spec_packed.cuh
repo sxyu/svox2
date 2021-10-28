@@ -27,8 +27,7 @@ struct PackedSparseGridSpec {
                   spec._offset.data_ptr<float>()[2]},
           _scaling{spec._scaling.data_ptr<float>()[0],
                    spec._scaling.data_ptr<float>()[1],
-                   spec._scaling.data_ptr<float>()[2]},
-         _z_ratio{spec._z_ratio} {
+                   spec._scaling.data_ptr<float>()[2]} {
     }
 
     float* __restrict__ density_data;
@@ -42,7 +41,6 @@ struct PackedSparseGridSpec {
     const int basis_dim, sh_data_dim, basis_reso;
     const float _offset[3];
     const float _scaling[3];
-    const float _z_ratio;
 };
 
 struct PackedCameraSpec {
@@ -50,7 +48,8 @@ struct PackedCameraSpec {
         c2w(cam.c2w.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
         fx(cam.fx), fy(cam.fy),
         cx(cam.cx), cy(cam.cy),
-        width(cam.width), height(cam.height) {}
+        width(cam.width), height(cam.height),
+        ndc_coeffx(cam.ndc_coeffx), ndc_coeffy(cam.ndc_coeffy) {}
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
         c2w;
     float fx;
@@ -59,6 +58,9 @@ struct PackedCameraSpec {
     float cy;
     int width;
     int height;
+
+    float ndc_coeffx;
+    float ndc_coeffy;
 };
 
 struct PackedRaysSpec {

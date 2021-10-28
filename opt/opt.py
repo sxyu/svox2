@@ -41,7 +41,7 @@ group.add_argument('--final_reso', type=int, default=1024,
                    help='FINAL grid resolution')
 group.add_argument('--init_reso', type=int, default=512,
                    help='INITIAL grid resolution')
-group.add_argument('--ref_reso', type=int, default=1024,
+group.add_argument('--ref_reso', type=int, default=512,
                    help='reference grid resolution (for adjusting lr)')
 group.add_argument('--z_reso_factor', type=float, default=192/1024,
                    help='z dimension resolution factor')
@@ -60,9 +60,9 @@ group.add_argument('--batch_size', type=int, default=
 # TODO: make the lr higher near the end
 group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
 group.add_argument('--lr_sigma', type=float, default=
-                                            2e1,
+                                            3e1,
         help='SGD/rmsprop lr for sigma')
-group.add_argument('--lr_sigma_final', type=float, default=1e-2)
+group.add_argument('--lr_sigma_final', type=float, default=5e-2)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
                    help="Reverse cosine steps (0 means disable)")
@@ -71,11 +71,11 @@ group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
 group.add_argument('--lr_sh', type=float, default=
-                    1e-3,
+                    1e-2,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=
-                    5e-6
+                    5e-5
                     )
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
@@ -118,7 +118,7 @@ group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
 group.add_argument('--sigma_thresh', type=float,
-                    default=2.5,
+                    default=1.0,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--weight_thresh', type=float,
                     default=0.0005,
@@ -134,11 +134,12 @@ group.add_argument('--tune_mode', action='store_true', default=False,
 group.add_argument('--rms_beta', type=float, default=0.9)
 group.add_argument('--lambda_tv', type=float, default=1e-3)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
+group.add_argument('--tv_logalpha', action='store_true', default=False, help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
 group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-2)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -147,6 +148,7 @@ group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
+group.add_argument('--last_sample_opaque', action='store_true', default=True)
 args = parser.parse_args()
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
@@ -187,21 +189,18 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         basis_reso=args.basis_reso,
                         use_learned_basis=False)
 
-if hasattr(dset, 'z_bounds'):
-    print('Setting bounds', dset.z_bounds)
-    grid.set_frustum_bounds(dset.z_bounds[0], dset.z_bounds[1])
-    print(' ', grid._z_ratio)
-    grid.opt.last_sample_opaque = True
+grid.opt.last_sample_opaque = args.last_sample_opaque
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
-#  grid.sh_data.data.normal_(mean=0.0, std=0.001)
 grid.density_data.data[:] = args.init_sigma
 
+#  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
 #  den = grid.density_data.data.view(grid.links.shape)
-#  den[:] = 0.01
-#  den[:, :, -1] = 1e9
+#  #  den[:] = 0.00
+#  #  den[:, :256, :] = 1e9
+#  #  den[:, :, 0] = 1e9
 #  grid.density_data.data = den.view(osh)
 
 if grid.use_learned_basis:
@@ -228,8 +227,9 @@ resample_cameras = [
                      dset.intrins.fy,
                      dset.intrins.cx,
                      dset.intrins.cy,
-                     dset.w,
-                     dset.h) for c2w in dset.c2w
+                     width=dset.w,
+                     height=dset.h,
+                     ndc_coeffs=dset.ndc_coeffs) for c2w in dset.c2w
     ] if args.use_weight_thresh else None
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
@@ -279,8 +279,9 @@ while True:
                                    dset_test.intrins.fy,
                                    dset_test.intrins.cx,
                                    dset_test.intrins.cy,
-                                   dset_test.w,
-                                   dset_test.h)
+                                   width=dset_test.w,
+                                   height=dset_test.h,
+                                   ndc_coeffs=dset_test.ndc_coeffs)
                 rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
@@ -289,6 +290,9 @@ while True:
                     img_pred.clamp_max_(1.0)
                     summary_writer.add_image(f'test/image_{img_id:04d}',
                             img_pred, global_step=gstep_id_base, dataformats='HWC')
+                    mse_img = all_mses / all_mses.max()
+                    summary_writer.add_image(f'test/mse_map_{img_id:04d}',
+                            mse_img, global_step=gstep_id_base, dataformats='HWC')
 
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
@@ -367,7 +371,7 @@ while True:
                     stats[stat_name] = 0.0
                 if args.lambda_tv > 0.0:
                     with torch.no_grad():
-                        tv = grid.tv()
+                        tv = grid.tv(logalpha=args.tv_logalpha)
                     summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
                 if args.lambda_sparsity > 0.0:
                     with torch.no_grad():
@@ -393,7 +397,8 @@ while True:
             if args.lambda_tv > 0.0:
                 grid.inplace_tv_grad(grid.density_data.grad,
                         scaling=args.lambda_tv,
-                        sparse_frac=args.tv_sparsity)
+                        sparse_frac=args.tv_sparsity,
+                        logalpha=args.tv_logalpha)
             if args.lambda_sparsity > 0.0:
                 # Overkill
                 grid.inplace_sparsity_grad(grid.density_data.grad,
@@ -437,15 +442,16 @@ while True:
                              reso, reso, int(reso * args.z_reso_factor)],
                     sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
-                    dilate=1, #use_sparsify,
+                    dilate=2, #use_sparsify,
                     cameras=resample_cameras)
             if non_final:
                 #  if reso <= args.ref_reso:
                 #  lr_sigma_factor *= 8
                 #  else:
                 #  lr_sigma_factor *= 4
-                lr_sh_factor *= args.lr_sh_upscale_factor
-            print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
+                if args.lr_sh_upscale_factor > 1:
+                    lr_sh_factor *= args.lr_sh_upscale_factor
+                    print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
         if factor > 1 and reso < args.final_reso:
             factor //= 2

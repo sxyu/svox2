@@ -30,6 +30,29 @@ from .load_llff import load_llff_data
 from typing import Union
 
 
+def convert_to_ndc(origins, directions, ndc_coeffs, near: float = 1.0):
+    """Convert a set of rays to NDC coordinates."""
+    # Shift ray origins to near plane, not sure if needed
+    t = (near - origins[Ellipsis, 2]) / directions[Ellipsis, 2]
+    origins = origins + t[Ellipsis, None] * directions
+
+    dx, dy, dz = directions.unbind(-1)
+    ox, oy, oz = origins.unbind(-1)
+
+    # Projection
+    o0 = ndc_coeffs[0] * (ox / oz)
+    o1 = ndc_coeffs[1] * (oy / oz)
+    o2 = 1 - 2 * near / oz
+
+    d0 = ndc_coeffs[0] * (dx / dz - ox / oz)
+    d1 = ndc_coeffs[1] * (dy / dz - oy / oz)
+    d2 = 2 * near / oz;
+
+    origins = torch.stack([o0, o1, o2], -1)
+    directions = torch.stack([d0, d1, d2], -1)
+    return origins, directions
+
+
 class LLFFDataset(Dataset):
     def __init__(
         self,
@@ -46,8 +69,8 @@ class LLFFDataset(Dataset):
         invz : int= 0,
         transform=None,
         render_style="",
-        offset=200,
         hold_every=8,
+        offset=250,
     ):
         self.scale = scale
         self.dataset = root
@@ -89,6 +112,8 @@ class LLFFDataset(Dataset):
                                    self.sfm.ref_cam['px'],
                                    self.sfm.ref_cam['py'])
 
+        self.ndc_coeffs = (2 * self.intrins_full.fx / self.w_full,
+                           2 * self.intrins_full.fy / self.h_full)
         if self.split == "train":
             self.gen_rays(factor=factor)
         else:
@@ -99,15 +124,6 @@ class LLFFDataset(Dataset):
 
     def _load_images(self):
         scale = self.scale
-        img_dir_name = "images_4"
-        use_integral_scaling = False
-        scaled_img_dir = ''
-        if scale != 1 and abs((1.0 / scale) - round(1.0 / scale)) < 1e-9:
-            # Integral scaling
-            scaled_img_dir = "images_" + str(round(1.0 / scale))
-            if os.path.isdir(os.path.join(self.dataset, scaled_img_dir)):
-                use_integral_scaling = True
-                print('Using pre-scaled images from', os.path.join(self.dataset, scaled_img_dir))
 
         all_gt = []
         all_c2w = []
@@ -123,8 +139,6 @@ class LLFFDataset(Dataset):
             c2w = global_w2rc @ c2w
             all_c2w.append(torch.from_numpy(c2w.astype(np.float32)))
 
-            if use_integral_scaling:
-                img_path = scaled_img_dir + '/' +  '/'.join(img_path.split('/')[1:])
             img_path = os.path.join(self.dataset, img_path)
             if not os.path.exists(img_path):
                 path_noext = os.path.splitext(img_path)[0]
@@ -133,7 +147,7 @@ class LLFFDataset(Dataset):
                 if os.path.exists(path_noext + '.png'):
                     img_path = path_noext + '.png'
             img = imageio.imread(img_path)
-            if scale != 1 and not use_integral_scaling:
+            if scale != 1 and not self.sfm.use_integral_scaling:
                 h, w = img.shape[:2]
                 if self.sfm.dataset_type == "deepview":
                     newh = int(h * scale)  # always floor down height
@@ -148,31 +162,26 @@ class LLFFDataset(Dataset):
             # Apply alpha channel
             self.gt = self.gt[..., :3] * self.gt[..., 3:] + (1.0 - self.gt[..., 3:])
         self.c2w = torch.stack(all_c2w)
-        self.z_bounds = [self.sfm.dmin, self.sfm.dmax]
-
+        bds_scale = 1.0 / (self.sfm.dmin * 0.75) # 0.9
+        #  bds_scale = 1.0
+        print('scene rescale', bds_scale)
+        self.z_bounds = [self.sfm.dmin * bds_scale, self.sfm.dmax * bds_scale]
+        self.c2w[:, :3, 3] *= bds_scale
         fx = self.sfm.ref_cam['fx']
         fy = self.sfm.ref_cam['fy']
         width = self.sfm.ref_cam['width']
         height = self.sfm.ref_cam['height']
 
         print('z_bounds from LLFF:', self.z_bounds)
-        
 
-        zmid = (self.z_bounds[0] + self.z_bounds[1]) * 0.5
-        zrad = (self.z_bounds[1] - self.z_bounds[0]) * 0.5
+        radx = 1 + 2 * self.sfm.offset / self.gt.size(2)
+        rady = 1 + 2 * self.sfm.offset / self.gt.size(1)
 
-        z_max = 1.0 # 0.5 
-        scene_scale = z_max / zrad
-        zmid *= scene_scale
-        x_max = zmid * (width + 2 * self.sfm.offset) / (2 * fx)
-        y_max = zmid * (height + 2 * self.sfm.offset) / (2 * fy)
-
-        self.scene_center = [0.0, 0.0, zmid]
-        self.scene_radius = [x_max, y_max, z_max]
-        self.z_bounds = [self.z_bounds[0] * scene_scale, self.z_bounds[1] * scene_scale]
+        self.scene_center = [0.0, 0.0, 0.0]
+        self.scene_radius = [radx, rady, 1.0]
+        print('scene_radius', self.scene_radius)
         self.use_sphere_bound = False
 
-        self.c2w[:, :3, 3] *= scene_scale
 
     def gen_rays(self, factor=1):
         print(" Generating rays, scaling factor", factor)
@@ -207,6 +216,13 @@ class LLFFDataset(Dataset):
             origins = origins.view(-1, 3)
             dirs = dirs.view(-1, 3)
             gt = gt.reshape(-1, 3)
+
+        # To NDC
+        origins, dirs = convert_to_ndc(
+                origins,
+                dirs,
+                self.ndc_coeffs)
+        dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 
         self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
         self.rays = self.rays_init
@@ -354,6 +370,20 @@ class SfMData:
         image_dir = os.path.join(dataset, "images")
         if not os.path.exists(image_dir) and not os.path.isdir(image_dir):
             return False
+
+        self.use_integral_scaling = False
+        scaled_img_dir = ''
+        scale = self.scale
+        if scale != 1 and abs((1.0 / scale) - round(1.0 / scale)) < 1e-9:
+            # Integral scaling
+            scaled_img_dir = "images_" + str(round(1.0 / scale))
+            if os.path.isdir(os.path.join(self.dataset, scaled_img_dir)):
+                self.use_integral_scaling = True
+                image_dir = os.path.join(self.dataset, scaled_img_dir)
+                print('Using pre-scaled images from', image_dir)
+            else:
+                scaled_img_dir = "images"
+
         # load R,T
         (
             reference_depth,
@@ -373,7 +403,7 @@ class SfMData:
                 return x
 
         # get all image of this dataset
-        images_path = [os.path.join("images", f) for f in sorted(os.listdir(image_dir), key=nsvf_sort_key)]
+        images_path = [os.path.join(scaled_img_dir, f) for f in sorted(os.listdir(image_dir), key=nsvf_sort_key)]
 
         # LLFF dataset has only single camera in dataset
         if len(intrinsic) == 3:

@@ -315,6 +315,35 @@ __device__ __inline__ float _get_delta_scale(
     return delta_scale;
 }
 
+__device__ __inline__ static void _normalize(
+                float* dir) {
+    float norm = _norm(dir);
+    dir[0] /= norm; dir[1] /= norm; dir[2] /= norm;
+}
+
+__device__ __inline__ static void world2ndc(
+        const PackedCameraSpec& __restrict__ cam,
+        float* __restrict__ dir,
+        float* __restrict__ cen,
+        float near = 1.f) {
+    // Shift ray origins to near plane, not sure if needed
+    const float t = (near - cen[2]) / dir[2];
+#pragma unroll 3
+    for (int i = 0; i < 3; ++i) {
+        cen[i] = cen[i] + t * dir[i];
+    }
+
+    dir[0] = cam.ndc_coeffx * (dir[0] / dir[2] - cen[0] / cen[2]);
+    dir[1] = cam.ndc_coeffy * (dir[1] / dir[2] - cen[1] / cen[2]);
+    dir[2] = 2 * near / cen[2];
+
+    cen[0] = cam.ndc_coeffx * (cen[0] / cen[2]);
+    cen[1] = cam.ndc_coeffy * (cen[1] / cen[2]);
+    cen[2] = 1 - 2 * near / cen[2];
+
+    _normalize(dir);
+}
+
 __device__ __inline__ void cam2world_ray(
     int ix, int iy,
     float* dir,
@@ -329,6 +358,9 @@ __device__ __inline__ void cam2world_ray(
     dir[1] = cam.c2w[1][0] * x + cam.c2w[1][1] * y + cam.c2w[1][2] * z;
     dir[2] = cam.c2w[2][0] * x + cam.c2w[2][1] * y + cam.c2w[2][2] * z;
     origin[0] = cam.c2w[0][3]; origin[1] = cam.c2w[1][3]; origin[2] = cam.c2w[2][3];
+
+    if (cam.ndc_coeffx > 0.f)
+        world2ndc(cam, dir, origin);
 }
 
 __device__ __inline__ void ray_find_bounds(
@@ -342,8 +374,7 @@ __device__ __inline__ void ray_find_bounds(
 
     ray.tmin = 0.0f;
     ray.tmax = 2e3f;
-    int start = grid._z_ratio > 0.f ? 2 : 0;
-    for (int i = start; i < 3; ++i) {
+    for (int i = 0; i < 3; ++i) {
         const float invdir = 1.0 / ray.dir[i];
         const float t1 = (-0.5f - ray.origin[i]) * invdir;
         const float t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;

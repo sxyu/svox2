@@ -58,23 +58,11 @@ __device__ __inline__ void trace_ray_cuvol(
     float outv = 0.f;
 
     float light_intensity = 0.f;
-    const float grid_cen_x = (grid.size[0] - 1) * 0.5f;
-    const float grid_cen_y = (grid.size[1] - 1) * 0.5f;
-    const float grid_cen_z = (grid.size[2] - 1) * 0.5f;
 
     while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
-        }
-        // printf("%f: %f %f %f zr%f\n", t, ray.pos[0], ray.pos[1], ray.pos[2], grid._z_ratio);
-        if (grid._z_ratio > 0.0) {
-            const float factor = 1.f / (1.f + grid._z_ratio * (ray.pos[2] - grid_cen_z));
-            ray.pos[0] = fmaf(ray.pos[0] - grid_cen_x, factor, grid_cen_x);
-            ray.pos[1] = fmaf(ray.pos[1] - grid_cen_y, factor, grid_cen_y);
-        }
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
             ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
             ray.pos[j] -= static_cast<float>(ray.l[j]);
@@ -106,7 +94,7 @@ __device__ __inline__ void trace_ray_cuvol(
 
             float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            lane_color, lane_colorgrp_id == 0);
-            outv += weight * __saturatef(lane_color_total + 0.5f);  // Clamp to [+0, 1]
+            outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, 1]
             if (_EXP(light_intensity) < opt.stop_thresh) {
                 break;
             }
@@ -147,23 +135,12 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                            color_cache[2] * grad_output[2]));
 
     float light_intensity = 0.f;
-    const float grid_cen_x = (grid.size[0] - 1) * 0.5f;
-    const float grid_cen_y = (grid.size[1] - 1) * 0.5f;
-    const float grid_cen_z = (grid.size[2] - 1) * 0.5f;
 
     // remat samples
     while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
-        }
-        if (grid._z_ratio > 0.0) {
-            const float factor = 1.f / (1.f + grid._z_ratio * (ray.pos[2] - grid_cen_z));
-            ray.pos[0] = fmaf(ray.pos[0] - grid_cen_x, factor, grid_cen_x);
-            ray.pos[1] = fmaf(ray.pos[1] - grid_cen_y, factor, grid_cen_y);
-        }
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
             ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
             ray.pos[j] -= static_cast<float>(ray.l[j]);
@@ -196,7 +173,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            weighted_lane_color, lane_colorgrp_id == 0) + 0.5f;
-            float total_color = __saturatef(lane_color_total);
+            float total_color = fmaxf(lane_color_total, 0.f);
             float color_in_01 = total_color == lane_color_total;
             total_color *= gout; // Clamp to [+0, 1]
 

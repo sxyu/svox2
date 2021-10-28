@@ -86,6 +86,7 @@ class NeRFDataset:
         # Hardcoded; adjust scene_scale to make sure the scene fits in a unit sphere
         self.scene_center = [0.0, 0.0, 0.0]
         self.scene_radius = 1.0
+        self.ndc_coeffs = (-1.0, -1.0)  # disable
         self.use_sphere_bound = True
 
     def gen_rays(self, factor=1):

@@ -4,6 +4,7 @@
 #include <torch/extension.h>
 #include <cstdint>
 #include <cstdio>
+#include <iostream>
 #include "cuda_util.cuh"
 #include "render_util.cuh"
 #include "data_spec_packed.cuh"
@@ -49,7 +50,6 @@ __device__ __inline__ void grid_trace_ray(
         const float* __restrict__ offset,
         const float* __restrict__ scaling,
         float step_size,
-        float z_ratio,
         bool last_sample_opaque,
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
         grid_weight) {
@@ -64,9 +64,8 @@ __device__ __inline__ void grid_trace_ray(
         float t1, t2;
         t = 0.0f;
         tmax = 2e3f;
-        const int start = z_ratio > 0.f ? 2 : 0;
 #pragma unroll 3
-        for (int i = start; i < 3; ++i) {
+        for (int i = 0; i < 3; ++i) {
             const float invdir = 1.0 / ray.dir[i];
             t1 = (-0.5f - ray.origin[i]) * invdir;
             t2 = (data.size(i) - 0.5f  - ray.origin[i]) * invdir;
@@ -84,10 +83,6 @@ __device__ __inline__ void grid_trace_ray(
     float pos[3];
     int32_t l[3];
 
-    const float grid_cen_x = (data.size(0) - 1) * 0.5f;
-    const float grid_cen_y = (data.size(1) - 1) * 0.5f;
-    const float grid_cen_z = (data.size(2) - 1) * 0.5f;
-
     float log_light_intensity = 0.f;
     const int stride0 = data.size(1) * data.size(2);
     const int stride1 = data.size(2);
@@ -95,14 +90,6 @@ __device__ __inline__ void grid_trace_ray(
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             pos[j] = ray.origin[j] + t * ray.dir[j];
-        }
-        if (z_ratio > 0.0) {
-            const float factor = 1.f / (1.f + z_ratio * (pos[2] - grid_cen_z));
-            pos[0] = fmaf(pos[0] - grid_cen_x, factor, grid_cen_x);
-            pos[1] = fmaf(pos[1] - grid_cen_y, factor, grid_cen_y);
-        }
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
             pos[j] = min(max(pos[j], 0.f), data.size(j) - 1.f);
             l[j] = (int32_t) pos[j];
             l[j] = min(l[j], data.size(j) - 2);
@@ -155,7 +142,6 @@ __global__ void grid_weight_render_kernel(
         data,
     PackedCameraSpec cam,
     float step_size,
-    float z_ratio,
     bool last_sample_opaque,
     const float* __restrict__ offset,
     const float* __restrict__ scaling,
@@ -171,7 +157,6 @@ __global__ void grid_weight_render_kernel(
         offset,
         scaling,
         step_size,
-        z_ratio,
         last_sample_opaque,
         grid_weight);
 }
@@ -200,7 +185,6 @@ torch::Tensor dilate(torch::Tensor grid) {
 void grid_weight_render(
     torch::Tensor data, CameraSpec& cam,
     float step_size,
-    float z_ratio,
     bool last_sample_opaque,
     torch::Tensor offset, torch::Tensor scaling,
     torch::Tensor grid_weight_out) {
@@ -219,7 +203,6 @@ void grid_weight_render(
         data.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         cam,
         step_size,
-        z_ratio,
         last_sample_opaque,
         offset.data_ptr<float>(),
         scaling.data_ptr<float>(),

@@ -11,7 +11,6 @@ struct SparseGridSpec {
   Tensor links;
   Tensor _offset;
   Tensor _scaling;
-  float _z_ratio;
 
   int basis_dim;
   bool use_learned_basis;
@@ -45,6 +44,9 @@ struct CameraSpec {
   float cy;
   int width;
   int height;
+
+  float ndc_coeffx;
+  float ndc_coeffy;
 
   inline void check() {
     CHECK_INPUT(c2w);

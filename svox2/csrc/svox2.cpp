@@ -38,8 +38,8 @@ Tensor sparsity(Tensor, Tensor, float);
 void sparsity_grad(Tensor, Tensor, float, float, Tensor);
 void sparsity_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
 
-void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
-                        Tensor, Tensor);
+void grid_weight_render(Tensor, CameraSpec &, float, bool, Tensor, Tensor,
+                        Tensor);
 
 void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float);
 void sgd_step(Tensor, Tensor, Tensor, float);
@@ -78,7 +78,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("links", &SparseGridSpec::links)
       .def_readwrite("_offset", &SparseGridSpec::_offset)
       .def_readwrite("_scaling", &SparseGridSpec::_scaling)
-      .def_readwrite("_z_ratio", &SparseGridSpec::_z_ratio)
       .def_readwrite("basis_dim", &SparseGridSpec::basis_dim)
       .def_readwrite("use_learned_basis", &SparseGridSpec::use_learned_basis)
       .def_readwrite("basis_data", &SparseGridSpec::basis_data);
@@ -91,7 +90,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("cx", &CameraSpec::cx)
       .def_readwrite("cy", &CameraSpec::cy)
       .def_readwrite("width", &CameraSpec::width)
-      .def_readwrite("height", &CameraSpec::height);
+      .def_readwrite("height", &CameraSpec::height)
+      .def_readwrite("ndc_coeffx", &CameraSpec::ndc_coeffx)
+      .def_readwrite("ndc_coeffy", &CameraSpec::ndc_coeffy);
 
   py::class_<RaysSpec>(m, "RaysSpec")
       .def(py::init<>())

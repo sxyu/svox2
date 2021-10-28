@@ -11,7 +11,7 @@ from .utils import (
 import torch
 from torch import nn, autograd
 import torch.nn.functional as F
-from typing import Union, List, NamedTuple, Optional
+from typing import Union, List, NamedTuple, Optional, Tuple
 from dataclasses import dataclass
 from warnings import warn
 from functools import reduce
@@ -87,6 +87,12 @@ class Camera:
     width: int
     height: int
 
+    ndc_coeffs: Union[Tuple[float, float], List[float]] = (-1.0, -1.0)
+    
+    @property
+    def using_ndc(self):
+        return self.ndc_coeffs[0] > 0.0
+
     def _to_cpp(self):
         """
         Generate object to pass to C++
@@ -99,6 +105,8 @@ class Camera:
         spec.cy = self.cy
         spec.width = self.width
         spec.height = self.height
+        spec.ndc_coeffx = self.ndc_coeffs[0]
+        spec.ndc_coeffy = self.ndc_coeffs[1]
         return spec
 
     @property
@@ -448,9 +456,6 @@ class SparseGrid(nn.Module):
         self.sh_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
 
-        self.use_frustum = False
-        self._z_ratio = -1.0
-
     @property
     def data_dim(self):
         """
@@ -576,8 +581,6 @@ class SparseGrid(nn.Module):
         invdirs = 1.0 / dirs
         invdirs[dirs == 0] = 1e9
 
-        z_ratio = self._z_ratio / self.links.size(2) if self.use_frustum else -1.0
-
         gsz = self._grid_size()
         t1 = (-0.5 - origins) * invdirs
         t2 = (gsz.to(device=dirs.device) - 0.5 - origins) * invdirs
@@ -601,10 +604,6 @@ class SparseGrid(nn.Module):
         grid_cen_y = (self.links.size(1) - 1) * 0.5;
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
-            if self.use_frustum:
-                factor = 1.0 / (1.0 + z_ratio * (pos[:, 2] + 0.5))
-                pos[:, 0] = (pos[:, 0] - grid_cen_x) * factor + grid_cen_x;
-                pos[:, 1] = (pos[:, 1] - grid_cen_y) * factor + grid_cen_y;
 
             l = pos.to(torch.long)
             l.clamp_min_(0)
@@ -662,10 +661,9 @@ class SparseGrid(nn.Module):
             )
             # [B', 3, n_sh_coeffs]
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-            rgb = torch.clamp(
+            rgb = torch.clamp_min(
                 torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
                 0.0,
-                1.0
             )  # [B', 3]
             rgb = weight[:, None] * rgb[:, :3]
 
@@ -879,12 +877,10 @@ class SparseGrid(nn.Module):
                 scaling = (self._scaling * gsz).to(device=device)
                 max_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
                 print(" Grid weight render", sigmas.shape)
-                z_ratio = self._z_ratio / reso[2] if self.use_frustum else -1.0
                 for cam in tqdm(cameras):
                     _C.grid_weight_render(
                         sigmas, cam._to_cpp(),
                         0.5,
-                        z_ratio,
                         self.opt.last_sample_opaque,
                         offset, scaling, max_wt_grid
                     )
@@ -1378,11 +1374,6 @@ class SparseGrid(nn.Module):
         reso = self.links.shape
         return reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])
 
-    def set_frustum_bounds(self, z_near: float, z_far: float):
-        assert z_near > 0.0 and (z_far - z_near) > 0.0, "Invalid NDC"
-        self.use_frustum = True
-        self._z_ratio = (z_far - z_near) / ((z_near + z_far) * 0.5)
-
     def _to_cpp(self, grid_coords: bool = False):
         """
         Generate object to pass to C++
@@ -1398,8 +1389,6 @@ class SparseGrid(nn.Module):
             gsz = self._grid_size()
             gspec._offset = self._offset * gsz - 0.5
             gspec._scaling = self._scaling * gsz
-        gspec._z_ratio = self._z_ratio / self.links.size(2) if self.use_frustum else -1.0
-        # need to divide centered x,y by  z_in_grid * _z_ratio
 
         gspec.basis_dim = self.basis_dim
         gspec.use_learned_basis = self.use_learned_basis
