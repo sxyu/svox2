@@ -32,6 +32,43 @@ __device__ __inline__ float trilerp_one(
     return lerp(ix0, ix1, pos[0]);
 }
 
+__device__ __inline__ float compute_skip_dist(
+        SingleRaySpec& __restrict__ ray,
+        const int32_t* __restrict__ links,
+        int offx, int offy) {
+    const int32_t link_val = links[offx * ray.l[0] + offy * ray.l[1] + ray.l[2]];
+    if (link_val >= -1) return 0.f; // Not worth
+
+    const uint32_t dist = -link_val;
+    const uint32_t cell_ul_shift = (dist - 1);
+    const uint32_t cell_side_len = (1 << cell_ul_shift) - 1.f;
+
+    // AABB intersection
+    // Consider caching the invdir for the ray
+    float tmin = 0.f;
+    float tmax = 1e9f;
+#pragma unroll
+    for (int i = 0; i < 3; ++i) {
+        int ul = ((ray.l[i] >> cell_ul_shift) << cell_ul_shift);
+        ul -= ray.l[i];
+
+        const float invdir = 1.0 / ray.dir[i];
+        const float t1 = (ul - ray.pos[i]) * invdir;
+        const float t2 = (ul + cell_side_len - ray.pos[i]) * invdir;
+        if (ray.dir[i] != 0.f) {
+            tmin = max(tmin, min(t1, t2));
+            tmax = min(tmax, max(t1, t2));
+        }
+    }
+    if (tmin > 0.f) {
+        // Somehow the origin is not in the cube
+        // Will happen near the lowest vertex of a cell,
+        // since l is always the lowest neighbor
+        return 0.f;
+    }
+    return tmax;
+}
+
 // trilerp with links
 template<class data_type_t, class voxel_index_t>
 __device__ __inline__ float trilerp_cuvol_one(

@@ -163,11 +163,12 @@ class LLFFDataset(Dataset):
             # Apply alpha channel
             self.gt = self.gt[..., :3] * self.gt[..., 3:] + (1.0 - self.gt[..., 3:])
         self.c2w = torch.stack(all_c2w)
-        #  bds_scale = 1.0 / (self.sfm.dmin * 0.9) # 0.9
+        #  bds_scale = 1.0 / (self.sfm.dmin * 0.75) # 0.9
         bds_scale = 1.0
         print('scene rescale', bds_scale)
         self.z_bounds = [self.sfm.dmin * bds_scale, self.sfm.dmax * bds_scale]
-        self.c2w[:, :3, 3] *= bds_scale
+        if bds_scale != 1.0:
+            self.c2w[:, :3, 3] *= bds_scale
 
         if not self.is_train_split:
             render_c2w = []
@@ -178,9 +179,9 @@ class LLFFDataset(Dataset):
                 c2w = np.concatenate([c2w, bottom], axis=0)
                 render_c2w.append(torch.from_numpy(c2w.astype(np.float32)))
             self.render_c2w = torch.stack(render_c2w)
-            self.render_c2w[:, :3, 3] *= bds_scale
+            if bds_scale != 1.0:
+                self.render_c2w[:, :3, 3] *= bds_scale
 
-        #  self.render_c2w[:, :3, 3] *= bds_scale
         fx = self.sfm.ref_cam['fx']
         fy = self.sfm.ref_cam['fy']
         width = self.sfm.ref_cam['width']
@@ -188,8 +189,8 @@ class LLFFDataset(Dataset):
 
         print('z_bounds from LLFF:', self.z_bounds)
 
-        radx = 1 + 2 * self.sfm.offset / self.gt.size(2)
-        rady = 1 + 2 * self.sfm.offset / self.gt.size(1)
+        radx = 1.35 #1 + 2 * self.sfm.offset / self.gt.size(2)
+        rady = 1.75 #+ 2 * self.sfm.offset / self.gt.size(1)
 
         self.scene_center = [0.0, 0.0, 0.0]
         self.scene_radius = [radx, rady, 1.0]

@@ -88,7 +88,7 @@ class Camera:
     height: int
 
     ndc_coeffs: Union[Tuple[float, float], List[float]] = (-1.0, -1.0)
-    
+
     @property
     def using_ndc(self):
         return self.ndc_coeffs[0] > 0.0
@@ -456,6 +456,9 @@ class SparseGrid(nn.Module):
         self.sh_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
 
+        if self.links.is_cuda and use_sphere_bound:
+            self.accelerate()
+
     @property
     def data_dim(self):
         """
@@ -784,6 +787,7 @@ class SparseGrid(nn.Module):
         dilate: int = 2,
         cameras: Optional[List[Camera]] = None,
         use_z_order=False,
+        accelerate=True,
     ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -794,6 +798,8 @@ class SparseGrid(nn.Module):
                              (keep neighbors in all 28 directions, including diagonals, of the desired nodes)
         :param cameras: Optional[List[Camera]], optional list of cameras in OpenCV convention (if given, uses weight thresholding)
         :param use_z_order: bool, if true, stores the data initially in a Z-order curve if possible
+        :param accelerate: bool, if true (default), calls grid.accelerate() after resampling
+                           to build distance transform table (only if on CUDA)
         """
         with torch.no_grad():
             device = self.links.device
@@ -923,6 +929,9 @@ class SparseGrid(nn.Module):
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
             self.links = init_links.view(reso).to(device=device)
 
+            if accelerate and self.links.is_cuda:
+                self.accelerate()
+
     def resize(self, basis_dim: int):
         """
         Modify the size of the data stored in the voxels. Called expand/shrink in svox 1.
@@ -958,6 +967,15 @@ class SparseGrid(nn.Module):
         new_data = new_data.to(device=device)
         self.sh_data = nn.Parameter(new_data)
         self.sh_rms = None
+
+    def accelerate(self):
+        """
+        Accelerate
+        """
+        assert (
+            _C is not None and self.links.is_cuda
+        ), "CUDA extension is currently required for accelerate"
+        _C.accel_dist_prop(self.links)
 
     def world2grid(self, points):
         """
@@ -1053,6 +1071,8 @@ class SparseGrid(nn.Module):
             grid.basis_data = nn.Parameter(basis_data)
         else:
             grid.basis_data = nn.Parameter(grid.basis_data.data.to(device=device))
+        #  if grid.links.is_cuda:
+        #  grid.accelerate()
         return grid
 
     def to_svox1(self, device: Union[torch.device, str, None] = None):
@@ -1288,7 +1308,7 @@ class SparseGrid(nn.Module):
                 or self.density_rms.shape != self.density_data.shape
             ):
                 del self.density_rms
-                self.density_rms = torch.zeros_like(self.density_data.data)
+                self.density_rms = torch.zeros_like(self.density_data.data) # FIXME init?
             _C.rmsprop_step(
                 self.density_data.data,
                 self.density_rms,
@@ -1321,7 +1341,7 @@ class SparseGrid(nn.Module):
         if optim == 'rmsprop':
             if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
                 del self.sh_rms
-                self.sh_rms = torch.zeros_like(self.sh_data.data)
+                self.sh_rms = torch.zeros_like(self.sh_data.data) # FIXME init?
             _C.rmsprop_step(
                 self.sh_data.data,
                 self.sh_rms,

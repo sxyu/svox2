@@ -73,3 +73,24 @@ template<class T>
 __device__ __inline__ T lerp(T a, T b, T w) {
     return fmaf(w, b - a, a);
 }
+
+#define int_div2_ceil(x) ((((x) - 1) >> 1) + 1)
+
+__host__ __inline__ cudaError_t cuda_assert(
+		const cudaError_t code, const char* const file,
+		const int line, const bool abort) {
+    if (code != cudaSuccess) {
+        fprintf(stderr, "cuda_assert: %s %s %s %d\n", cudaGetErrorName(code) ,cudaGetErrorString(code),
+                file, line);
+
+        if (abort) {
+            cudaDeviceReset();
+            exit(code);
+        }
+    }
+
+    return code;
+}
+
+#define cuda(...) cuda_assert((cuda##__VA_ARGS__), __FILE__, __LINE__, true);
+

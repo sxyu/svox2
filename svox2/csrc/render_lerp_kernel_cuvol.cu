@@ -12,16 +12,16 @@
 namespace {
 const int WARP_SIZE = 32;
 
-const int TRACE_RAY_CUDA_THREADS = 256;
+const int TRACE_RAY_CUDA_THREADS = 128;
 const int TRACE_RAY_CUDA_RAYS_PER_BLOCK = TRACE_RAY_CUDA_THREADS / WARP_SIZE;
 
-const int TRACE_RAY_BKWD_CUDA_THREADS = 256;
+const int TRACE_RAY_BKWD_CUDA_THREADS = 128;
 const int TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK = TRACE_RAY_BKWD_CUDA_THREADS / WARP_SIZE;
 
-const int TRACE_RAY_FUSED_CUDA_THREADS = 256;
+const int TRACE_RAY_FUSED_CUDA_THREADS = 128;
 const int TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK = TRACE_RAY_FUSED_CUDA_THREADS / WARP_SIZE;
 
-const int MIN_BLOCKS_PER_SM = 4;
+const int MIN_BLOCKS_PER_SM = 8;
 typedef cub::WarpReduce<float> WarpReducef;
 
 torch::Tensor init_mask(torch::Tensor ref_data) {
@@ -68,6 +68,14 @@ __device__ __inline__ void trace_ray_cuvol(
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
 
+        float skip = compute_skip_dist(ray,
+               grid.links, grid.stride_x,
+               grid.size[2]);
+        if (skip >= opt.step_size) {
+            // For consistency, we skip the by step size
+            t += ceilf(skip / opt.step_size) * opt.step_size;
+            continue;
+        }
         float sigma = trilerp_cuvol_one(
                 grid.links, grid.density_data,
                 grid.stride_x,
@@ -144,6 +152,14 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
             ray.pos[j] -= static_cast<float>(ray.l[j]);
+        }
+        float skip = compute_skip_dist(ray,
+               grid.links, grid.stride_x,
+               grid.size[2]);
+        if (skip >= opt.step_size) {
+            // For consistency, we skip the by step size
+            t += ceilf(skip / opt.step_size) * opt.step_size;
+            continue;
         }
 
         float sigma = trilerp_cuvol_one(

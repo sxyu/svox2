@@ -317,12 +317,14 @@ __global__ void tv_logalpha_grad_sparse_kernel(
     const float dy = v010 - v000;
     const float dz = v001 - v000;
     const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
-#define MAYBE_ADD_SET(gp, expr) float val = (expr);\
+#define MAYBE_ADD_SET(gp, expr) { \
+    float val = (expr);\
     if (links_ptr[gp] >= 0 && val != 0.f) { \
     atomicAdd(&grad_data[links_ptr[gp] * data.size(1) + idx], val * idelta); \
     if (mask_out != nullptr) { \
         mask_out[links_ptr[gp]] = true; \
     } \
+} \
 } \
 
     const float sm = -(dx + dy + dz);
