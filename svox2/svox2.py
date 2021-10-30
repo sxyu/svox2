@@ -142,11 +142,13 @@ class _SampleGridAutogradFunction(autograd.Function):
         data_sh: torch.Tensor,
         grid,
         points: torch.Tensor,
+        want_colors: bool,
     ):
         assert not points.requires_grad, "Point gradient not supported"
-        out_density, out_sh = _C.sample_grid(grid, points)
+        out_density, out_sh = _C.sample_grid(grid, points, want_colors)
         ctx.save_for_backward(points)
         ctx.grid = grid
+        ctx.want_colors = want_colors
         return out_density, out_sh
 
     @staticmethod
@@ -161,13 +163,14 @@ class _SampleGridAutogradFunction(autograd.Function):
             grad_out_sh.contiguous(),
             grad_density_grid,
             grad_sh_grid,
+            ctx.want_colors
         )
         if not ctx.needs_input_grad[0]:
             grad_density_grid = None
         if not ctx.needs_input_grad[1]:
             grad_sh_grid = None
 
-        return grad_density_grid, grad_sh_grid, None, None
+        return grad_density_grid, grad_sh_grid, None, None, None
 
 
 class _VolumeRenderFunction(autograd.Function):
@@ -364,7 +367,7 @@ class SparseGrid(nn.Module):
                 len(reso) == 3
             ), "reso must be an integer or indexable object of 3 ints"
 
-        if not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
+        if use_z_order and not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
             print("Morton code requires a cube grid of power-of-2 size, ignoring...")
             use_z_order = False
 
@@ -494,7 +497,10 @@ class SparseGrid(nn.Module):
         results_sh[mask] = self.sh_data[idxs]
         return results_sigma, results_sh
 
-    def sample(self, points: torch.Tensor, use_kernel: bool = True, grid_coords=False):
+    def sample(self, points: torch.Tensor,
+               use_kernel: bool = True,
+               grid_coords: bool = False,
+               want_colors: bool = True):
         """
         Grid sampling with trilinear interpolation.
         Behaves like torch.nn.functional.grid_sample
@@ -505,11 +511,18 @@ class SparseGrid(nn.Module):
 
         :param points: torch.Tensor, (N, 3)
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
+        :param grid_coords: bool, if true then uses grid coordinates ([-0.5, reso[i]-0.5 ] in each dimension);
+                                  more numerically exact for resampling
+        :param want_colors: bool, if true (default) returns density and colors,
+                            else returns density and a dummy tensor to be ignored
+                            (much faster)
+
+        :return: (density, color)
         """
         if use_kernel and self.links.is_cuda and _C is not None:
             assert points.is_cuda
             return _SampleGridAutogradFunction.apply(
-                self.density_data, self.sh_data, self._to_cpp(grid_coords), points
+                self.density_data, self.sh_data, self._to_cpp(grid_coords), points, want_colors
             )
         else:
             if not grid_coords:
@@ -550,13 +563,16 @@ class SparseGrid(nn.Module):
             c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
             samples_sigma = c0 * wa[:, :1] + c1 * wb[:, :1]
 
-            c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
-            c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
-            c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
-            c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
-            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-            samples_rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+            if want_colors:
+                c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+                c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+                c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+                c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                samples_rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+            else:
+                samples_rgb = torch.empty_like(self.sh_data[:0])
 
             return samples_sigma, samples_rgb
 
@@ -788,6 +804,7 @@ class SparseGrid(nn.Module):
         cameras: Optional[List[Camera]] = None,
         use_z_order=False,
         accelerate=True,
+        weight_render_stop_thresh: float = 0.05
     ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -800,6 +817,10 @@ class SparseGrid(nn.Module):
         :param use_z_order: bool, if true, stores the data initially in a Z-order curve if possible
         :param accelerate: bool, if true (default), calls grid.accelerate() after resampling
                            to build distance transform table (only if on CUDA)
+        :param weight_render_stop_thresh: float, stopping threshold for grid weight render in [0, 1];
+                                                 0.0 = no thresholding, 1.0 = hides everything.
+                                                 Useful for force-cutting off
+                                                 junk that contributes very little at the end of a ray
         """
         with torch.no_grad():
             device = self.links.device
@@ -810,7 +831,7 @@ class SparseGrid(nn.Module):
                     len(reso) == 3
                 ), "reso must be an integer or indexable object of 3 ints"
 
-            if not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
+            if use_z_order and not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
                 print("Morton code requires a cube grid of power-of-2 size, ignoring...")
                 use_z_order = False
 
@@ -842,69 +863,74 @@ class SparseGrid(nn.Module):
             if use_z_order:
                 morton = gen_morton(reso[0], dtype=torch.long).view(-1)
                 points[morton] = points.clone()
+            points = points.to(device=device)
 
             use_weight_thresh = cameras is not None
-            pre_mask_samples = not (dilate or use_weight_thresh)
 
             batch_size = 720720
             all_sample_vals_density = []
-            all_sample_vals_sh = []
-            all_sample_vals_mask = []
+            print('Pass 1/2 (density)')
             for i in tqdm(range(0, len(points), batch_size)):
-                sample_vals_density, sample_vals_sh = self.sample(
-                    points[i : i + batch_size].to(device=device), grid_coords=True
+                sample_vals_density, _ = self.sample(
+                    points[i : i + batch_size],
+                    grid_coords=True,
+                    want_colors=False
                 )
-                if not use_weight_thresh:
-                    sample_vals_mask = sample_vals_density > sigma_thresh
-                    if pre_mask_samples:
-                        sample_vals_density = sample_vals_density[sample_vals_mask]
-                        sample_vals_sh = sample_vals_sh[sample_vals_mask]
-                        sample_vals_mask = sample_vals_mask.cpu()
-                else:
-                    sample_vals_mask = sample_vals_density.clone()
-                sample_vals_density = sample_vals_density.cpu()
-                sample_vals_sh = sample_vals_sh.cpu()
+                sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
-                all_sample_vals_sh.append(sample_vals_sh)
-                all_sample_vals_mask.append(sample_vals_mask)
             self.density_data.grad = None
             self.sh_data.grad = None
-            del self.density_data
-            del self.sh_data
             self.sparse_grad_indexer = None
             self.density_rms = None
             self.sh_rms = None
 
-            sample_vals_mask = torch.cat(all_sample_vals_mask, dim=0)
+            sample_vals_density = torch.cat(
+                    all_sample_vals_density, dim=0).view(reso)
+            del all_sample_vals_density
             if use_weight_thresh:
-                sigmas = sample_vals_mask.view(reso)
                 gsz = torch.tensor(reso)
                 offset = (self._offset * gsz - 0.5).to(device=device)
                 scaling = (self._scaling * gsz).to(device=device)
                 max_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
-                print(" Grid weight render", sigmas.shape)
+                print(" Grid weight render", sample_vals_density.shape)
                 for cam in tqdm(cameras):
                     _C.grid_weight_render(
-                        sigmas, cam._to_cpp(),
+                        sample_vals_density, cam._to_cpp(),
                         0.5,
+                        weight_render_stop_thresh,
                         self.opt.last_sample_opaque,
                         offset, scaling, max_wt_grid
                     )
-                sample_vals_mask = max_wt_grid.view(-1) > weight_thresh
-                del sigmas, max_wt_grid
-            del all_sample_vals_mask
+                sample_vals_mask = max_wt_grid > weight_thresh
+                del max_wt_grid
+            else:
+                sample_vals_mask = sample_vals_density > sigma_thresh
+
             if dilate:
-                sample_vals_mask = sample_vals_mask.view(reso).cuda()
                 for i in range(int(dilate)):
                     sample_vals_mask = _C.dilate(sample_vals_mask)
-                sample_vals_mask = sample_vals_mask.view(-1).cpu()
-            sample_vals_density = torch.cat(all_sample_vals_density, dim=0)
-            del all_sample_vals_density
-            sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0)
+            sample_vals_mask = sample_vals_mask.view(-1)
+            sample_vals_density = sample_vals_density.view(-1)
+            sample_vals_density = sample_vals_density[sample_vals_mask]
+            cnz = torch.count_nonzero(sample_vals_mask).item()
+
+            # Now we can get the colors for the sparse points
+            points = points[sample_vals_mask]
+            print('Pass 2/2 (color), eval', cnz, 'sparse pts')
+            all_sample_vals_sh = []
+            for i in tqdm(range(0, len(points), batch_size)):
+                _, sample_vals_sh = self.sample(
+                    points[i : i + batch_size],
+                    grid_coords=True,
+                    want_colors=True
+                )
+                all_sample_vals_sh.append(sample_vals_sh)
+
+            sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
+            del self.density_data
+            del self.sh_data
             del all_sample_vals_sh
-            if not pre_mask_samples:
-                sample_vals_density = sample_vals_density[sample_vals_mask]
-                sample_vals_sh = sample_vals_sh[sample_vals_mask]
+
             if use_z_order:
                 inv_morton = torch.empty_like(morton)
                 inv_morton[morton] = torch.arange(morton.size(0), dtype=morton.dtype)
@@ -919,13 +945,13 @@ class SparseGrid(nn.Module):
                 )
                 init_links[~sample_vals_mask] = -1
 
-            self.capacity = sample_vals_mask.sum().item()
+            self.capacity = cnz
             print(" New cap:", self.capacity)
             del sample_vals_mask
             print('density', sample_vals_density.shape, sample_vals_density.dtype)
             print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
             print('links', init_links.shape, init_links.dtype)
-            self.density_data = nn.Parameter(sample_vals_density.to(device=device))
+            self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
             self.links = init_links.view(reso).to(device=device)
 
@@ -1207,7 +1233,7 @@ class SparseGrid(nn.Module):
             _C.tv_grad(self.links, self.density_data, 0, 1, scaling,
                     logalpha, logalpha_delta,
                     grad)
-            self.sparse_grad_indexer = None
+            self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
     def inplace_sparsity_grad(self, grad: torch.Tensor,
                               scaling: float = 1.0,
@@ -1234,7 +1260,7 @@ class SparseGrid(nn.Module):
         else:
             _C.sparsity_grad(self.links, self.density_data, scaling,
                     delta, grad)
-            self.sparse_grad_indexer = None
+            self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
     def inplace_tv_color_grad(
         self,

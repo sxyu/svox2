@@ -37,17 +37,22 @@ parser.add_argument('--dataset_type',
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-group.add_argument('--final_reso', type=int, default=1024,
+group.add_argument('--final_reso', type=int, default=
+                        512,
                    help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=512,
+group.add_argument('--init_reso', type=int, default=
+                        128,
                    help='INITIAL grid resolution')
-group.add_argument('--ref_reso', type=int, default=512,
-                   help='reference grid resolution (for adjusting lr)')
-group.add_argument('--z_reso_factor', type=float, default=192/1024,
+#  group.add_argument('--ref_reso', type=int, default=
+#                          512,
+#                     help='reference grid resolution (for adjusting lr)')
+group.add_argument('--z_reso_factor', type=float, default=
+                        #  192/1024,
+                        1,
                    help='z dimension resolution factor')
 group.add_argument('--basis_reso', type=int, default=32,
                    help='basis grid resolution')
-group.add_argument('--sh_dim', type=int, default=9, help='learned basis dimensions (at most 10)')
+group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimensions (at most 10)')
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=
@@ -101,7 +106,7 @@ group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 group.add_argument('--n_iters', type=int, default=20 * 12800, help='number of iters to optimize for')
 group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--upsamp_every', type=int, default=
-                     3 * 12800,
+                     2 * 12800,
                     help='upsample the grid every x iters')
 group.add_argument('--save_every', type=int, default=5,#2,
                    help='save every x epochs')
@@ -130,14 +135,15 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-3)
+group.add_argument('--lambda_tv', type=float, default=0.0)#1e-3)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
-group.add_argument('--tv_logalpha', action='store_true', default=False, help='Use log(1-exp(-delta * sigma)) as in neural volumes')
+group.add_argument('--tv_logalpha', action='store_true', default=True,
+                   help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
 group.add_argument('--lambda_sparsity', type=float, default=0.0)#1e-5)
 group.add_argument('--sparsity_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)#1e-2)
+group.add_argument('--lambda_tv_sh', type=float, default=0.0)#1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -146,6 +152,7 @@ group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
+group.add_argument('--use_learned_basis', action='store_true', default=False)
 args = parser.parse_args()
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
@@ -163,7 +170,8 @@ torch.manual_seed(20200823)
 np.random.seed(20200823)
 
 reso = args.init_reso
-factor = args.ref_reso // reso
+#  factor = args.ref_reso // reso
+factor = 1
 
 dset = datasets[args.dataset_type](
                args.data_dir,
@@ -184,7 +192,7 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         use_z_order=True,
                         device=device,
                         basis_reso=args.basis_reso,
-                        use_learned_basis=False)
+                        use_learned_basis=args.use_learned_basis)
 
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
@@ -348,8 +356,11 @@ while True:
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
+
+            #  with Timing("volrend_fused"):
             rgb_pred = grid.volume_render_fused(rays, rgb_gt)
 
+            #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
             # Stats
@@ -366,21 +377,21 @@ while True:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
                     stats[stat_name] = 0.0
-                if args.lambda_tv > 0.0:
-                    with torch.no_grad():
-                        tv = grid.tv(logalpha=args.tv_logalpha)
-                    summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
-                if args.lambda_sparsity > 0.0:
-                    with torch.no_grad():
-                        sparsity = grid.sparsity()
-                    summary_writer.add_scalar("loss_sparsity", sparsity, global_step=gstep_id)
-                if args.lambda_tv_sh > 0.0:
-                    with torch.no_grad():
-                        tv_sh = grid.tv_color()
-                    summary_writer.add_scalar("loss_tv_sh", tv_sh, global_step=gstep_id)
-                with torch.no_grad():
-                    tv_basis = grid.tv_basis()
-                summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
+                #  if args.lambda_tv > 0.0:
+                #      with torch.no_grad():
+                #          tv = grid.tv(logalpha=args.tv_logalpha)
+                #      summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
+                #  if args.lambda_sparsity > 0.0:
+                #      with torch.no_grad():
+                #          sparsity = grid.sparsity()
+                #      summary_writer.add_scalar("loss_sparsity", sparsity, global_step=gstep_id)
+                #  if args.lambda_tv_sh > 0.0:
+                #      with torch.no_grad():
+                #          tv_sh = grid.tv_color()
+                #      summary_writer.add_scalar("loss_tv_sh", tv_sh, global_step=gstep_id)
+                #  with torch.no_grad():
+                #      tv_basis = grid.tv_basis()
+                #  summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
                 summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
@@ -409,6 +420,8 @@ while True:
                 tv_basis = grid.tv_basis()
                 loss_tv_basis = tv_basis * args.lambda_tv_basis
                 loss_tv_basis.backward()
+            #  print('nz density', torch.count_nonzero(grid.sparse_grad_indexer).item(),
+            #        ' sh', torch.count_nonzero(grid.sparse_sh_grad_indexer).item())
 
             # Manual SGD/rmsprop step
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
@@ -434,7 +447,7 @@ while True:
             non_final = reso < args.final_reso
             if non_final:
                 reso *= 2
-            use_sparsify = True # reso >= args.ref_reso
+            use_sparsify = True
             grid.resample(reso=reso if args.z_reso_factor == 1 else [
                              reso, reso, int(reso * args.z_reso_factor)],
                     sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
@@ -442,10 +455,6 @@ while True:
                     dilate=2, #use_sparsify,
                     cameras=resample_cameras)
             if non_final:
-                #  if reso <= args.ref_reso:
-                #  lr_sigma_factor *= 8
-                #  else:
-                #  lr_sigma_factor *= 4
                 if args.lr_sh_upscale_factor > 1:
                     lr_sh_factor *= args.lr_sh_upscale_factor
                     print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)

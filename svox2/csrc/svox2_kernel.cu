@@ -178,7 +178,8 @@ __global__ void sample_grid_density_backward_kernel(
 }  // namespace
 
 
-std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch::Tensor points) {
+std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch::Tensor points,
+                                                     bool want_colors) {
     DEVICE_GUARD(points);
     grid.check();
     CHECK_INPUT(points);
@@ -189,7 +190,7 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch
     const int blocks_density = CUDA_N_BLOCKS_NEEDED(points.size(0), cuda_n_threads);
     torch::Tensor result_density = torch::empty({points.size(0),
                         grid.density_data.size(1)}, points.options());
-    torch::Tensor result_sh = torch::empty({points.size(0),
+    torch::Tensor result_sh = torch::empty({want_colors ? points.size(0) : 0,
                         grid.sh_data.size(1)}, points.options());
 
     cudaStream_t stream_1, stream_2;
@@ -201,11 +202,13 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch
             points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             // Output
             result_density.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
-    device::sample_grid_sh_kernel<<<blocks, cuda_n_threads, 0, stream_2>>>(
-            grid,
-            points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-            // Output
-            result_sh.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+    if (want_colors) {
+        device::sample_grid_sh_kernel<<<blocks, cuda_n_threads, 0, stream_2>>>(
+                grid,
+                points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                // Output
+                result_sh.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+    }
 
     cudaStreamSynchronize(stream_1);
     cudaStreamSynchronize(stream_2);
@@ -219,7 +222,8 @@ void sample_grid_backward(
         torch::Tensor grad_out_density,
         torch::Tensor grad_out_sh,
         torch::Tensor grad_density_out,
-        torch::Tensor grad_sh_out) {
+        torch::Tensor grad_sh_out,
+        bool want_colors) {
     DEVICE_GUARD(points);
     grid.check();
     CHECK_INPUT(points);
@@ -247,12 +251,14 @@ void sample_grid_backward(
             // Output
             grad_density_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
 
-    device::sample_grid_sh_backward_kernel<<<blocks, cuda_n_threads, 0, stream_2>>>(
-            grid,
-            points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-            grad_out_sh.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-            // Output
-            grad_sh_out.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+    if (want_colors) {
+        device::sample_grid_sh_backward_kernel<<<blocks, cuda_n_threads, 0, stream_2>>>(
+                grid,
+                points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                grad_out_sh.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                // Output
+                grad_sh_out.packed_accessor64<float, 2, torch::RestrictPtrTraits>());
+    }
 
     cudaStreamSynchronize(stream_1);
     cudaStreamSynchronize(stream_2);

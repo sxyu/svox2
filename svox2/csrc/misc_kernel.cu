@@ -94,7 +94,7 @@ __global__ void accel_dist_prop_kernel(
     int y = xy % grid.size(1);
     int x = xy / grid.size(1);
     const bool* tmp_base = tmp;
-    int32_t* __restrict__ val = &grid[x][y][z]; 
+    int32_t* __restrict__ val = &grid[x][y][z];
 
     if (*val < 0) {
         int result = -1;
@@ -128,6 +128,7 @@ __device__ __inline__ void grid_trace_ray(
         const float* __restrict__ offset,
         const float* __restrict__ scaling,
         float step_size,
+        float stop_thresh,
         bool last_sample_opaque,
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
         grid_weight) {
@@ -197,7 +198,7 @@ __device__ __inline__ void grid_trace_ray(
 
         if (sigma > 1e-4f) {
             log_att = -world_step * sigma;
-            const float weight = expf(log_light_intensity) * (1.f - expf(log_att));
+            const float weight = _EXP(log_light_intensity) * (1.f - _EXP(log_att));
             log_light_intensity += log_att;
             float* __restrict__ max_wt_ptr_000 = grid_weight.data() + idx;
             atomicMax(max_wt_ptr_000, weight);
@@ -209,6 +210,10 @@ __device__ __inline__ void grid_trace_ray(
             atomicMax(max_wt_ptr_100 + 1, weight);
             atomicMax(max_wt_ptr_100 + stride1, weight);
             atomicMax(max_wt_ptr_100 + stride1 + 1, weight);
+
+            if (_EXP(log_light_intensity) < stop_thresh) {
+                break;
+            }
         }
         t += step_size;
     }
@@ -220,6 +225,7 @@ __global__ void grid_weight_render_kernel(
         data,
     PackedCameraSpec cam,
     float step_size,
+    float stop_thresh,
     bool last_sample_opaque,
     const float* __restrict__ offset,
     const float* __restrict__ scaling,
@@ -235,6 +241,7 @@ __global__ void grid_weight_render_kernel(
         offset,
         scaling,
         step_size,
+        stop_thresh,
         last_sample_opaque,
         grid_weight);
 }
@@ -303,6 +310,7 @@ void accel_dist_prop(torch::Tensor grid) {
 void grid_weight_render(
     torch::Tensor data, CameraSpec& cam,
     float step_size,
+    float stop_thresh,
     bool last_sample_opaque,
     torch::Tensor offset, torch::Tensor scaling,
     torch::Tensor grid_weight_out) {
@@ -321,6 +329,7 @@ void grid_weight_render(
         data.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         cam,
         step_size,
+        stop_thresh,
         last_sample_opaque,
         offset.data_ptr<float>(),
         scaling.data_ptr<float>(),

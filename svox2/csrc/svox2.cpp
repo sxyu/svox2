@@ -8,9 +8,10 @@
 
 using torch::Tensor;
 
-std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor);
+std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor,
+                                                     bool);
 void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
-                          Tensor);
+                          Tensor, bool);
 
 Tensor volume_render_cuvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
 
@@ -31,8 +32,8 @@ Tensor volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
 // Misc
 Tensor dilate(Tensor);
 void accel_dist_prop(Tensor);
-void grid_weight_render(Tensor, CameraSpec &, float, bool, Tensor, Tensor,
-                        Tensor);
+void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
+                        Tensor, Tensor);
 
 // Loss
 Tensor tv(Tensor, Tensor, int, int, bool, float);
