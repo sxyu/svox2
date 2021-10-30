@@ -1071,8 +1071,8 @@ class SparseGrid(nn.Module):
             grid.basis_data = nn.Parameter(basis_data)
         else:
             grid.basis_data = nn.Parameter(grid.basis_data.data.to(device=device))
-        #  if grid.links.is_cuda:
-        #  grid.accelerate()
+        if grid.links.is_cuda:
+            grid.accelerate()
         return grid
 
     def to_svox1(self, device: Union[torch.device, str, None] = None):

@@ -38,9 +38,17 @@ if args.render_path:
 print('Writing to', render_dir)
 os.makedirs(render_dir, exist_ok=True)
 
-grid = svox2.SparseGrid.load(args.ckpt, device=device)
-
 dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test")
+
+grid = svox2.SparseGrid.load(args.ckpt, device=device)
+grid.opt.last_sample_opaque = dset.last_sample_opaque
+
+step_size = 0.5  # 0.5 of a voxel!
+grid.opt.step_size = step_size
+grid.opt.sigma_thresh = 1e-8
+#  grid.opt.stop_thresh = 1e-8
+grid.opt.background_brightness = 1.0
+grid.opt.backend = 'cuvol'
 
 with torch.no_grad():
     im_size = dset.h * dset.w
