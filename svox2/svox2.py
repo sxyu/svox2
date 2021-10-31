@@ -276,14 +276,16 @@ class _TotalVariationFunction(autograd.Function):
     @staticmethod
     def forward(
         ctx, data: torch.Tensor, links: torch.Tensor, start_dim: int, end_dim: int,
-        use_logalpha: bool, logalpha_delta: float
+        use_logalpha: bool, logalpha_delta: float,
+        ignore_edge: bool
     ):
-        tv = _C.tv(links, data, start_dim, end_dim, use_logalpha, logalpha_delta)
+        tv = _C.tv(links, data, start_dim, end_dim, use_logalpha, logalpha_delta, ignore_edge)
         ctx.save_for_backward(links, data)
         ctx.start_dim = start_dim
         ctx.end_dim = end_dim
         ctx.use_logalpha = use_logalpha
         ctx.logalpha_delta = logalpha_delta
+        ctx.ignore_edge = ignore_edge
         return tv
 
     @staticmethod
@@ -291,28 +293,8 @@ class _TotalVariationFunction(autograd.Function):
         links, data = ctx.saved_tensors
         grad_grid = torch.zeros_like(data)
         _C.tv_grad(links, data, ctx.start_dim, ctx.end_dim, 1.0,
-                   ctx.use_logalpha, ctx.logalpha_delta, grad_grid)
-        ctx.start_dim = ctx.end_dim = None
-        if not ctx.needs_input_grad[0]:
-            grad_grid = None
-        return grad_grid, None, None, None
-
-
-class _SparsityLossFunction(autograd.Function):
-    @staticmethod
-    def forward(
-        ctx, data: torch.Tensor, links: torch.Tensor, delta: float = 0.05
-    ):
-        tv = _C.sparsity(links, data, delta)
-        ctx.save_for_backward(links, data)
-        ctx.delta = delta
-        return tv
-
-    @staticmethod
-    def backward(ctx, grad_out):
-        links, data = ctx.saved_tensors
-        grad_grid = torch.zeros_like(data)
-        _C.sparsity_grad(links, data, 1.0, ctx.delta, grad_grid)
+                   ctx.use_logalpha, ctx.logalpha_delta,
+                   ctx.ignore_edge, grad_grid)
         ctx.start_dim = ctx.end_dim = None
         if not ctx.needs_input_grad[0]:
             grad_grid = None
@@ -1163,18 +1145,6 @@ class SparseGrid(nn.Module):
         return _TotalVariationFunction.apply(
                 self.density_data, self.links, 0, 1, logalpha, logalpha_delta)
 
-    def sparsity(self, delta: float=0.01):
-        """
-        Compute sparsity loss over sigma,
-
-        :return: torch.Tensor, size scalar, the sparsity loss value
-        """
-        assert (
-            _C is not None and self.sh_data.is_cuda
-        ), "CUDA extension is currently required for total variation"
-        return _SparsityLossFunction.apply(
-                self.density_data, self.links, delta)
-
     def tv_color(self,
                  start_dim: int = 0, end_dim: Optional[int] = None,
                  logalpha: bool=False, logalpha_delta: float=2.0):
@@ -1228,39 +1198,15 @@ class SparseGrid(nn.Module):
                     self._get_sparse_grad_indexer(),
                     0, 1, scaling,
                     logalpha, logalpha_delta,
+                    False,
                     grad)
         else:
             _C.tv_grad(self.links, self.density_data, 0, 1, scaling,
                     logalpha, logalpha_delta,
+                    False,
                     grad)
             self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
-    def inplace_sparsity_grad(self, grad: torch.Tensor,
-                              scaling: float = 1.0,
-                              sparse_frac: float = 1.0,
-                              delta: float=0.05
-                    ):
-        """
-        Add gradient of total variation for sigma as in Neural Volumes
-        [Lombardi et al., ToG 2019]
-        directly into the gradient tensor, multiplied by 'scaling'
-        """
-        assert (
-            _C is not None and self.density_data.is_cuda and grad.is_cuda
-        ), "CUDA extension is currently required for total variation"
-
-        rand_cells = self._get_rand_cells(sparse_frac)
-        if rand_cells is not None:
-            _C.sparsity_grad_sparse(self.links, self.density_data,
-                    rand_cells,
-                    self._get_sparse_grad_indexer(),
-                    scaling,
-                    delta,
-                    grad)
-        else:
-            _C.sparsity_grad(self.links, self.density_data, scaling,
-                    delta, grad)
-            self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
     def inplace_tv_color_grad(
         self,
@@ -1297,11 +1243,13 @@ class SparseGrid(nn.Module):
                               start_dim, end_dim, scaling,
                               logalpha,
                               logalpha_delta,
+                              True,
                               grad)
         else:
             _C.tv_grad(self.links, self.sh_data, start_dim, end_dim, scaling,
                     logalpha,
                     logalpha_delta,
+                    True,
                     grad)
             self.sparse_sh_grad_indexer = None
 

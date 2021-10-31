@@ -36,14 +36,10 @@ void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
                         Tensor, Tensor);
 
 // Loss
-Tensor tv(Tensor, Tensor, int, int, bool, float);
-void tv_grad(Tensor, Tensor, int, int, float, bool, float, Tensor);
+Tensor tv(Tensor, Tensor, int, int, bool, float, bool);
+void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
-                    float, Tensor);
-
-Tensor sparsity(Tensor, Tensor, float);
-void sparsity_grad(Tensor, Tensor, float, float, Tensor);
-void sparsity_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
+                    float, bool, Tensor);
 
 // Optim
 void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float);
@@ -63,9 +59,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(tv);
   _REG_FUNC(tv_grad);
   _REG_FUNC(tv_grad_sparse);
-  _REG_FUNC(sparsity);
-  _REG_FUNC(sparsity_grad);
-  _REG_FUNC(sparsity_grad_sparse);
 
   // Misc
   _REG_FUNC(dilate);
