@@ -290,21 +290,13 @@ __global__ void sample_cubemap_kernel(
     const int face_reso = cubemap.size(1);
 
     CubemapCoord coord = dir_to_cubemap_coord(dirs[ray_id].data(), face_reso, eac);
-    CubemapBilerpQuery idx4 = cubemap_build_query(coord, face_reso);
-
-    const CubemapLocation& p00 = idx4.ptr[0][0];
-    const float v00 = cubemap[p00.face][p00.uv[0]][p00.uv[1]][chnl_id];
-    const CubemapLocation& p01 = idx4.ptr[0][1];
-    const float v01 = cubemap[p01.face][p01.uv[0]][p01.uv[1]][chnl_id];
-    const CubemapLocation& p10 = idx4.ptr[1][0];
-    const float v10 = cubemap[p10.face][p10.uv[0]][p10.uv[1]][chnl_id];
-    const CubemapLocation& p11 = idx4.ptr[1][1];
-    const float v11 = cubemap[p11.face][p11.uv[0]][p11.uv[1]][chnl_id];
-
-    const float val0 = lerp(v00, v01, idx4.duv[1]);
-    const float val1 = lerp(v10, v11, idx4.duv[1]);
-
-    result[ray_id][chnl_id] = lerp(val0, val1, idx4.duv[0]);
+    CubemapBilerpQuery query = cubemap_build_query(coord, face_reso);
+    result[ray_id][chnl_id] = cubemap_sample(
+            cubemap.data(),
+            query,
+            face_reso,
+            cubemap.size(3),
+            chnl_id);
 }
 
 __global__ void grid_weight_render_kernel(

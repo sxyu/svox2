@@ -25,6 +25,64 @@ struct CubemapBilerpQuery {
     float duv[2];
 };
 
+struct ConcentricSpheresIntersector {
+    __device__
+        ConcentricSpheresIntersector(
+                const int* size,
+                const float* __restrict__ rorigin,
+                const float* __restrict__ rdir,
+                float rworld_step)
+    {
+        const float sphere_scaling[3] {
+            2.f / float(size[0]),
+            2.f / float(size[1]),
+            2.f / float(size[2])
+        };
+
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            origin[i] = fmaf(rorigin[i] + 0.5f, sphere_scaling[i], -1.f);
+            dir[i] = rdir[i] * sphere_scaling[i];
+        }
+        float inorm = 1.f / _norm(dir);
+        world_step_scale = rworld_step * inorm;
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            dir[i] *= inorm;
+        }
+
+        q2a = 2 * _dot(dir, dir);
+        qb = 2 * _dot(origin, dir);
+        f = qb * qb - 2 * q2a * _dot(origin, origin);
+    }
+
+    // Get the far intersection, which we want for rendering MSI
+    __device__
+    bool intersect(float r, float* __restrict__ out) {
+        float det = _det(r);
+        if (det < 0) return false;
+        *out = (-qb + sqrtf(det)) / q2a;
+        return true;
+    }
+
+    __device__
+    bool intersect_near(float r, float* __restrict__ out) {
+        float det = _det(r);
+        if (det < 0) return false;
+        *out = (-qb - sqrtf(det)) / q2a;
+        return true;
+    }
+
+    __device__ __host__
+    float _det (float r) {
+        return f + 2 * q2a * r * r;
+    }
+
+    float origin[3], dir[3];
+    float world_step_scale;
+    float q2a, qb, f;
+};
+
 __device__ __host__ __inline__ CubemapCoord
     dir_to_cubemap_coord(const float* __restrict__ xyz_o,
             int face_reso,
@@ -136,6 +194,66 @@ __device__ __host__ __inline__ CubemapBilerpQuery
     result.duv[1] = idx.uv[1] - uv_idx[1];
     return result;
 }
+
+__device__ __host__ __inline__ float
+    cubemap_sample(
+                const float* __restrict__ cubemap, // (6, face_reso, face_reso, n_channels)
+                const CubemapBilerpQuery& query,
+                int face_reso,
+                int n_channels,
+                int chnl_id) {
+
+        // NOTE: assuming address will fit in int32
+        const int stride1 = face_reso * n_channels;
+        const int stride0 = face_reso * stride1;
+        const CubemapLocation& p00 = query.ptr[0][0];
+        const float v00 = cubemap[p00.face * stride0  + p00.uv[0] * stride1 + p00.uv[1] * n_channels + chnl_id];
+        const CubemapLocation& p01 = query.ptr[0][1];
+        const float v01 = cubemap[p01.face * stride0  + p01.uv[0] * stride1 + p01.uv[1] * n_channels + chnl_id];
+        const CubemapLocation& p10 = query.ptr[1][0];
+        const float v10 = cubemap[p10.face * stride0  + p10.uv[0] * stride1 + p10.uv[1] * n_channels + chnl_id];
+        const CubemapLocation& p11 = query.ptr[1][1];
+        const float v11 = cubemap[p11.face * stride0  + p11.uv[0] * stride1 + p11.uv[1] * n_channels + chnl_id];
+
+        const float val0 = lerp(v00, v01, query.duv[1]);
+        const float val1 = lerp(v10, v11, query.duv[1]);
+
+        return lerp(val0, val1, query.duv[0]);
+    }
+
+__device__ __inline__ void
+    cubemap_sample_backward(
+                float* __restrict__ cubemap_grad, // (6, face_reso, face_reso, n_channels)
+                const CubemapBilerpQuery& query,
+                int face_reso,
+                int n_channels,
+                float grad_out,
+                int chnl_id,
+                bool* __restrict__ mask_out = nullptr) {
+
+        // NOTE: assuming address will fit in int32
+        const int stride0 = face_reso * face_reso;
+
+        const float bu = query.duv[0], bv = query.duv[1];
+        const float au = 1.f - bu, av = 1.f - bv;
+
+#define _ADD_CUBEVERT(i, j, val) { \
+            const CubemapLocation& p00 = query.ptr[i][j]; \
+            const int idx = p00.face * stride0 + p00.uv[0] * face_reso + p00.uv[1]; \
+            float* __restrict__ v00 = &cubemap_grad[idx * n_channels + chnl_id]; \
+            atomicAdd(v00, val); \
+            if (mask_out != nullptr) { \
+                mask_out[idx] = true; \
+            } \
+        }
+
+        _ADD_CUBEVERT(0, 0, au * av * grad_out);
+        _ADD_CUBEVERT(0, 1, au * bv * grad_out);
+        _ADD_CUBEVERT(1, 0, bu * av * grad_out);
+        _ADD_CUBEVERT(1, 1, bu * bv * grad_out);
+#undef _ADD_CUBEVERT
+
+    }
 
 }  // namespace device
 }  // namespace

@@ -54,11 +54,24 @@ struct GridOutputGrads {
   torch::Tensor grad_sh_out;
   torch::Tensor grad_basis_out;
   torch::Tensor grad_background_out;
+
+  torch::Tensor mask_out;
+  torch::Tensor mask_background_out;
   inline void check() {
     CHECK_INPUT(grad_density_out);
     CHECK_INPUT(grad_sh_out);
-    CHECK_INPUT(grad_basis_out);
-    CHECK_INPUT(grad_background_out);
+    if (grad_basis_out.defined()) {
+      CHECK_INPUT(grad_basis_out);
+    }
+    if (grad_background_out.defined()) {
+      CHECK_INPUT(grad_background_out);
+    }
+    if (mask_out.defined()) {
+      CHECK_INPUT(mask_out);
+    }
+    if (mask_background_out.defined()) {
+      CHECK_INPUT(mask_background_out);
+    }
   }
 };
 

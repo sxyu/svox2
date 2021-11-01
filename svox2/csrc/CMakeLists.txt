@@ -47,7 +47,8 @@ enable_language(CUDA)
 message(STATUS "CUDA enabled")
 set( CMAKE_CUDA_STANDARD 14 )
 set( CMAKE_CUDA_STANDARD_REQUIRED ON)
-set( CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}  -g -Xcudafe \"--display_error_number --diag_suppress=3057 --diag_suppress=3058 --diag_suppress=3059 --diag_suppress=3060\" -lineinfo -arch=sm_75 -Xptxas=\"-v\"")
+set( CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}  -g -Xcudafe \"--display_error_number --diag_suppress=3057 --diag_suppress=3058 --diag_suppress=3059 --diag_suppress=3060\" -lineinfo -arch=sm_75 ")
+# -Xptxas=\"-v\"
 
 set( INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include" )
 

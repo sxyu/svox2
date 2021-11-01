@@ -15,19 +15,18 @@ void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
 
 Tensor volume_render_cuvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
 
-Tensor volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &,
-                                    RenderOptions &, Tensor, Tensor,
-                                    GridOutputGrads &);
+void volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
+                                  Tensor, Tensor, GridOutputGrads &);
 
-Tensor volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                                 Tensor, Tensor, GridOutputGrads &);
+void volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
+                               Tensor, Tensor, GridOutputGrads &);
 
 Tensor volume_render_cuvol_image(SparseGridSpec &, CameraSpec &,
                                  RenderOptions &);
 
-Tensor volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
-                                          RenderOptions &, Tensor, Tensor,
-                                          GridOutputGrads &);
+void volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
+                                        RenderOptions &, Tensor, Tensor,
+                                        GridOutputGrads &);
 
 // Misc
 Tensor dilate(Tensor);
@@ -121,5 +120,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("grad_sh_out", &GridOutputGrads::grad_sh_out)
       .def_readwrite("grad_basis_out", &GridOutputGrads::grad_basis_out)
       .def_readwrite("grad_background_out",
-                     &GridOutputGrads::grad_background_out);
+                     &GridOutputGrads::grad_background_out)
+      .def_readwrite("mask_out", &GridOutputGrads::mask_out)
+      .def_readwrite("mask_background_out",
+                     &GridOutputGrads::mask_background_out);
 }

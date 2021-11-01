@@ -70,15 +70,45 @@ __device__ __inline__ void transform_coord(float* __restrict__ point,
 // Subtract and fused multiply-add
 // (1-w) a + w b
 template<class T>
-__device__ __inline__ T lerp(T a, T b, T w) {
+__host__ __device__ __inline__ T lerp(T a, T b, T w) {
     return fmaf(w, b - a, a);
+}
+
+__device__ __inline__ static float _norm(
+                const float* __restrict__ dir) {
+    // return sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    return norm3df(dir[0], dir[1], dir[2]);
+}
+
+__host__ __device__ __inline__ static float _dot(
+                const float* __restrict__ x,
+                const float* __restrict__ y) {
+    return x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+}
+
+__host__ __device__ __inline__ static void _cross(
+                const float* __restrict__ a,
+                const float* __restrict__ b,
+                float* __restrict__ out) {
+    out[0] = a[1] * b[2] - a[2] * b[1];
+    out[1] = a[2] * b[0] - a[0] * b[2];
+    out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+__device__ __inline__ static float _dist_ray_to_origin(
+                const float* __restrict__ origin,
+                const float* __restrict__ dir) {
+    // dir must be unit vector
+    float tmp[3];
+    _cross(origin, dir, tmp);
+    return _norm(tmp);
 }
 
 #define int_div2_ceil(x) ((((x) - 1) >> 1) + 1)
 
 __host__ __inline__ cudaError_t cuda_assert(
-		const cudaError_t code, const char* const file,
-		const int line, const bool abort) {
+        const cudaError_t code, const char* const file,
+        const int line, const bool abort) {
     if (code != cudaSuccess) {
         fprintf(stderr, "cuda_assert: %s %s %s %d\n", cudaGetErrorName(code) ,cudaGetErrorString(code),
                 file, line);
