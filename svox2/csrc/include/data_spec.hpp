@@ -22,9 +22,7 @@ struct SparseGridSpec {
   Tensor _offset;
   Tensor _scaling;
 
-  Tensor background_density_data;
-  Tensor background_sh_data;
-  Tensor background_links;
+  Tensor background_cubemap;
 
   int basis_dim;
   uint8_t basis_type;
@@ -34,9 +32,7 @@ struct SparseGridSpec {
     CHECK_INPUT(density_data);
     CHECK_INPUT(sh_data);
     CHECK_INPUT(links);
-    CHECK_INPUT(background_density_data);
-    CHECK_INPUT(background_sh_data);
-    CHECK_INPUT(background_links);
+    CHECK_INPUT(background_cubemap);
     CHECK_INPUT(basis_data);
     CHECK_CPU_INPUT(_offset);
     CHECK_CPU_INPUT(_scaling);
@@ -49,9 +45,20 @@ struct SparseGridSpec {
     TORCH_CHECK(density_data.ndimension() == 2);
     TORCH_CHECK(sh_data.ndimension() == 2);
     TORCH_CHECK(links.ndimension() == 3);
-    TORCH_CHECK(background_density_data.ndimension() == 2);
-    TORCH_CHECK(background_sh_data.ndimension() == 2);
-    TORCH_CHECK(background_links.ndimension() == 4);
+    TORCH_CHECK(background_cubemap.ndimension() == 5);
+  }
+};
+
+struct GridOutputGrads {
+  torch::Tensor grad_density_out;
+  torch::Tensor grad_sh_out;
+  torch::Tensor grad_basis_out;
+  torch::Tensor grad_background_out;
+  inline void check() {
+    CHECK_INPUT(grad_density_out);
+    CHECK_INPUT(grad_sh_out);
+    CHECK_INPUT(grad_basis_out);
+    CHECK_INPUT(grad_background_out);
   }
 };
 

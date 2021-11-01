@@ -10,23 +10,23 @@
 namespace {
 namespace device {
 
-struct CubemapIndex {
+struct CubemapCoord {
     uint8_t face;
     float uv[2];
 };
 
-struct CubemapPointer {
+struct CubemapLocation {
     uint8_t face;
     uint16_t uv[2];
 };
 
-struct CubemapBilerpIndex {
-    CubemapPointer ptr[2][2];
+struct CubemapBilerpQuery {
+    CubemapLocation ptr[2][2];
     float duv[2];
 };
 
-__device__ __host__ __inline__ CubemapIndex
-    dir_to_cubemap_index(const float* __restrict__ xyz_o,
+__device__ __host__ __inline__ CubemapCoord
+    dir_to_cubemap_coord(const float* __restrict__ xyz_o,
             int face_reso,
             bool eac = true) {
     float maxv;
@@ -51,7 +51,7 @@ __device__ __host__ __inline__ CubemapIndex
         }
     }
 
-    CubemapIndex idx;
+    CubemapCoord idx;
     idx.uv[0] = ((xyz[(ax ^ 1) & 1] + 1) * face_reso - 1) * 0.5;
     idx.uv[1] = ((xyz[(ax ^ 2) & 2] + 1) * face_reso - 1) * 0.5;
     const int ori = xyz[ax] >= 0;
@@ -59,9 +59,9 @@ __device__ __host__ __inline__ CubemapIndex
     return idx;
 }
 
-__device__ __host__ __inline__ CubemapBilerpIndex
-    cubemap_find_interp_pts(
-                const CubemapIndex& idx,
+__device__ __host__ __inline__ CubemapBilerpQuery
+    cubemap_build_query(
+                const CubemapCoord& idx,
                 int face_reso) {
     const int uv_idx[2] ={ (int)floorf(idx.uv[0]), (int)floorf(idx.uv[1]) };
 
@@ -78,13 +78,13 @@ __device__ __host__ __inline__ CubemapBilerpIndex
     const int uvd[2] = {((ax ^ 1) & 1), ((ax ^ 2) & 2)};
     int uv_ori[2];
 
-    CubemapBilerpIndex result;
+    CubemapBilerpQuery result;
 
 #pragma unroll 2
     for (uv_ori[0] = 0; uv_ori[0] < 2; ++uv_ori[0]) {
 #pragma unroll 2
         for (uv_ori[1] = 0; uv_ori[1] < 2; ++uv_ori[1]) {
-            CubemapPointer& nidx = result.ptr[uv_ori[0]][uv_ori[1]];
+            CubemapLocation& nidx = result.ptr[uv_ori[0]][uv_ori[1]];
             nidx.face = idx.face;
             nidx.uv[0] = uv_idx[0] + uv_ori[0];
             nidx.uv[1] = uv_idx[1] + uv_ori[1];

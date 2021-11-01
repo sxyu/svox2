@@ -15,15 +15,13 @@ struct PackedSparseGridSpec {
           links(spec.links.data_ptr<int32_t>()),
           basis_type(spec.basis_type),
           basis_data(spec.basis_data.data_ptr<float>()),
-          background_density_data(spec.background_density_data.data_ptr<float>()),
-          background_sh_data(spec.background_sh_data.data_ptr<float>()),
-          background_links(spec.background_links.data_ptr<int32_t>()),
+          background_cubemap(spec.background_cubemap.data_ptr<float>()),
           size{(int)spec.links.size(0),
                (int)spec.links.size(1),
                (int)spec.links.size(2)},
           stride_x{(int)spec.links.stride(0)},
-          background_reso{(int)spec.background_links.size(2)},
-          background_nlayers{(int)spec.background_links.size(0)},
+          background_reso{(int)spec.background_cubemap.size(2)},
+          background_nlayers{(int)spec.background_cubemap.size(0)},
           basis_dim(spec.basis_dim),
           sh_data_dim((int)spec.sh_data.size(1)),
           basis_reso(spec.basis_data.size(0)),
@@ -42,9 +40,7 @@ struct PackedSparseGridSpec {
     const uint8_t basis_type;
     float* __restrict__ basis_data;
 
-    float* __restrict__ background_density_data;
-    float* __restrict__ background_sh_data;
-    const int32_t* __restrict__ background_links;
+    float* __restrict__ background_cubemap;
 
     const int size[3], stride_x;
     const int background_reso, background_nlayers;
@@ -52,6 +48,18 @@ struct PackedSparseGridSpec {
     const int basis_dim, sh_data_dim, basis_reso;
     const float _offset[3];
     const float _scaling[3];
+};
+
+struct PackedGridOutputGrads {
+    PackedGridOutputGrads(GridOutputGrads& grads) :
+        grad_density_out(grads.grad_density_out.data_ptr<float>()),
+        grad_sh_out(grads.grad_sh_out.data_ptr<float>()),
+        grad_basis_out(grads.grad_basis_out.data_ptr<float>()),
+        grad_background_out(grads.grad_background_out.data_ptr<float>()) {}
+    float* __restrict__ grad_density_out;
+    float* __restrict__ grad_sh_out;
+    float* __restrict__ grad_basis_out;
+    float* __restrict__ grad_background_out;
 };
 
 struct PackedCameraSpec {

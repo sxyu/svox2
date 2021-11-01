@@ -114,6 +114,18 @@ __device__ __inline__ void trace_ray_cuvol(
         }
         t += opt.step_size;
     }
+
+    if (grid.background_nlayers > 0) {
+        const float q2a = 2 * _dot(ray.dir, ray.dir);
+        const float qb = 2 * _dot(ray.origin, ray.dir);
+        const float qb2 = qb * qb;
+        const float qcpr = _dot(ray.origin, ray.origin);
+
+        // TODO WIP
+        float det = qb2 - 2 * q2a * (qcpr - r * r);
+        float root = (-qb + sqrtf(det)) / q2a
+    }
+
     outv += _EXP(light_intensity) * opt.background_brightness;
     if (lane_colorgrp_id == 0) {
         out[lane_colorgrp] = outv;
@@ -131,8 +143,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         float* __restrict__ grad_sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
         bool* __restrict__ mask_out,
-        float* __restrict__ grad_density_data_out,
-        float* __restrict__ grad_sh_data_out
+        PackedGridOutputGrads& __restrict__ grads
         ) {
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
@@ -219,7 +230,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             accum -= weight * total_color;
             float curr_grad_sigma = ray.world_step * (
                     total_color * _EXP(light_intensity) - accum);
-            trilerp_backward_cuvol_one(grid.links, grad_sh_data_out,
+            trilerp_backward_cuvol_one(grid.links, grads.grad_sh_data_out,
                     grid.stride_x,
                     grid.size[2],
                     grid.sh_data_dim,
@@ -228,7 +239,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             if (lane_id == 0) {
                 trilerp_backward_cuvol_one_density(
                         grid.links,
-                        grad_density_data_out,
+                        grads.grad_density_data_out,
                         mask_out,
                         grid.stride_x,
                         grid.size[2],
@@ -293,9 +304,7 @@ __global__ void render_ray_backward_kernel(
         PackedRaysSpec rays,
         RenderOptions opt,
     bool* __restrict__ mask_out,
-    float* __restrict__ grad_density_data_out,
-    float* __restrict__ grad_sh_data_out,
-    float* __restrict__ grad_basis_data_out) {
+    PackedGridOutputGrads grads) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
@@ -335,15 +344,14 @@ __global__ void render_ray_backward_kernel(
         grad_sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
         mask_out,
-        grad_density_data_out,
-        grad_sh_data_out);
+        grads);
     calc_sphfunc_backward(
                  grid, lane_id,
                  ray_id,
                  vdir,
                  sphfunc_val[ray_blk_id],
                  grad_sphfunc_val[ray_blk_id],
-                 grad_basis_data_out);
+                 grads.grad_basis_data_out);
 }
 
 __launch_bounds__(TRACE_RAY_FUSED_CUDA_THREADS, MIN_BLOCKS_PER_SM)
@@ -354,9 +362,7 @@ __global__ void render_ray_fused_kernel(
         const float* __restrict__ rgb_gt,
         bool* __restrict__ mask_out,
         float* __restrict__ rgb_out,
-        float* __restrict__ grad_density_data_out,
-        float* __restrict__ grad_sh_data_out,
-        float* __restrict__ grad_basis_data_out) {
+        PackedGridOutputGrads grads) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
@@ -414,8 +420,7 @@ __global__ void render_ray_fused_kernel(
         grad_sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
         mask_out,
-        grad_density_data_out,
-        grad_sh_data_out);
+        grads);
     if (lane_id < 3) {
         rgb_out[ray_id * 3 + lane_id] = rgb_val[ray_blk_id][lane_id];
     }
@@ -424,7 +429,7 @@ __global__ void render_ray_fused_kernel(
                  ray_id, vdir,
                  sphfunc_val[ray_blk_id],
                  grad_sphfunc_val[ray_blk_id],
-                 grad_basis_data_out);
+                 grads.grad_basis_data_out);
 }
 
 __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
@@ -474,9 +479,7 @@ __global__ void render_image_backward_kernel(
         PackedCameraSpec cam,
         RenderOptions opt,
         bool* __restrict__ mask_out,
-        float* __restrict__ grad_density_data_out,
-        float* __restrict__ grad_sh_data_out,
-        float* __restrict__ grad_basis_data_out) {
+        PackedGridOutputGrads grads) {
     CUDA_GET_THREAD_ID(tid, cam.width * cam.height * WARP_SIZE);
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
@@ -514,13 +517,12 @@ __global__ void render_image_backward_kernel(
         grad_sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
         mask_out,
-        grad_density_data_out,
-        grad_sh_data_out);
+        grads);
     calc_sphfunc_backward(grid, lane_id, ray_id,
                  dir,
                  sphfunc_val[ray_blk_id],
                  grad_sphfunc_val[ray_blk_id],
-                 grad_basis_data_out);
+                 grads.grad_basis_data_out);
 }
 }  // namespace device
 }  // namespace
@@ -550,15 +552,12 @@ torch::Tensor volume_render_cuvol_backward(
         RenderOptions& opt,
         torch::Tensor grad_out,
         torch::Tensor color_cache,
-        torch::Tensor grad_density_out,
-        torch::Tensor grad_sh_out,
-        torch::Tensor grad_basis_out) {
+        GridOutputGrads& grads) {
 
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     rays.check();
-    CHECK_INPUT(grad_density_out);
-    CHECK_INPUT(grad_sh_out);
+    grads.check();
     const auto Q = rays.origins.size(0);
 
     const int cuda_n_threads_render_backward = TRACE_RAY_BKWD_CUDA_THREADS;
@@ -574,9 +573,7 @@ torch::Tensor volume_render_cuvol_backward(
             rays, opt,
             // Output
             sparse_mask.data_ptr<bool>(),
-            grad_density_out.data_ptr<float>(),
-            grad_sh_out.data_ptr<float>(),
-            grad_basis_out.data_ptr<float>());
+            grads);
 
     CUDA_CHECK_ERRORS;
     return sparse_mask;
@@ -588,19 +585,14 @@ torch::Tensor volume_render_cuvol_fused(
         RenderOptions& opt,
         torch::Tensor rgb_gt,
         torch::Tensor rgb_out,
-        torch::Tensor grad_density_out,
-        torch::Tensor grad_sh_out,
-        torch::Tensor grad_basis_out) {
+        GridOutputGrads& grads) {
 
     DEVICE_GUARD(grid.sh_data);
     CHECK_INPUT(rgb_gt);
     CHECK_INPUT(rgb_out);
-    CHECK_INPUT(grad_density_out);
-    CHECK_INPUT(grad_sh_out);
-    TORCH_CHECK(grad_density_out.size(0) == grid.density_data.size(0));
-    TORCH_CHECK(grad_sh_out.size(0) == grid.sh_data.size(0));
     grid.check();
     rays.check();
+    grads.check();
     const auto Q = rays.origins.size(0);
 
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_FUSED_CUDA_THREADS);
@@ -615,9 +607,7 @@ torch::Tensor volume_render_cuvol_fused(
             // Output
             sparse_mask.data_ptr<bool>(),
             rgb_out.data_ptr<float>(),
-            grad_density_out.data_ptr<float>(),
-            grad_sh_out.data_ptr<float>(),
-            grad_basis_out.data_ptr<float>());
+            grads);
     CUDA_CHECK_ERRORS;
     return sparse_mask;
 }
@@ -647,15 +637,12 @@ torch::Tensor volume_render_cuvol_image_backward(
         RenderOptions& opt,
         torch::Tensor grad_out,
         torch::Tensor color_cache,
-        torch::Tensor grad_density_out,
-        torch::Tensor grad_sh_out,
-        torch::Tensor grad_basis_out) {
+        GridOutputGrads& grads) {
 
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     cam.check();
-    CHECK_INPUT(grad_density_out);
-    CHECK_INPUT(grad_sh_out);
+    grads.check();
     const size_t Q = size_t(cam.width) * cam.height;
 
     const int cuda_n_threads_render_backward = TRACE_RAY_BKWD_CUDA_THREADS;
@@ -674,9 +661,7 @@ torch::Tensor volume_render_cuvol_image_backward(
             opt,
             // Output
             sparse_mask.data_ptr<bool>(),
-            grad_density_out.data_ptr<float>(),
-            grad_sh_out.data_ptr<float>(),
-            grad_basis_out.data_ptr<float>());
+            grads);
 
     CUDA_CHECK_ERRORS;
     return sparse_mask;

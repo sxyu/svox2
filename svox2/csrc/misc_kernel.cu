@@ -289,16 +289,16 @@ __global__ void sample_cubemap_kernel(
 
     const int face_reso = cubemap.size(1);
 
-    CubemapIndex idx = dir_to_cubemap_index(dirs[ray_id].data(), face_reso, eac);
-    CubemapBilerpIndex idx4 = cubemap_find_interp_pts(idx, face_reso); 
+    CubemapCoord coord = dir_to_cubemap_coord(dirs[ray_id].data(), face_reso, eac);
+    CubemapBilerpQuery idx4 = cubemap_build_query(coord, face_reso);
 
-    const CubemapPointer& p00 = idx4.ptr[0][0];
+    const CubemapLocation& p00 = idx4.ptr[0][0];
     const float v00 = cubemap[p00.face][p00.uv[0]][p00.uv[1]][chnl_id];
-    const CubemapPointer& p01 = idx4.ptr[0][1];
+    const CubemapLocation& p01 = idx4.ptr[0][1];
     const float v01 = cubemap[p01.face][p01.uv[0]][p01.uv[1]][chnl_id];
-    const CubemapPointer& p10 = idx4.ptr[1][0];
+    const CubemapLocation& p10 = idx4.ptr[1][0];
     const float v10 = cubemap[p10.face][p10.uv[0]][p10.uv[1]][chnl_id];
-    const CubemapPointer& p11 = idx4.ptr[1][1];
+    const CubemapLocation& p11 = idx4.ptr[1][1];
     const float v11 = cubemap[p11.face][p11.uv[0]][p11.uv[1]][chnl_id];
 
     const float val0 = lerp(v00, v01, idx4.duv[1]);

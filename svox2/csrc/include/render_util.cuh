@@ -362,9 +362,15 @@ __device__ __inline__ void calc_sphfunc_backward(
 }
 
 __device__ __inline__ static float _norm(
-                float* dir) {
+                const float* __restrict__ dir) {
     // return sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
     return norm3df(dir[0], dir[1], dir[2]);
+}
+
+__device__ __inline__ static float _dot(
+                const float* __restrict__ x,
+                const float* __restrict__ y) {
+    return x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
 }
 
 __device__ __inline__ float _intersect_aabb_unit(

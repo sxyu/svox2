@@ -16,18 +16,18 @@ void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
 Tensor volume_render_cuvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
 
 Tensor volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &,
-                                    RenderOptions &, Tensor, Tensor, Tensor,
-                                    Tensor, Tensor);
+                                    RenderOptions &, Tensor, Tensor,
+                                    GridOutputGrads &);
 
 Tensor volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                                 Tensor, Tensor, Tensor, Tensor, Tensor);
+                                 Tensor, Tensor, GridOutputGrads &);
 
 Tensor volume_render_cuvol_image(SparseGridSpec &, CameraSpec &,
                                  RenderOptions &);
 
 Tensor volume_render_cuvol_image_backward(SparseGridSpec &, CameraSpec &,
                                           RenderOptions &, Tensor, Tensor,
-                                          Tensor, Tensor, Tensor);
+                                          GridOutputGrads &);
 
 // Misc
 Tensor dilate(Tensor);
@@ -82,10 +82,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("basis_dim", &SparseGridSpec::basis_dim)
       .def_readwrite("basis_type", &SparseGridSpec::basis_type)
       .def_readwrite("basis_data", &SparseGridSpec::basis_data)
-      .def_readwrite("background_sh_data", &SparseGridSpec::background_sh_data)
-      .def_readwrite("background_density_data",
-                     &SparseGridSpec::background_density_data)
-      .def_readwrite("background_links", &SparseGridSpec::background_links);
+      .def_readwrite("background_cubemap", &SparseGridSpec::background_cubemap);
 
   py::class_<CameraSpec>(m, "CameraSpec")
       .def(py::init<>())
@@ -117,4 +114,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // .def_readwrite("_m1", &RenderOptions::_m1)
   // .def_readwrite("_m2", &RenderOptions::_m2)
   // .def_readwrite("_m3", &RenderOptions::_m3);
+
+  py::class_<GridOutputGrads>(m, "GridOutputGrads")
+      .def(py::init<>())
+      .def_readwrite("grad_density_out", &GridOutputGrads::grad_density_out)
+      .def_readwrite("grad_sh_out", &GridOutputGrads::grad_sh_out)
+      .def_readwrite("grad_basis_out", &GridOutputGrads::grad_basis_out)
+      .def_readwrite("grad_background_out",
+                     &GridOutputGrads::grad_background_out);
 }

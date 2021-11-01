@@ -198,6 +198,7 @@ class _VolumeRenderFunction(autograd.Function):
         ctx.rays = rays
         ctx.opt = opt
         ctx.backend = backend
+        ctx.basis_data = data_basis
         return color
 
     @staticmethod
@@ -207,9 +208,13 @@ class _VolumeRenderFunction(autograd.Function):
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
         if ctx.grid.basis_type == BASIS_TYPE_MLP:
-            grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
-        else:
             grad_basis = torch.zeros_like(ctx.basis_data)
+        else:
+            grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+        grad_holder = _C.GridOutputGrads()
+        grad_holder.grad_density_out = grad_density_grid
+        grad_holder.grad_sh_out = grad_sh_grid
+        grad_holder.grad_basis_out = grad_basis
         # TODO save the sparse mask
         sparse_mask = cu_fn(
             ctx.grid,
@@ -217,9 +222,7 @@ class _VolumeRenderFunction(autograd.Function):
             ctx.opt,
             grad_out.contiguous(),
             color_cache,
-            grad_density_grid,
-            grad_sh_grid,
-            grad_basis,
+            grad_holder
         )
         ctx.grid = ctx.rays = ctx.opt = None
         if not ctx.needs_input_grad[0]:
@@ -228,6 +231,7 @@ class _VolumeRenderFunction(autograd.Function):
             grad_sh_grid = None
         if not ctx.needs_input_grad[2]:
             grad_basis = None
+        ctx.basis_data = None
 
         return grad_density_grid, grad_sh_grid, grad_basis, None, None, None, None
 
@@ -250,6 +254,7 @@ class _VolumeRenderImageFunction(autograd.Function):
         ctx.grid = grid
         ctx.cam = cam
         ctx.opt = opt
+        ctx.basis_data = data_basis
         ctx.backend = backend
         return color
 
@@ -259,7 +264,15 @@ class _VolumeRenderImageFunction(autograd.Function):
         cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_image_backward"]
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
-        grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+        if ctx.grid.basis_type == BASIS_TYPE_MLP:
+            grad_basis = torch.zeros_like(ctx.basis_data)
+        else:
+            grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+
+        grad_holder = _C.GridOutputGrads()
+        grad_holder.grad_density_out = grad_density_grid
+        grad_holder.grad_sh_out = grad_sh_grid
+        grad_holder.grad_basis_out = grad_basis
         # TODO save the sparse mask
         sparse_mask = cu_fn(
             ctx.grid,
@@ -267,9 +280,7 @@ class _VolumeRenderImageFunction(autograd.Function):
             ctx.opt,
             grad_out.contiguous(),
             color_cache,
-            grad_density_grid,
-            grad_sh_grid,
-            grad_basis,
+            grad_holder
         )
         ctx.grid = ctx.cam = ctx.opt = None
         if not ctx.needs_input_grad[0]:
@@ -278,6 +289,7 @@ class _VolumeRenderImageFunction(autograd.Function):
             grad_sh_grid = None
         if not ctx.needs_input_grad[2]:
             grad_basis = None
+        ctx.basis_data = None
         return grad_density_grid, grad_sh_grid, grad_basis, None, None, None, None
 
 
@@ -470,43 +482,19 @@ class SparseGrid(nn.Module):
             self.basis_mlp.apply(init_weights)
 
         if self.use_background:
-            bg_total = 6 * self.background_reso * self.background_reso * self.background_nlayers
-            self.background_density_data = nn.Parameter(
+            self.background_cubemap = nn.Parameter(
                 torch.zeros(
-                    bg_total,
-                    1, dtype=torch.float32, device=device
+                    6, self.background_reso, self.background_reso, self.background_nlayers,
+                    4, dtype=torch.float32, device=device
                 )
             )
-            self.background_sh_data = nn.Parameter(
-                torch.zeros(
-                    bg_total,
-                    self.basis_dim * 3, dtype=torch.float32, device=device
-                )
-            )
-            init_bg_links = torch.arange(bg_total, device=device, dtype=torch.int32)
-            self.register_buffer("background_links",
-                                  init_bg_links.view(
-                                      self.background_nlayers,
-                                      6,
-                                      self.background_reso,
-                                      self.background_reso))
         else:
-            self.background_density_data = nn.Parameter(
+            self.background_cubemap = nn.Parameter(
                 torch.empty(
-                    0, 1, dtype=torch.float32, device=device
+                    (0, 0, 0, 0, 0), dtype=torch.float32, device=device
                 ),
                 requires_grad=False
             )
-            self.background_sh_data = nn.Parameter(
-                torch.empty(
-                    0, self.basis_dim * 3, dtype=torch.float32, device=device
-                ),
-                requires_grad=False
-            )
-            self.register_buffer("background_links",
-                    torch.empty(
-                        (0, 0, 0, 0, 0), dtype=torch.float32, device=device
-                        ))
 
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
@@ -820,15 +808,19 @@ class SparseGrid(nn.Module):
             with torch.enable_grad():
                 basis_data = self._eval_basis_mlp(rays.dirs)
             grad_basis = torch.empty_like(basis_data)
+
+        grad_holder = _C.GridOutputGrads()
+        grad_holder.grad_density_out = grad_density
+        grad_holder.grad_sh_out = grad_sh
+        grad_holder.grad_basis_out = grad_basis
+
         self.sparse_grad_indexer: torch.Tensor = _C.volume_render_cuvol_fused(
             self._to_cpp(replace_basis_data=basis_data),
             rays._to_cpp(),
             self.opt._to_cpp(),
             rgb_gt,
             rgb_out,
-            grad_density,
-            grad_sh,
-            grad_basis,
+            grad_holder
         )
         if self.basis_type == BASIS_TYPE_MLP:
             # Manually trigger MLP backward!
@@ -1575,9 +1567,7 @@ class SparseGrid(nn.Module):
         gspec.basis_type = self.basis_type
         gspec.basis_data = replace_basis_data if replace_basis_data is not None else self.basis_data
 
-        gspec.background_sh_data = self.background_sh_data
-        gspec.background_density_data = self.background_density_data
-        gspec.background_links = self.background_links
+        gspec.background_cubemap = self.background_cubemap
         return gspec
 
     def _grid_size(self):
