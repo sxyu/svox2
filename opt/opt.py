@@ -141,10 +141,10 @@ group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
-group.add_argument('--lambda_tv_sh', type=float, default=0.0) # FIXME
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_l2_sh', type=float, default=1e-4) # FIXME
+group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-5)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
 
