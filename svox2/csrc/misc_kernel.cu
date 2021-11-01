@@ -8,6 +8,7 @@
 #include "cuda_util.cuh"
 #include "render_util.cuh"
 #include "data_spec_packed.cuh"
+#include "cubemap_util.cuh"
 
 namespace {
 namespace device {
@@ -271,6 +272,40 @@ __device__ __inline__ void grid_trace_ray(
     }
 }
 
+__global__ void sample_cubemap_kernel(
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits>
+        cubemap,
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
+        dirs,
+    int Q,
+    bool eac,
+    // Output
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
+        result) {
+    CUDA_GET_THREAD_ID(tid, Q);
+
+    const int chnl_id = tid % cubemap.size(3);
+    const int ray_id = tid / cubemap.size(3);
+
+    const int face_reso = cubemap.size(1);
+
+    CubemapIndex idx = dir_to_cubemap_index(dirs[ray_id].data(), face_reso, eac);
+    CubemapBilerpIndex idx4 = cubemap_find_interp_pts(idx, face_reso); 
+
+    const CubemapPointer& p00 = idx4.ptr[0][0];
+    const float v00 = cubemap[p00.face][p00.uv[0]][p00.uv[1]][chnl_id];
+    const CubemapPointer& p01 = idx4.ptr[0][1];
+    const float v01 = cubemap[p01.face][p01.uv[0]][p01.uv[1]][chnl_id];
+    const CubemapPointer& p10 = idx4.ptr[1][0];
+    const float v10 = cubemap[p10.face][p10.uv[0]][p10.uv[1]][chnl_id];
+    const CubemapPointer& p11 = idx4.ptr[1][1];
+    const float v11 = cubemap[p11.face][p11.uv[0]][p11.uv[1]][chnl_id];
+
+    const float val0 = lerp(v00, v01, idx4.duv[1]);
+    const float val1 = lerp(v10, v11, idx4.duv[1]);
+
+    result[ray_id][chnl_id] = lerp(val0, val1, idx4.duv[0]);
+}
 
 __global__ void grid_weight_render_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
@@ -411,3 +446,30 @@ void grid_weight_render(
     CUDA_CHECK_ERRORS;
 }
 
+// For debugging
+void sample_cubemap(torch::Tensor cubemap, // (6, R, R, C)
+                    torch::Tensor dirs,
+                    bool eac,
+                    // Output
+                    torch::Tensor result) {
+    DEVICE_GUARD(cubemap);
+    CHECK_INPUT(cubemap);
+    CHECK_INPUT(dirs);
+    CHECK_INPUT(result);
+    TORCH_CHECK(cubemap.ndimension() == 4);
+    TORCH_CHECK(cubemap.size(0) == 6);
+    TORCH_CHECK(cubemap.size(1) == cubemap.size(2));
+
+    const size_t Q = size_t(dirs.size(0)) * cubemap.size(3);
+    const int cuda_n_threads = 512;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+
+    device::sample_cubemap_kernel<<<blocks, cuda_n_threads>>>(
+        cubemap.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        dirs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        Q,
+        eac,
+        // Output
+        result.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+    CUDA_CHECK_ERRORS;
+}

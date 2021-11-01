@@ -470,7 +470,7 @@ class SparseGrid(nn.Module):
             self.basis_mlp.apply(init_weights)
 
         if self.use_background:
-            bg_total = self.background_reso * self.background_reso * self.background_nlayers
+            bg_total = 6 * self.background_reso * self.background_reso * self.background_nlayers
             self.background_density_data = nn.Parameter(
                 torch.zeros(
                     bg_total,
@@ -483,14 +483,30 @@ class SparseGrid(nn.Module):
                     self.basis_dim * 3, dtype=torch.float32, device=device
                 )
             )
-            init_bg_links = torch.arange(bg_total, device=device, dtype=torch.int32).view
+            init_bg_links = torch.arange(bg_total, device=device, dtype=torch.int32)
             self.register_buffer("background_links",
                                   init_bg_links.view(
-                                      2,
-                                      3,
+                                      self.background_nlayers,
+                                      6,
                                       self.background_reso,
-                                      self.background_reso,
-                                      self.background_nlayers))
+                                      self.background_reso))
+        else:
+            self.background_density_data = nn.Parameter(
+                torch.empty(
+                    0, 1, dtype=torch.float32, device=device
+                ),
+                requires_grad=False
+            )
+            self.background_sh_data = nn.Parameter(
+                torch.empty(
+                    0, self.basis_dim * 3, dtype=torch.float32, device=device
+                ),
+                requires_grad=False
+            )
+            self.register_buffer("background_links",
+                    torch.empty(
+                        (0, 0, 0, 0, 0), dtype=torch.float32, device=device
+                        ))
 
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
@@ -1558,6 +1574,10 @@ class SparseGrid(nn.Module):
         gspec.basis_dim = self.basis_dim
         gspec.basis_type = self.basis_type
         gspec.basis_data = replace_basis_data if replace_basis_data is not None else self.basis_data
+
+        gspec.background_sh_data = self.background_sh_data
+        gspec.background_density_data = self.background_density_data
+        gspec.background_links = self.background_links
         return gspec
 
     def _grid_size(self):

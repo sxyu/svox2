@@ -22,6 +22,10 @@ struct SparseGridSpec {
   Tensor _offset;
   Tensor _scaling;
 
+  Tensor background_density_data;
+  Tensor background_sh_data;
+  Tensor background_links;
+
   int basis_dim;
   uint8_t basis_type;
   Tensor basis_data;
@@ -30,6 +34,9 @@ struct SparseGridSpec {
     CHECK_INPUT(density_data);
     CHECK_INPUT(sh_data);
     CHECK_INPUT(links);
+    CHECK_INPUT(background_density_data);
+    CHECK_INPUT(background_sh_data);
+    CHECK_INPUT(background_links);
     CHECK_INPUT(basis_data);
     CHECK_CPU_INPUT(_offset);
     CHECK_CPU_INPUT(_scaling);
@@ -42,6 +49,9 @@ struct SparseGridSpec {
     TORCH_CHECK(density_data.ndimension() == 2);
     TORCH_CHECK(sh_data.ndimension() == 2);
     TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(background_density_data.ndimension() == 2);
+    TORCH_CHECK(background_sh_data.ndimension() == 2);
+    TORCH_CHECK(background_links.ndimension() == 4);
   }
 };
 

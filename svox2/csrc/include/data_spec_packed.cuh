@@ -15,10 +15,15 @@ struct PackedSparseGridSpec {
           links(spec.links.data_ptr<int32_t>()),
           basis_type(spec.basis_type),
           basis_data(spec.basis_data.data_ptr<float>()),
+          background_density_data(spec.background_density_data.data_ptr<float>()),
+          background_sh_data(spec.background_sh_data.data_ptr<float>()),
+          background_links(spec.background_links.data_ptr<int32_t>()),
           size{(int)spec.links.size(0),
                (int)spec.links.size(1),
                (int)spec.links.size(2)},
           stride_x{(int)spec.links.stride(0)},
+          background_reso{(int)spec.background_links.size(2)},
+          background_nlayers{(int)spec.background_links.size(0)},
           basis_dim(spec.basis_dim),
           sh_data_dim((int)spec.sh_data.size(1)),
           basis_reso(spec.basis_data.size(0)),
@@ -33,10 +38,16 @@ struct PackedSparseGridSpec {
     float* __restrict__ density_data;
     float* __restrict__ sh_data;
     const int32_t* __restrict__ links;
+
     const uint8_t basis_type;
     float* __restrict__ basis_data;
 
+    float* __restrict__ background_density_data;
+    float* __restrict__ background_sh_data;
+    const int32_t* __restrict__ background_links;
+
     const int size[3], stride_x;
+    const int background_reso, background_nlayers;
 
     const int basis_dim, sh_data_dim, basis_reso;
     const float _offset[3];
