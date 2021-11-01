@@ -301,27 +301,6 @@ class _TotalVariationFunction(autograd.Function):
         return grad_grid, None, None, None
 
 
-class _SparsityLossFunction(autograd.Function):
-    @staticmethod
-    def forward(
-        ctx, data: torch.Tensor, links: torch.Tensor, delta: float = 0.05
-    ):
-        tv = _C.sparsity(links, data, delta)
-        ctx.save_for_backward(links, data)
-        ctx.delta = delta
-        return tv
-
-    @staticmethod
-    def backward(ctx, grad_out):
-        links, data = ctx.saved_tensors
-        grad_grid = torch.zeros_like(data)
-        _C.sparsity_grad(links, data, 1.0, ctx.delta, grad_grid)
-        ctx.start_dim = ctx.end_dim = None
-        if not ctx.needs_input_grad[0]:
-            grad_grid = None
-        return grad_grid, None, None, None
-
-
 # END Differentiable CUDA functions with custom gradient
 
 
@@ -1165,18 +1144,6 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for total variation"
         return _TotalVariationFunction.apply(
                 self.density_data, self.links, 0, 1, logalpha, logalpha_delta)
-
-    def sparsity(self, delta: float=0.01):
-        """
-        Compute sparsity loss over sigma,
-
-        :return: torch.Tensor, size scalar, the sparsity loss value
-        """
-        assert (
-            _C is not None and self.sh_data.is_cuda
-        ), "CUDA extension is currently required for total variation"
-        return _SparsityLossFunction.apply(
-                self.density_data, self.links, delta)
 
     def tv_color(self,
                  start_dim: int = 0, end_dim: Optional[int] = None,

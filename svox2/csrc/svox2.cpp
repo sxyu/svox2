@@ -59,19 +59,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(tv);
   _REG_FUNC(tv_grad);
   _REG_FUNC(tv_grad_sparse);
-<<<<<<< HEAD
-  _REG_FUNC(sparsity);
-  _REG_FUNC(sparsity_grad);
-  _REG_FUNC(sparsity_grad_sparse);
-
-  // Misc
-  _REG_FUNC(dilate);
-=======
 
   // Misc
   _REG_FUNC(dilate);
   _REG_FUNC(accel_dist_prop);
->>>>>>> llff
   _REG_FUNC(grid_weight_render);
 
   // Optimizer
