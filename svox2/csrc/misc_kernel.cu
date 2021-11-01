@@ -4,6 +4,7 @@
 #include <torch/extension.h>
 #include <cstdint>
 #include <cstdio>
+#include <iostream>
 #include "cuda_util.cuh"
 #include "render_util.cuh"
 #include "data_spec_packed.cuh"
@@ -41,7 +42,85 @@ __global__ void dilate_kernel(
         grid[xr][yr][zl] | grid[xr][yr][z] | grid[xr][yr][zr];
 }
 
-// Not the most efficient rendering, but not doing this so often
+// Probably can speed up the following functions, however they are really not
+// the bottleneck
+
+// A kind of L-infty distance transform-ish thing
+// TODO: Maybe replace this with an euclidean distance transform eg PBA
+__global__ void accel_dist_set_kernel(
+        const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> grid,
+        bool* __restrict__ tmp) {
+    int sz_x = grid.size(0);
+    int sz_y = grid.size(1);
+    int sz_z = grid.size(2);
+    CUDA_GET_THREAD_ID(tid, sz_x * sz_y * sz_z);
+
+    int z = tid % grid.size(2);
+    const int xy = tid / grid.size(2);
+    int y = xy % grid.size(1);
+    int x = xy / grid.size(1);
+
+    bool* tmp_base = tmp;
+
+
+    if (grid[x][y][z] >= 0) {
+        while (sz_x > 1 && sz_y > 1 && sz_z > 1) {
+            // Propagate occupied cell throughout the temp tree parent nodes
+            x >>= 1;
+            y >>= 1;
+            z >>= 1;
+            sz_x = int_div2_ceil(sz_x);
+            sz_y = int_div2_ceil(sz_y);
+            sz_z = int_div2_ceil(sz_z);
+
+            const int idx = x * sz_y * sz_z + y * sz_z + z;
+            // printf("s %d  %d %d %d  %d\n", tid, x, y, z, idx);
+            tmp_base[idx] = true;
+            tmp_base += sz_x * sz_y * sz_z;
+        }
+    }
+}
+
+__global__ void accel_dist_prop_kernel(
+        torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> grid,
+        const bool* __restrict__ tmp) {
+    int sz_x = grid.size(0);
+    int sz_y = grid.size(1);
+    int sz_z = grid.size(2);
+    CUDA_GET_THREAD_ID(tid, sz_x * sz_y * sz_z);
+
+    int z = tid % grid.size(2);
+    const int xy = tid / grid.size(2);
+    int y = xy % grid.size(1);
+    int x = xy / grid.size(1);
+    const bool* tmp_base = tmp;
+    int32_t* __restrict__ val = &grid[x][y][z];
+
+    if (*val < 0) {
+        int result = -1;
+        while (sz_x > 1 && sz_y > 1 && sz_z > 1) {
+            // Find the lowest set parent cell if it exists
+            x >>= 1;
+            y >>= 1;
+            z >>= 1;
+            sz_x = int_div2_ceil(sz_x);
+            sz_y = int_div2_ceil(sz_y);
+            sz_z = int_div2_ceil(sz_z);
+
+            const int idx = x * sz_y * sz_z + y * sz_z + z;
+            // printf("p %d  %d %d %d  %d tb[%d] , %d %d %d\n", tid, x, y, z, idx, tmp_base[idx],
+            //         sz_x, sz_y, sz_z);
+            if (tmp_base[idx]) {
+                break;
+            }
+            result -= 1;
+            tmp_base += sz_x * sz_y * sz_z;
+        }
+        *val = result;
+    }
+}
+
+// Fast single-channel rendering for weight-thresholding
 __device__ __inline__ void grid_trace_ray(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
         data,
@@ -49,6 +128,8 @@ __device__ __inline__ void grid_trace_ray(
         const float* __restrict__ offset,
         const float* __restrict__ scaling,
         float step_size,
+        float stop_thresh,
+        bool last_sample_opaque,
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
         grid_weight) {
 
@@ -61,12 +142,12 @@ __device__ __inline__ void grid_trace_ray(
     {
         float t1, t2;
         t = 0.0f;
-        tmax = 1e9f;
+        tmax = 2e3f;
 #pragma unroll 3
         for (int i = 0; i < 3; ++i) {
             const float invdir = 1.0 / ray.dir[i];
-            t1 = (- ray.origin[i]) * invdir;
-            t2 = (data.size(i) - 1.f  - ray.origin[i]) * invdir;
+            t1 = (-0.5f - ray.origin[i]) * invdir;
+            t2 = (data.size(i) - 0.5f  - ray.origin[i]) * invdir;
             if (ray.dir[i] != 0.f) {
                 t = max(t, min(t1, t2));
                 tmax = min(tmax, max(t1, t2));
@@ -110,10 +191,14 @@ __device__ __inline__ void grid_trace_ray(
             const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
             sigma = lerp(ix0, ix1, pos[0]);
         }
+        if (last_sample_opaque && t + step_size > tmax) {
+            sigma += 1e9;
+            log_light_intensity = 0.f;
+        }
 
         if (sigma > 1e-4f) {
             log_att = -world_step * sigma;
-            const float weight = expf(log_light_intensity) * (1.f - expf(log_att));
+            const float weight = _EXP(log_light_intensity) * (1.f - _EXP(log_att));
             log_light_intensity += log_att;
             float* __restrict__ max_wt_ptr_000 = grid_weight.data() + idx;
             atomicMax(max_wt_ptr_000, weight);
@@ -125,6 +210,10 @@ __device__ __inline__ void grid_trace_ray(
             atomicMax(max_wt_ptr_100 + 1, weight);
             atomicMax(max_wt_ptr_100 + stride1, weight);
             atomicMax(max_wt_ptr_100 + stride1 + 1, weight);
+
+            if (_EXP(log_light_intensity) < stop_thresh) {
+                break;
+            }
         }
         t += step_size;
     }
@@ -136,6 +225,8 @@ __global__ void grid_weight_render_kernel(
         data,
     PackedCameraSpec cam,
     float step_size,
+    float stop_thresh,
+    bool last_sample_opaque,
     const float* __restrict__ offset,
     const float* __restrict__ scaling,
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
@@ -150,6 +241,8 @@ __global__ void grid_weight_render_kernel(
         offset,
         scaling,
         step_size,
+        stop_thresh,
+        last_sample_opaque,
         grid_weight);
 }
 
@@ -174,8 +267,51 @@ torch::Tensor dilate(torch::Tensor grid) {
     return result;
 }
 
+void accel_dist_prop(torch::Tensor grid) {
+    // Grid here is links array from the sparse grid
+    DEVICE_GUARD(grid);
+    CHECK_INPUT(grid);
+    TORCH_CHECK(!grid.is_floating_point());
+    TORCH_CHECK(grid.ndimension() == 3);
+
+    int Q = grid.size(0) * grid.size(1) * grid.size(2);
+
+    const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+
+    int sz_x = grid.size(0);
+    int sz_y = grid.size(1);
+    int sz_z = grid.size(2);
+
+    size_t req_size = 0;
+    while (sz_x > 1 && sz_y > 1 && sz_z > 1) {
+        sz_x = int_div2_ceil(sz_x);
+        sz_y = int_div2_ceil(sz_y);
+        sz_z = int_div2_ceil(sz_z);
+        req_size += sz_x * sz_y * sz_z;
+    }
+
+    bool* tmp;
+    cuda(Malloc(&tmp, req_size * sizeof(bool)));
+    cuda(MemsetAsync(tmp, 0, req_size * sizeof(bool)));
+
+    device::accel_dist_set_kernel<<<blocks, cuda_n_threads>>>(
+            grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            tmp);
+
+    device::accel_dist_prop_kernel<<<blocks, cuda_n_threads>>>(
+            grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            tmp);
+
+    cuda(Free(tmp));
+    CUDA_CHECK_ERRORS;
+}
+
 void grid_weight_render(
-    torch::Tensor data, CameraSpec& cam, float step_size,
+    torch::Tensor data, CameraSpec& cam,
+    float step_size,
+    float stop_thresh,
+    bool last_sample_opaque,
     torch::Tensor offset, torch::Tensor scaling,
     torch::Tensor grid_weight_out) {
     DEVICE_GUARD(data);
@@ -193,6 +329,8 @@ void grid_weight_render(
         data.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         cam,
         step_size,
+        stop_thresh,
+        last_sample_opaque,
         offset.data_ptr<float>(),
         scaling.data_ptr<float>(),
         grid_weight_out.packed_accessor32<float, 3, torch::RestrictPtrTraits>());

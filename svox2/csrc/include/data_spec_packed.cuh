@@ -13,12 +13,15 @@ struct PackedSparseGridSpec {
           density_data(spec.density_data.data_ptr<float>()),
           sh_data(spec.sh_data.data_ptr<float>()),
           links(spec.links.data_ptr<int32_t>()),
+          use_learned_basis(spec.use_learned_basis),
+          basis_data(spec.basis_data.data_ptr<float>()),
           size{(int)spec.links.size(0),
                (int)spec.links.size(1),
                (int)spec.links.size(2)},
           stride_x{(int)spec.links.stride(0)},
           basis_dim(spec.basis_dim),
           sh_data_dim((int)spec.sh_data.size(1)),
+          basis_reso(spec.basis_data.size(0)),
           _offset{spec._offset.data_ptr<float>()[0],
                   spec._offset.data_ptr<float>()[1],
                   spec._offset.data_ptr<float>()[2]},
@@ -30,10 +33,12 @@ struct PackedSparseGridSpec {
     float* __restrict__ density_data;
     float* __restrict__ sh_data;
     const int32_t* __restrict__ links;
+    const bool use_learned_basis;
+    float* __restrict__ basis_data;
 
-    int size[3], stride_x;
+    const int size[3], stride_x;
 
-    int basis_dim, sh_data_dim;
+    const int basis_dim, sh_data_dim, basis_reso;
     const float _offset[3];
     const float _scaling[3];
 };
@@ -41,13 +46,21 @@ struct PackedSparseGridSpec {
 struct PackedCameraSpec {
     PackedCameraSpec(CameraSpec& cam) :
         c2w(cam.c2w.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
-        fx(cam.fx), fy(cam.fy), width(cam.width), height(cam.height) {}
+        fx(cam.fx), fy(cam.fy),
+        cx(cam.cx), cy(cam.cy),
+        width(cam.width), height(cam.height),
+        ndc_coeffx(cam.ndc_coeffx), ndc_coeffy(cam.ndc_coeffy) {}
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
         c2w;
     float fx;
     float fy;
+    float cx;
+    float cy;
     int width;
     int height;
+
+    float ndc_coeffx;
+    float ndc_coeffy;
 };
 
 struct PackedRaysSpec {

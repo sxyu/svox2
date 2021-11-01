@@ -12,16 +12,16 @@
 namespace {
 const int WARP_SIZE = 32;
 
-const int TRACE_RAY_CUDA_THREADS = 256;
+const int TRACE_RAY_CUDA_THREADS = 128;
 const int TRACE_RAY_CUDA_RAYS_PER_BLOCK = TRACE_RAY_CUDA_THREADS / WARP_SIZE;
 
-const int TRACE_RAY_BKWD_CUDA_THREADS = 256;
+const int TRACE_RAY_BKWD_CUDA_THREADS = 128;
 const int TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK = TRACE_RAY_BKWD_CUDA_THREADS / WARP_SIZE;
 
-const int TRACE_RAY_FUSED_CUDA_THREADS = 256;
+const int TRACE_RAY_FUSED_CUDA_THREADS = 128;
 const int TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK = TRACE_RAY_FUSED_CUDA_THREADS / WARP_SIZE;
 
-const int MIN_BLOCKS_PER_SM = 4;
+const int MIN_BLOCKS_PER_SM = 8;
 typedef cub::WarpReduce<float> WarpReducef;
 
 torch::Tensor init_mask(torch::Tensor ref_data) {
@@ -36,89 +36,6 @@ torch::Tensor init_mask(torch::Tensor ref_data) {
 
 namespace device {
 
-template<class data_type_t, class voxel_index_t>
-__device__ __inline__ float trilerp_cuvol_one(
-        const int32_t* __restrict__ links,
-        const data_type_t* __restrict__ data,
-        int offx, int offy, size_t stride,
-        const voxel_index_t* __restrict__ l,
-        const float* __restrict__ pos,
-        const int idx) {
-    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
-
-#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u] * stride + idx] : 0.f)
-    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);
-    const float ix0y1 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), pos[2]);
-    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
-    const float ix1y0 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), pos[2]);
-    const float ix1y1 = lerp(MAYBE_READ_LINK(offy + offx),
-                             MAYBE_READ_LINK(offy + offx + 1), pos[2]);
-    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
-    return lerp(ix0, ix1, pos[0]);
-#undef MAYBE_READ_LINK
-}
-
-template<class data_type_t, class voxel_index_t>
-__device__ __inline__ void trilerp_backward_cuvol_one(
-        const int32_t* __restrict__ links,
-        data_type_t* __restrict__ grad_data,
-        int offx, int offy, size_t stride,
-        const voxel_index_t* __restrict__ l,
-        const float* __restrict__ pos,
-        float grad_out,
-        const int idx) {
-    const float ay = 1.f - pos[1], az = 1.f - pos[2];
-    float xo = (1.0f - pos[0]) * grad_out;
-
-    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
-
-#define MAYBE_ADD_LINK(u, val) if (link_ptr[u] >= 0) { \
-              atomicAdd(&grad_data[link_ptr[u] * stride + idx], val); \
-        }
-    MAYBE_ADD_LINK(0, ay * az * xo);
-    MAYBE_ADD_LINK(1, ay * pos[2] * xo);
-    MAYBE_ADD_LINK(offy, pos[1] * az * xo);
-    MAYBE_ADD_LINK(offy + 1, pos[1] * pos[2] * xo);
-
-    xo = pos[0] * grad_out;
-    MAYBE_ADD_LINK(offx + 0, ay * az * xo);
-    MAYBE_ADD_LINK(offx + 1, ay * pos[2] * xo);
-    MAYBE_ADD_LINK(offx + offy, pos[1] * az * xo);
-    MAYBE_ADD_LINK(offx + offy + 1, pos[1] * pos[2] * xo);
-#undef MAYBE_ADD_LINK
-}
-
-template<class data_type_t, class voxel_index_t>
-__device__ __inline__ void trilerp_backward_cuvol_one_density(
-        const int32_t* __restrict__ links,
-        data_type_t* __restrict__ grad_data_out,
-        bool* __restrict__ mask_out,
-        int offx, int offy,
-        const voxel_index_t* __restrict__ l,
-        const float* __restrict__ pos,
-        float grad_out) {
-    const float ay = 1.f - pos[1], az = 1.f - pos[2];
-    float xo = (1.0f - pos[0]) * grad_out;
-
-    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
-
-#define MAYBE_ADD_LINK_DEN(u, val) if (link_ptr[u] >= 0) { \
-              atomicAdd(&grad_data_out[link_ptr[u]], val); \
-              mask_out[link_ptr[u]] = true; \
-        }
-    MAYBE_ADD_LINK_DEN(0, ay * az * xo);
-    MAYBE_ADD_LINK_DEN(1, ay * pos[2] * xo);
-    MAYBE_ADD_LINK_DEN(offy, pos[1] * az * xo);
-    MAYBE_ADD_LINK_DEN(offy + 1, pos[1] * pos[2] * xo);
-
-    xo = pos[0] * grad_out;
-    MAYBE_ADD_LINK_DEN(offx + 0, ay * az * xo);
-    MAYBE_ADD_LINK_DEN(offx + 1, ay * pos[2] * xo);
-    MAYBE_ADD_LINK_DEN(offx + offy, pos[1] * az * xo);
-    MAYBE_ADD_LINK_DEN(offx + offy + 1, pos[1] * pos[2] * xo);
-#undef MAYBE_ADD_LINK_DEN
-}
-
 
 // * For ray rendering
 __device__ __inline__ void trace_ray_cuvol(
@@ -129,8 +46,6 @@ __device__ __inline__ void trace_ray_cuvol(
         float* __restrict__ sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
         float* __restrict__ out) {
-    if (lane_id >= grid.sh_data_dim)
-        return;
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
 
@@ -143,6 +58,7 @@ __device__ __inline__ void trace_ray_cuvol(
     float outv = 0.f;
 
     float light_intensity = 0.f;
+
     while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
@@ -152,13 +68,24 @@ __device__ __inline__ void trace_ray_cuvol(
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
 
-        const float sigma = trilerp_cuvol_one(
+        float skip = compute_skip_dist(ray,
+               grid.links, grid.stride_x,
+               grid.size[2]);
+        if (skip >= opt.step_size) {
+            // For consistency, we skip the by step size
+            t += ceilf(skip / opt.step_size) * opt.step_size;
+            continue;
+        }
+        float sigma = trilerp_cuvol_one(
                 grid.links, grid.density_data,
                 grid.stride_x,
                 grid.size[2],
                 1,
                 ray.l, ray.pos,
                 0);
+        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
+            sigma += 1e9;
+        }
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
                             grid.links,
@@ -175,7 +102,7 @@ __device__ __inline__ void trace_ray_cuvol(
 
             float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            lane_color, lane_colorgrp_id == 0);
-            outv += weight * _SIGMOID(lane_color_total);
+            outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, 1]
             if (_EXP(light_intensity) < opt.stop_thresh) {
                 break;
             }
@@ -195,14 +122,13 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         SingleRaySpec& __restrict__ ray,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
-        float* __restrict__ sphfunc_val,
+        const float* __restrict__ sphfunc_val,
+        float* __restrict__ grad_sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
         bool* __restrict__ mask_out,
         float* __restrict__ grad_density_data_out,
         float* __restrict__ grad_sh_data_out
         ) {
-    if (lane_id >= grid.sh_data_dim)
-        return;
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim));
@@ -217,6 +143,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                            color_cache[2] * grad_output[2]));
 
     float light_intensity = 0.f;
+
     // remat samples
     while (t <= ray.tmax) {
 #pragma unroll 3
@@ -226,8 +153,16 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
+        float skip = compute_skip_dist(ray,
+               grid.links, grid.stride_x,
+               grid.size[2]);
+        if (skip >= opt.step_size) {
+            // For consistency, we skip the by step size
+            t += ceilf(skip / opt.step_size) * opt.step_size;
+            continue;
+        }
 
-        const float sigma = trilerp_cuvol_one(
+        float sigma = trilerp_cuvol_one(
                 grid.links,
                 grid.density_data,
                 grid.stride_x,
@@ -235,6 +170,9 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                 1,
                 ray.l, ray.pos,
                 0);
+        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
+            sigma += 1e9;
+        }
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
                             grid.links,
@@ -243,42 +181,36 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                             grid.size[2],
                             grid.sh_data_dim,
                             ray.l, ray.pos, lane_id);
-            lane_color *= sphfunc_val[lane_colorgrp_id];
+            float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
 
             const float pcnt = ray.world_step * sigma;
             const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
             light_intensity -= pcnt;
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                           lane_color, lane_colorgrp_id == 0);
-            float sigmoid = _SIGMOID(lane_color_total);
+                                           weighted_lane_color, lane_colorgrp_id == 0) + 0.5f;
+            float total_color = fmaxf(lane_color_total, 0.f);
+            float color_in_01 = total_color == lane_color_total;
+            total_color *= gout; // Clamp to [+0, 1]
 
-            float total_color = sigmoid * gout;
             float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim);
             total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
             total_color += total_color_c1;
 
-            sigmoid = __shfl_sync(0xffffffff, sigmoid, lane_colorgrp * grid.basis_dim);
-            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] *
-                                weight * sigmoid *
-                                (1.f - sigmoid) * gout;
+            color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim);
+            const float grad_common = weight * color_in_01 * gout;
+            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common;
 
-//             float total_color = 0.f;
-// #pragma unroll 3
-//             for (int j = 0; j < 3; ++j) {
-//                 const int off = j * grid.basis_dim + 1;
-//                 float tmp = 0.f;
-//                 for (int i = 0; i < grid.basis_dim; ++i) {
-//                     tmp += sphfunc_val[i] * interp_val[off + i];
-//                 }
-//                 const float sigmoid = _SIGMOID(tmp);
-//                 total_color += sigmoid * grad_output[j];
-//
-//                 const float tmp2 = weight * sigmoid * (1.f - sigmoid)  * grad_output[j];
-//                 for (int i = 0; i < grid.basis_dim; ++i) {
-//                     curr_grad[off + i] = sphfunc_val[i] * tmp2;
-//                 }
-//             }
+            float curr_grad_sphfunc = lane_color * grad_common;
+            const float curr_grad_up2 = __shfl_down_sync((1U << grid.sh_data_dim) - 1,
+                    curr_grad_sphfunc, 2 * grid.basis_dim);
+            curr_grad_sphfunc += __shfl_down_sync((1U << grid.sh_data_dim) - 1,
+                    curr_grad_sphfunc, grid.basis_dim);
+            curr_grad_sphfunc += curr_grad_up2;
+            if (lane_id < grid.basis_dim) {
+                grad_sphfunc_val[lane_id] += curr_grad_sphfunc;
+            }
+
             accum -= weight * total_color;
             float curr_grad_sigma = ray.world_step * (
                     total_color * _EXP(light_intensity) - accum);
@@ -318,18 +250,24 @@ __global__ void render_ray_kernel(
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
-    __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][9];
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
+    __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][10];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
+    ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
+            rays.dirs[ray_id].data());
+    calc_sphfunc(grid, lane_id,
+                 ray_spec[ray_blk_id].dir,
+                 sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
-        ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
-                rays.dirs[ray_id].data());
-        calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
-                     ray_spec[ray_blk_id].dir, sphfunc_val[ray_blk_id]);
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
-    // printf("ray %d lane %d\n", ray_id, lane_id);
+    __syncwarp((1U << grid.sh_data_dim) - 1);
+
     trace_ray_cuvol(
         grid,
         ray_spec[ray_blk_id],
@@ -350,23 +288,34 @@ __global__ void render_ray_backward_kernel(
         RenderOptions opt,
     bool* __restrict__ mask_out,
     float* __restrict__ grad_density_data_out,
-    float* __restrict__ grad_sh_data_out
-        ) {
+    float* __restrict__ grad_sh_data_out,
+    float* __restrict__ grad_basis_data_out) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
-    __shared__ float sphfunc_val[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK][9];
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
+    __shared__ float sphfunc_val[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK][10];
+    __shared__ float grad_sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][10];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK];
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
+    ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
+                             rays.dirs[ray_id].data());
+    const float vdir[3] = {ray_spec[ray_blk_id].dir[0],
+                     ray_spec[ray_blk_id].dir[1],
+                     ray_spec[ray_blk_id].dir[2] };
+    if (lane_id < grid.basis_dim) {
+        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
+    }
+    calc_sphfunc(grid, lane_id, vdir, sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
-        ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
-                                 rays.dirs[ray_id].data());
-        calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
-                     ray_spec[ray_blk_id].dir, sphfunc_val[ray_blk_id]);
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
+    __syncwarp((1U << grid.sh_data_dim) - 1);
     trace_ray_cuvol_backward(
         grid,
         grad_output[ray_id].data(),
@@ -375,10 +324,15 @@ __global__ void render_ray_backward_kernel(
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
+        grad_sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
         mask_out,
         grad_density_data_out,
         grad_sh_data_out);
+    calc_sphfunc_backward(grid, lane_id,
+                 vdir,
+                 grad_sphfunc_val[ray_blk_id],
+                 grad_basis_data_out);
 }
 
 __launch_bounds__(TRACE_RAY_FUSED_CUDA_THREADS, MIN_BLOCKS_PER_SM)
@@ -390,7 +344,8 @@ __global__ void render_ray_fused_kernel(
         bool* __restrict__ mask_out,
         float* __restrict__ rgb_out,
         float* __restrict__ grad_density_data_out,
-        float* __restrict__ grad_sh_data_out) {
+        float* __restrict__ grad_sh_data_out,
+        float* __restrict__ grad_basis_data_out) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
@@ -399,17 +354,26 @@ __global__ void render_ray_fused_kernel(
     if (lane_id >= grid.sh_data_dim)
         return;
 
-    __shared__ float sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][9];
+    __shared__ float sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][10];
+    __shared__ float grad_sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][10];
     __shared__ float rgb_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
     __shared__ float grad_out[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK];
-    __shared__ typename WarpReducef::TempStorage temp_storage[2][
+    __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
             rays.dirs[ray_id].data());
-    calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
-                 ray_spec[ray_blk_id].dir, sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    float vdir[3] = {ray_spec[ray_blk_id].dir[0],
+                     ray_spec[ray_blk_id].dir[1],
+                     ray_spec[ray_blk_id].dir[2] };
+    if (lane_id < grid.basis_dim) {
+        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
+    }
+    calc_sphfunc(grid, lane_id, vdir, sphfunc_val[ray_blk_id]);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp((1U << grid.sh_data_dim) - 1);
 
     trace_ray_cuvol(
         grid,
@@ -417,8 +381,10 @@ __global__ void render_ray_fused_kernel(
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
-        temp_storage[0][ray_blk_id],
+        temp_storage[ray_blk_id],
         rgb_val[ray_blk_id]);
+
+    __syncwarp((1U << grid.sh_data_dim) - 1);
 
 #pragma unroll 3
     for (int i = 0; i < 3; ++i) {
@@ -433,13 +399,19 @@ __global__ void render_ray_fused_kernel(
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
-        temp_storage[1][ray_blk_id],
+        grad_sphfunc_val[ray_blk_id],
+        temp_storage[ray_blk_id],
         mask_out,
         grad_density_data_out,
         grad_sh_data_out);
     if (lane_id < 3) {
         rgb_out[ray_id * 3 + lane_id] = rgb_val[ray_blk_id][lane_id];
     }
+
+    calc_sphfunc_backward(grid, lane_id,
+                 vdir,
+                 grad_sphfunc_val[ray_blk_id],
+                 grad_basis_data_out);
 }
 
 __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
@@ -452,17 +424,24 @@ __global__ void render_image_kernel(
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
     int iy = ray_id / cam.width, ix = ray_id % cam.width;
     float dir[3], origin[3];
     cam2world_ray(ix, iy, dir, origin, cam);
-    __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][9];
+    __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][10];
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     ray_spec[ray_blk_id].set(origin, dir);
-    calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
+    calc_sphfunc(grid, lane_id,
                  dir, sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp((1U << grid.sh_data_dim) - 1);
     trace_ray_cuvol(
         grid,
         ray_spec[ray_blk_id],
@@ -483,22 +462,34 @@ __global__ void render_image_backward_kernel(
         RenderOptions opt,
         bool* __restrict__ mask_out,
         float* __restrict__ grad_density_data_out,
-        float* __restrict__ grad_sh_data_out) {
+        float* __restrict__ grad_sh_data_out,
+        float* __restrict__ grad_basis_data_out) {
     CUDA_GET_THREAD_ID(tid, cam.width * cam.height * WARP_SIZE);
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
     const int lane_id = threadIdx.x & 0x1F;
+
+    if (lane_id >= grid.sh_data_dim)
+        return;
+
     int iy = ray_id / cam.width, ix = ray_id % cam.width;
     float dir[3], origin[3];
     cam2world_ray(ix, iy, dir, origin, cam);
-    __shared__ float sphfunc_val[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK][9];
+    __shared__ float sphfunc_val[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK][10];
+    __shared__ float grad_sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][10];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK];
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     ray_spec[ray_blk_id].set(origin, dir);
-    calc_sphfunc(SPHFUNC_TYPE_SH, grid.basis_dim,
+    if (lane_id < grid.basis_dim) {
+        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
+    }
+    calc_sphfunc(grid, lane_id,
                  dir, sphfunc_val[ray_blk_id]);
-    ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    if (lane_id == 0) {
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+    }
+    __syncwarp((1U << grid.sh_data_dim) - 1);
     trace_ray_cuvol_backward(
         grid,
         grad_output[iy][ix].data(),
@@ -507,10 +498,15 @@ __global__ void render_image_backward_kernel(
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
+        grad_sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
         mask_out,
         grad_density_data_out,
         grad_sh_data_out);
+    calc_sphfunc_backward(grid, lane_id,
+                 dir,
+                 grad_sphfunc_val[ray_blk_id],
+                 grad_basis_data_out);
 }
 }  // namespace device
 }  // namespace
@@ -541,7 +537,8 @@ torch::Tensor volume_render_cuvol_backward(
         torch::Tensor grad_out,
         torch::Tensor color_cache,
         torch::Tensor grad_density_out,
-        torch::Tensor grad_sh_out) {
+        torch::Tensor grad_sh_out,
+        torch::Tensor grad_basis_out) {
 
     DEVICE_GUARD(grid.sh_data);
     grid.check();
@@ -564,7 +561,8 @@ torch::Tensor volume_render_cuvol_backward(
             // Output
             sparse_mask.data_ptr<bool>(),
             grad_density_out.data_ptr<float>(),
-            grad_sh_out.data_ptr<float>());
+            grad_sh_out.data_ptr<float>(),
+            grad_basis_out.data_ptr<float>());
 
     CUDA_CHECK_ERRORS;
     return sparse_mask;
@@ -577,7 +575,8 @@ torch::Tensor volume_render_cuvol_fused(
         torch::Tensor rgb_gt,
         torch::Tensor rgb_out,
         torch::Tensor grad_density_out,
-        torch::Tensor grad_sh_out) {
+        torch::Tensor grad_sh_out,
+        torch::Tensor grad_basis_out) {
 
     DEVICE_GUARD(grid.sh_data);
     CHECK_INPUT(rgb_gt);
@@ -603,7 +602,8 @@ torch::Tensor volume_render_cuvol_fused(
             sparse_mask.data_ptr<bool>(),
             rgb_out.data_ptr<float>(),
             grad_density_out.data_ptr<float>(),
-            grad_sh_out.data_ptr<float>());
+            grad_sh_out.data_ptr<float>(),
+            grad_basis_out.data_ptr<float>());
     CUDA_CHECK_ERRORS;
     return sparse_mask;
 }
@@ -634,7 +634,8 @@ torch::Tensor volume_render_cuvol_image_backward(
         torch::Tensor grad_out,
         torch::Tensor color_cache,
         torch::Tensor grad_density_out,
-        torch::Tensor grad_sh_out) {
+        torch::Tensor grad_sh_out,
+        torch::Tensor grad_basis_out) {
 
     DEVICE_GUARD(grid.sh_data);
     grid.check();
@@ -660,7 +661,8 @@ torch::Tensor volume_render_cuvol_image_backward(
             // Output
             sparse_mask.data_ptr<bool>(),
             grad_density_out.data_ptr<float>(),
-            grad_sh_out.data_ptr<float>());
+            grad_sh_out.data_ptr<float>(),
+            grad_basis_out.data_ptr<float>());
 
     CUDA_CHECK_ERRORS;
     return sparse_mask;

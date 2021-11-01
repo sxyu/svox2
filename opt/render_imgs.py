@@ -7,7 +7,7 @@ import argparse
 import numpy as np
 import os
 from os import path
-from util.dataset import Dataset
+from util.dataset import datasets
 from util.util import Timing
 import imageio
 from tqdm import tqdm
@@ -15,37 +15,63 @@ from tqdm import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
 parser.add_argument('data_dir', type=str)
+parser.add_argument('--dataset_type',
+                     choices=list(datasets.keys()) + ["auto"],
+                     default="auto",
+                     help="Dataset type (specify type or use auto)")
+
 #  parser.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 parser.add_argument('--n_eval', '-n', type=int, default=200, help='images to evaluate (equal interval), at most evals every image')
 parser.add_argument('--train', action='store_true', default=False, help='render train set')
-parser.add_argument('--scene_scale', type=float, default=
-                                                2/3,
-                   help='Scene scale; generally 2/3, can be 5/6 for lego (no longer doing this)')
+parser.add_argument('--render_path',
+                    action='store_true',
+                    default=False,
+                    help="Render path instead of test images (no metrics will be given)")
 args = parser.parse_args()
 device = 'cuda:0'
 
 render_dir = path.join(path.dirname(args.ckpt),
             'train_renders' if args.train else 'test_renders')
+if args.render_path:
+    assert not args.train
+    render_dir += '_path'
 print('Writing to', render_dir)
 os.makedirs(render_dir, exist_ok=True)
 
-grid = svox2.SparseGrid.load(args.ckpt, device=device)
+dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test")
 
-dset = Dataset(args.data_dir, split="test_train" if args.train else "test", scene_scale=args.scene_scale)
-#  dset.gen_rays()
+grid = svox2.SparseGrid.load(args.ckpt, device=device)
+grid.opt.last_sample_opaque = dset.last_sample_opaque
+
+step_size = 0.5  # 0.5 of a voxel!
+grid.opt.step_size = step_size
+grid.opt.sigma_thresh = 1e-8
+#  grid.opt.stop_thresh = 1e-8
+grid.opt.background_brightness = 1.0
+grid.opt.backend = 'cuvol'
 
 with torch.no_grad():
     im_size = dset.h * dset.w
-    img_eval_interval = max(dset.n_images // args.n_eval, 1)
+    n_images = dset.render_c2w.size(0) if args.render_path else dset.n_images
+    img_eval_interval = max(n_images // args.n_eval, 1)
     avg_psnr = 0.0
     n_images_gen = 0
-    for img_id in tqdm(range(0, dset.n_images, img_eval_interval)):
-        c2w = dset.c2w[img_id].to(device=device)
-        cam = svox2.Camera(c2w, dset.focal, dset.focal,
-                           dset.w, dset.h)
+    for img_id in tqdm(range(0, n_images, img_eval_interval)):
+        c2w = dset.render_c2w[img_id] if args.render_path else dset.c2w[img_id]
+        c2w = c2w.to(device=device)
+        cam = svox2.Camera(c2w, dset.intrins.fx, dset.intrins.fy,
+                           dset.intrins.cx, dset.intrins.cy,
+                           dset.w, dset.h,
+                           ndc_coeffs=dset.ndc_coeffs)
         im = grid.volume_render_image(cam, use_kernel=True)
-        im_gt = dset.gt[img_id].to(device=device)
-        mse = (im - im_gt) ** 2
+        im.clamp_(0.0, 1.0)
+        if not args.render_path:
+            im_gt = dset.gt[img_id].to(device=device)
+            mse = (im - im_gt) ** 2
+            mse_num : float = mse.mean().item()
+            psnr = -10.0 * math.log10(mse_num)
+            avg_psnr += psnr
+            print(img_id, 'PSNR', psnr)
         #  all_rgbs = []
         #  all_mses = []
         #  for batch_begin in range(0, im_size, args.eval_batch_size):
@@ -61,14 +87,11 @@ with torch.no_grad():
         #      all_mses.append(((rgb_gt_test - rgb_pred_test) ** 2).cpu())
         img_path = path.join(render_dir, f'{img_id:04d}.png');
         im = im.cpu().numpy()
-        im_gt = dset.gt[img_id].numpy()
-        im = np.concatenate([im_gt, im], axis=1)
+        if not args.render_path:
+            im_gt = dset.gt[img_id].numpy()
+            im = np.concatenate([im_gt, im], axis=1)
         imageio.imwrite(img_path, (im * 255).astype(np.uint8))
         im = None
-        mse_num : float = mse.mean().item()
-        psnr = -10.0 * math.log10(mse_num)
-        avg_psnr += psnr
-        print(img_id, 'PSNR', psnr)
         n_images_gen += 1
     avg_psnr /= n_images_gen
     print('average PSNR', avg_psnr)
