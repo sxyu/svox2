@@ -13,7 +13,7 @@ struct PackedSparseGridSpec {
           density_data(spec.density_data.data_ptr<float>()),
           sh_data(spec.sh_data.data_ptr<float>()),
           links(spec.links.data_ptr<int32_t>()),
-          use_learned_basis(spec.use_learned_basis),
+          basis_type(spec.basis_type),
           basis_data(spec.basis_data.data_ptr<float>()),
           size{(int)spec.links.size(0),
                (int)spec.links.size(1),
@@ -33,7 +33,7 @@ struct PackedSparseGridSpec {
     float* __restrict__ density_data;
     float* __restrict__ sh_data;
     const int32_t* __restrict__ links;
-    const bool use_learned_basis;
+    const uint8_t basis_type;
     float* __restrict__ basis_data;
 
     const int size[3], stride_x;

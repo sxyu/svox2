@@ -42,7 +42,7 @@ void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, Tensor);
 
 // Optim
-void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float);
+void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float, float);
 void sgd_step(Tensor, Tensor, Tensor, float);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -78,7 +78,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("_offset", &SparseGridSpec::_offset)
       .def_readwrite("_scaling", &SparseGridSpec::_scaling)
       .def_readwrite("basis_dim", &SparseGridSpec::basis_dim)
-      .def_readwrite("use_learned_basis", &SparseGridSpec::use_learned_basis)
+      .def_readwrite("basis_type", &SparseGridSpec::basis_type)
       .def_readwrite("basis_data", &SparseGridSpec::basis_data);
 
   py::class_<CameraSpec>(m, "CameraSpec")

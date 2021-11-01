@@ -68,9 +68,10 @@ __device__ __inline__ void trace_ray_cuvol(
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
 
-        float skip = compute_skip_dist(ray,
-               grid.links, grid.stride_x,
-               grid.size[2]);
+        const float skip = compute_skip_dist(ray,
+                       grid.links, grid.stride_x,
+                       grid.size[2], 0);
+
         if (skip >= opt.step_size) {
             // For consistency, we skip the by step size
             t += ceilf(skip / opt.step_size) * opt.step_size;
@@ -104,6 +105,10 @@ __device__ __inline__ void trace_ray_cuvol(
                                            lane_color, lane_colorgrp_id == 0);
             outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, 1]
             if (_EXP(light_intensity) < opt.stop_thresh) {
+                const float renorm_val = 1.f / (1.f - _EXP(light_intensity));
+                if (lane_colorgrp_id == 0) {
+                    out[lane_colorgrp] *= renorm_val;
+                }
                 break;
             }
         }
@@ -153,9 +158,9 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
-        float skip = compute_skip_dist(ray,
-               grid.links, grid.stride_x,
-               grid.size[2]);
+        const float skip = compute_skip_dist(ray,
+                       grid.links, grid.stride_x,
+                       grid.size[2], 0);
         if (skip >= opt.step_size) {
             // For consistency, we skip the by step size
             t += ceilf(skip / opt.step_size) * opt.step_size;
@@ -261,6 +266,7 @@ __global__ void render_ray_kernel(
     ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
             rays.dirs[ray_id].data());
     calc_sphfunc(grid, lane_id,
+                 ray_id,
                  ray_spec[ray_blk_id].dir,
                  sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
@@ -311,7 +317,9 @@ __global__ void render_ray_backward_kernel(
     if (lane_id < grid.basis_dim) {
         grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
     }
-    calc_sphfunc(grid, lane_id, vdir, sphfunc_val[ray_blk_id]);
+    calc_sphfunc(grid, lane_id,
+                 ray_id,
+                 vdir, sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
@@ -329,8 +337,11 @@ __global__ void render_ray_backward_kernel(
         mask_out,
         grad_density_data_out,
         grad_sh_data_out);
-    calc_sphfunc_backward(grid, lane_id,
+    calc_sphfunc_backward(
+                 grid, lane_id,
+                 ray_id,
                  vdir,
+                 sphfunc_val[ray_blk_id],
                  grad_sphfunc_val[ray_blk_id],
                  grad_basis_data_out);
 }
@@ -369,7 +380,8 @@ __global__ void render_ray_fused_kernel(
     if (lane_id < grid.basis_dim) {
         grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
     }
-    calc_sphfunc(grid, lane_id, vdir, sphfunc_val[ray_blk_id]);
+    calc_sphfunc(grid, lane_id,
+                 ray_id, vdir, sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
@@ -409,7 +421,8 @@ __global__ void render_ray_fused_kernel(
     }
 
     calc_sphfunc_backward(grid, lane_id,
-                 vdir,
+                 ray_id, vdir,
+                 sphfunc_val[ray_blk_id],
                  grad_sphfunc_val[ray_blk_id],
                  grad_basis_data_out);
 }
@@ -436,7 +449,7 @@ __global__ void render_image_kernel(
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     ray_spec[ray_blk_id].set(origin, dir);
-    calc_sphfunc(grid, lane_id,
+    calc_sphfunc(grid, lane_id, ray_id,
                  dir, sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
@@ -484,7 +497,7 @@ __global__ void render_image_backward_kernel(
     if (lane_id < grid.basis_dim) {
         grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
     }
-    calc_sphfunc(grid, lane_id,
+    calc_sphfunc(grid, lane_id, ray_id,
                  dir, sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
@@ -503,8 +516,9 @@ __global__ void render_image_backward_kernel(
         mask_out,
         grad_density_data_out,
         grad_sh_data_out);
-    calc_sphfunc_backward(grid, lane_id,
+    calc_sphfunc_backward(grid, lane_id, ray_id,
                  dir,
+                 sphfunc_val[ray_blk_id],
                  grad_sphfunc_val[ray_blk_id],
                  grad_basis_data_out);
 }

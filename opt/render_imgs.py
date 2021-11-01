@@ -56,13 +56,13 @@ with torch.no_grad():
     img_eval_interval = max(n_images // args.n_eval, 1)
     avg_psnr = 0.0
     n_images_gen = 0
+    cam = svox2.Camera(torch.tensor(0), dset.intrins.fx, dset.intrins.fy,
+                       dset.intrins.cx, dset.intrins.cy,
+                       dset.w, dset.h,
+                       ndc_coeffs=dset.ndc_coeffs)
+    c2ws = dset.render_c2w.to(device=device) if args.render_path else dset.c2w.to(device=device)
     for img_id in tqdm(range(0, n_images, img_eval_interval)):
-        c2w = dset.render_c2w[img_id] if args.render_path else dset.c2w[img_id]
-        c2w = c2w.to(device=device)
-        cam = svox2.Camera(c2w, dset.intrins.fx, dset.intrins.fy,
-                           dset.intrins.cx, dset.intrins.cy,
-                           dset.w, dset.h,
-                           ndc_coeffs=dset.ndc_coeffs)
+        cam.c2w = c2ws[img_id]
         im = grid.volume_render_image(cam, use_kernel=True)
         im.clamp_(0.0, 1.0)
         if not args.render_path:

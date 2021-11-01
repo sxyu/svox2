@@ -5,6 +5,16 @@
 
 using torch::Tensor;
 
+enum BasisType {
+  // For svox 1 compatibility
+  // BASIS_TYPE_RGBA = 0
+  BASIS_TYPE_SH = 1,
+  // BASIS_TYPE_SG = 2
+  // BASIS_TYPE_ASG = 3
+  BASIS_TYPE_3D_TEXTURE = 4,
+  BASIS_TYPE_MLP = 255,
+};
+
 struct SparseGridSpec {
   Tensor density_data;
   Tensor sh_data;
@@ -13,7 +23,7 @@ struct SparseGridSpec {
   Tensor _scaling;
 
   int basis_dim;
-  bool use_learned_basis;
+  uint8_t basis_type;
   Tensor basis_data;
 
   inline void check() {
@@ -32,7 +42,6 @@ struct SparseGridSpec {
     TORCH_CHECK(density_data.ndimension() == 2);
     TORCH_CHECK(sh_data.ndimension() == 2);
     TORCH_CHECK(links.ndimension() == 3);
-    TORCH_CHECK(basis_data.ndimension() == 4);
   }
 };
 

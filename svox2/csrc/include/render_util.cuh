@@ -35,8 +35,10 @@ __device__ __inline__ float trilerp_one(
 __device__ __inline__ float compute_skip_dist(
         SingleRaySpec& __restrict__ ray,
         const int32_t* __restrict__ links,
-        int offx, int offy) {
-    const int32_t link_val = links[offx * ray.l[0] + offy * ray.l[1] + ray.l[2]];
+        int offx, int offy,
+        int pos_offset = 0) {
+    const int32_t link_val = links[offx * (ray.l[0] + pos_offset) + offy * (ray.l[1] + pos_offset) +
+                                (ray.l[2] + pos_offset)];
     if (link_val >= -1) return 0.f; // Not worth
 
     const uint32_t dist = -link_val;
@@ -49,20 +51,42 @@ __device__ __inline__ float compute_skip_dist(
     float tmax = 1e9f;
 #pragma unroll
     for (int i = 0; i < 3; ++i) {
-        int ul = ((ray.l[i] >> cell_ul_shift) << cell_ul_shift);
-        ul -= ray.l[i];
+        int ul = (((ray.l[i] + pos_offset) >> cell_ul_shift) << cell_ul_shift);
+        ul -= ray.l[i] + pos_offset;
 
         const float invdir = 1.0 / ray.dir[i];
-        const float t1 = (ul - ray.pos[i]) * invdir;
-        const float t2 = (ul + cell_side_len - ray.pos[i]) * invdir;
+        const float t1 = (ul - ray.pos[i] + pos_offset) * invdir;
+        const float t2 = (ul + cell_side_len - ray.pos[i] + pos_offset) * invdir;
         if (ray.dir[i] != 0.f) {
             tmin = max(tmin, min(t1, t2));
             tmax = min(tmax, max(t1, t2));
         }
     }
+
+//     const uint32_t cell_ul_shift = 1 - dist;
+//     const uint32_t cell_br_shift = -cell_ul_shift;
+//
+//     // AABB intersection
+//     // Consider caching the invdir for the ray
+//     float tmin = 0.f;
+//     float tmax = 1e9f;
+// #pragma unroll
+//     for (int i = 0; i < 3; ++i) {
+//         const float invdir = 1.0 / ray.dir[i];
+//         const float t1 = (cell_ul_shift - ray.pos[i] + pos_offset) * invdir;
+//         const float t2 = (cell_br_shift - ray.pos[i] + pos_offset) * invdir;
+//         if (ray.dir[i] != 0.f) {
+//             tmin = max(tmin, min(t1, t2));
+//             tmax = min(tmax, max(t1, t2));
+//         }
+//     }
+
     if (tmin > 0.f) {
         // Somehow the origin is not in the cube
-        // Will happen near the lowest vertex of a cell,
+        // Should not happen for distance transform
+
+        // If using geometric distances:
+        // will happen near the lowest vertex of a cell,
         // since l is always the lowest neighbor
         return 0.f;
     }
@@ -257,10 +281,11 @@ __device__ __inline__ void calc_sh(
 __device__ __inline__ void calc_sphfunc(
     const PackedSparseGridSpec& grid,
     const int lane_id,
+    const int ray_id,
     const float* __restrict__ dir, // Pre-normalized
     float* __restrict__ out) {
     // Placeholder
-    if (grid.use_learned_basis) {
+    if (grid.basis_type == BASIS_TYPE_3D_TEXTURE) {
         float p[3];
         int32_t l[3];
         for (int j = 0; j < 3; ++j) {
@@ -272,13 +297,23 @@ __device__ __inline__ void calc_sphfunc(
             p[j] -= static_cast<float>(l[j]);
         }
 
-        if (lane_id < grid.basis_dim) {
-            out[lane_id] = trilerp_one(grid.basis_data,
-                    grid.basis_reso, grid.basis_dim,
-                    l, p,
-                    lane_id);
+        if (lane_id > 0 && lane_id < grid.basis_dim) {
+            out[lane_id] =
+                    fmaxf(
+                        trilerp_one(
+                        grid.basis_data,
+                        grid.basis_reso,
+                        grid.basis_dim - 1,
+                        l, p,
+                        lane_id - 1),
+                        0.f);
         }
-
+        out[0] = C0;
+    } else if (grid.basis_type == BASIS_TYPE_MLP) {
+        const float* __restrict__ basis_ptr = grid.basis_data + grid.basis_dim * ray_id;
+        if (lane_id < grid.basis_dim) {
+            out[lane_id] = _SIGMOID(basis_ptr[lane_id]);
+        }
     } else {
         calc_sh(grid.basis_dim, dir, out);
     }
@@ -287,11 +322,13 @@ __device__ __inline__ void calc_sphfunc(
 __device__ __inline__ void calc_sphfunc_backward(
     const PackedSparseGridSpec& grid,
     const int lane_id,
+    const int ray_id,
     const float* __restrict__ dir, // Pre-normalized
+    const float* __restrict__ output_saved,
     const float* __restrict__ grad_output,
-    float* __restrict__ grad_out) {
+    float* __restrict__ grad_basis_data) {
     // Placeholder
-    if (grid.use_learned_basis) {
+    if (grid.basis_type == BASIS_TYPE_3D_TEXTURE) {
         float p[3];
         int32_t l[3];
         for (int j = 0; j < 3; ++j) {
@@ -304,15 +341,21 @@ __device__ __inline__ void calc_sphfunc_backward(
         }
 
         __syncwarp((1U << grid.sh_data_dim) - 1);
-        if (lane_id < grid.basis_dim) {
-            trilerp_backward_one<float, int32_t>(grad_out,
+        if (lane_id > 0 && lane_id < grid.basis_dim && output_saved[lane_id] > 0.f) {
+            trilerp_backward_one<float, int32_t>(grad_basis_data,
                     grid.basis_reso,
-                    grid.basis_dim,
+                    grid.basis_dim - 1,
                     l, p,
                     grad_output[lane_id],
-                    lane_id);
+                    lane_id - 1);
         }
-
+    } else if (grid.basis_type == BASIS_TYPE_MLP) {
+        float* __restrict__ grad_basis_ptr = grad_basis_data + grid.basis_dim * ray_id;
+        if (lane_id < grid.basis_dim) {
+            const float sig = output_saved[lane_id];
+            grad_basis_ptr[lane_id] =
+                sig * (1.f - sig) * grad_output[lane_id];
+        }
     } else {
         // nothing needed
     }

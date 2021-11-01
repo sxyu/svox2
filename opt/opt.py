@@ -5,6 +5,7 @@
 # or use launching script:   sh launch.sh <EXP_NAME> <GPU> <DATA_DIR>
 import torch
 import torch.cuda
+import torch.optim
 import torch.nn.functional as F
 import svox2
 import json
@@ -64,12 +65,12 @@ group.add_argument('--batch_size', type=int, default=
 
 # TODO: make the lr higher near the end
 group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
-group.add_argument('--lr_sigma', type=float, default=
-                                            3e1,
+group.add_argument('--lr_sigma', type=float, default=3e1,
         help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-2)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
+group.add_argument('--lr_sigma_delay_steps', type=int, default=
+                    15000,
                    help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
@@ -90,11 +91,11 @@ group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-6,
+                      1e-3,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
                       default=
-                      1e-6
+                      1e-4
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
 group.add_argument('--lr_basis_delay_steps', type=int, default=0,#15000,
@@ -140,8 +141,10 @@ group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-2)
+group.add_argument('--lambda_tv_sh', type=float, default=0.0) # FIXME
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
+
+group.add_argument('--lambda_l2_sh', type=float, default=1e-4) # FIXME
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
 
@@ -149,7 +152,9 @@ group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
-group.add_argument('--use_learned_basis', action='store_true', default=False)
+group.add_argument('--basis_type',
+                    choices=['sh', '3d_texture', 'mlp'],
+                    default='sh')
 args = parser.parse_args()
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
@@ -189,7 +194,8 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         use_z_order=True,
                         device=device,
                         basis_reso=args.basis_reso,
-                        use_learned_basis=args.use_learned_basis)
+                        basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
+                        mlp_posenc_size=4)
 
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
@@ -205,12 +211,21 @@ grid.density_data.data[:] = args.init_sigma
 #  #  den[:, :, 0] = 1e9
 #  grid.density_data.data = den.view(osh)
 
-if grid.use_learned_basis:
-    grid.reinit_learned_bases(init_type='sh')
-#  grid.reinit_learned_bases(init_type='fourier')
-#  grid.reinit_learned_bases(init_type='sg', upper_hemi=True)
-#  grid.basis_data.data.normal_(mean=0.0, std=0.01)
-#  grid.basis_data.data += 0.28209479177387814
+optim_basis_mlp = None
+
+if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
+    #  grid.reinit_learned_bases(init_type='sh')
+    #  grid.reinit_learned_bases(init_type='fourier')
+    #  grid.reinit_learned_bases(init_type='sg', upper_hemi=True)
+    grid.basis_data.data.normal_(mean=0.28209479177387814, std=0.001)
+
+elif grid.basis_type == svox2.BASIS_TYPE_MLP:
+    # MLP!
+    optim_basis_mlp = torch.optim.Adam(
+                    grid.basis_mlp.parameters(),
+                    lr=args.lr_basis
+                )
+
 
 grid.requires_grad_(True)
 step_size = 0.5  # 0.5 of a voxel!
@@ -303,14 +318,18 @@ while True:
                 stats_test['psnr'] += psnr
                 n_images_gen += 1
 
-            if grid.use_learned_basis:
-                # Add spherical map visualization
+            if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE or \
+               grid.basis_type == svox2.BASIS_TYPE_MLP:
+                 # Add spherical map visualization
                 EQ_RESO = 256
                 eq_dirs = generate_dirs_equirect(EQ_RESO * 2, EQ_RESO)
                 eq_dirs = torch.from_numpy(eq_dirs).to(device=device).view(-1, 3)
 
-                sphfuncs = grid._eval_learned_bases(eq_dirs).view(EQ_RESO, EQ_RESO*2, -1)
-                sphfuncs = sphfuncs.permute([2, 0, 1]).cpu().numpy()
+                if grid.basis_type == svox2.BASIS_TYPE_MLP:
+                    sphfuncs = grid._eval_basis_mlp(eq_dirs)
+                else:
+                    sphfuncs = grid._eval_learned_bases(eq_dirs)
+                sphfuncs = sphfuncs.view(EQ_RESO, EQ_RESO*2, -1).permute([2, 0, 1]).cpu().numpy()
 
                 stats = [(sphfunc.min(), sphfunc.mean(), sphfunc.max())
                         for sphfunc in sphfuncs]
@@ -404,6 +423,9 @@ while True:
                 grid.inplace_tv_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_tv_sh,
                         sparse_frac=args.tv_sh_sparsity)
+            if args.lambda_l2_sh > 0.0:
+                grid.inplace_l2_color_grad(grid.sh_data.grad,
+                        scaling=args.lambda_l2_sh)
             if args.lambda_tv_basis > 0.0:
                 tv_basis = grid.tv_basis()
                 loss_tv_basis = tv_basis * args.lambda_tv_basis
@@ -414,8 +436,12 @@ while True:
             # Manual SGD/rmsprop step
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
             grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            if grid.use_learned_basis and gstep_id >= args.lr_basis_begin_step:
-                grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)
+            if gstep_id >= args.lr_basis_begin_step:
+                if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
+                    grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)
+                elif grid.basis_type == svox2.BASIS_TYPE_MLP:
+                    optim_basis_mlp.step()
+                    optim_basis_mlp.zero_grad()
 
     train_step()
     gc.collect()

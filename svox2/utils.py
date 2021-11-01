@@ -1,5 +1,8 @@
 from functools import partial
 import torch
+from torch import nn
+from typing import Optional
+import numpy as np
 
 def inthroot(x : int, n : int):
     if x <= 0:
@@ -272,3 +275,140 @@ def eval_sg_at_dirs(sg_lambda : torch.Tensor, sg_mu : torch.Tensor, dirs : torch
     basis = torch.exp(torch.einsum(
         "i,...i->...i", sg_lambda, product - 1))  # [..., N]
     return basis
+
+def init_weights(m):
+    if type(m) == nn.Linear:
+        nn.init.xavier_uniform_(m.weight)
+        m.bias.data.fill_(0.0)
+
+
+def cross_broadcast(x : torch.Tensor, y : torch.Tensor):
+    """
+    Cross broadcasting for 2 tensors
+
+    :param x: torch.Tensor
+    :param y: torch.Tensor, should have the same ndim as x
+    :return: tuple of cross-broadcasted tensors x, y. Any dimension where the size of x or y is 1
+             is expanded to the maximum size in that dimension among the 2.
+             Formally, say the shape of x is (a1, ... an)
+             and of y is (b1, ... bn);
+             then the result has shape (a'1, ... a'n), (b'1, ... b'n)
+             where
+                :code:`a'i = ai if (ai > 1 and bi > 1) else max(ai, bi)`
+                :code:`b'i = bi if (ai > 1 and bi > 1) else max(ai, bi)`
+    """
+    assert x.ndim == y.ndim, "Only available if ndim is same for all tensors"
+    max_shape = [(-1 if (a > 1 and b > 1) else max(a,b)) for i, (a, b)
+                    in enumerate(zip(x.shape, y.shape))]
+    shape_x = [max(a, m) for m, a in zip(max_shape, x.shape)]
+    shape_y = [max(b, m) for m, b in zip(max_shape, y.shape)]
+    x = x.broadcast_to(shape_x)
+    y = y.broadcast_to(shape_y)
+    return x, y
+
+def posenc(
+    x: torch.Tensor,
+    cov_diag: Optional[torch.Tensor],
+    min_deg: int,
+    max_deg: int,
+    include_identity: bool = True,
+    enable_ipe: bool = True,
+    cutoff: float = 1.0,
+):
+    """
+    Positional encoding function. Adapted from jaxNeRF
+    (https://github.com/google-research/google-research/tree/master/jaxnerf).
+    With support for mip-NeFF IPE (by passing cov_diag != 0, keeping enable_ipe=True).
+    And BARF-nerfies frequency attenuation (setting cutoff)
+
+    Cat x with a positional encoding of x with scales 2^[min_deg, max_deg-1],
+    Instead of computing [sin(x), cos(x)], we use the trig identity
+    cos(x) = sin(x + pi/2) and do one vectorized call to sin([x, x+pi/2]).
+
+    :param x: torch.Tensor (..., D), variables to be encoded. Note that x should be in [-pi, pi].
+    :param cov_diag: torch.Tensor (..., D), diagonal cov for each variable to be encoded (IPE)
+    :param min_deg: int, the minimum (inclusive) degree of the encoding.
+    :param max_deg: int, the maximum (exclusive) degree of the encoding. if min_deg >= max_deg,
+                         positional encoding is disabled.
+    :param include_identity: bool, if true then concatenates the identity
+    :param enable_ipe: bool, if true then uses cov_diag to compute IPE, if available.
+                             Note cov_diag = 0 will give the same effect.
+    :param cutoff: float, in [0, 1], a relative frequency cutoff as in BARF/nerfies. 1 = all frequencies,
+                          0 = no frequencies
+
+    :return: encoded torch.Tensor (..., D * (max_deg - min_deg) * 2 [+ D if include_identity]),
+                     encoded variables.
+    """
+    if min_deg >= max_deg:
+        return x
+    scales = torch.tensor([2 ** i for i in range(min_deg, max_deg)], device=x.device)
+    half_enc_dim = x.shape[-1] * scales.shape[0]
+    shapeb = list(x.shape[:-1]) + [half_enc_dim]  # (..., D * (max_deg - min_deg))
+    xb = torch.reshape((x[..., None, :] * scales[:, None]), shapeb)
+    four_feat = torch.sin(
+        torch.cat([xb, xb + 0.5 * np.pi], dim=-1)
+    )  # (..., D * (max_deg - min_deg) * 2)
+    if enable_ipe and cov_diag is not None:
+        # Apply integrated positional encoding (IPE)
+        xb_var = torch.reshape((cov_diag[..., None, :] * scales[:, None] ** 2), shapeb)
+        xb_var = torch.tile(xb_var, (2,))  # (..., D * (max_deg - min_deg) * 2)
+        four_feat = four_feat * torch.exp(-0.5 * xb_var)
+    if cutoff < 1.0:
+        # BARF/nerfies, could be made cleaner
+        cutoff_mask = _cutoff_mask(
+            scales, cutoff * (max_deg - min_deg)
+        )  # (max_deg - min_deg,)
+        four_feat = four_feat.view(shapeb[:-1] + [2, scales.shape[0], x.shape[-1]])
+        four_feat = four_feat * cutoff_mask[..., None]
+        four_feat = four_feat.view(shapeb[:-1] + [2 * scales.shape[0] * x.shape[-1]])
+    if include_identity:
+        four_feat = torch.cat([x] + [four_feat], dim=-1)
+    return four_feat
+
+
+def net_to_dict(out_dict : dict,
+                prefix : str,
+                model : nn.Module):
+    for child in model.named_children():
+        layer_name = child[0]
+        layer_params = {}
+        for param in child[1].named_parameters():
+            param_name = param[0]
+            param_value = param[1].data.cpu().numpy()
+            out_dict['pt__' + prefix + '__' + layer_name + '__' + param_name] = param_value
+
+def net_from_dict(in_dict,
+                  prefix : str,
+                  model : nn.Module):
+    for child in model.named_children():
+        layer_name = child[0]
+        layer_params = {}
+        for param in child[1].named_parameters():
+            param_name = param[0]
+            value = in_dict['pt__' + prefix + '__' + layer_name + '__' + param_name]
+            param_value = param[1].data[:] = torch.from_numpy(value).to(
+                    device=param[1].data.device)
+
+
+def convert_to_ndc(origins, directions, ndc_coeffs, near: float = 1.0):
+    """Convert a set of rays to NDC coordinates."""
+    # Shift ray origins to near plane, not sure if needed
+    t = (near - origins[Ellipsis, 2]) / directions[Ellipsis, 2]
+    origins = origins + t[Ellipsis, None] * directions
+
+    dx, dy, dz = directions.unbind(-1)
+    ox, oy, oz = origins.unbind(-1)
+
+    # Projection
+    o0 = ndc_coeffs[0] * (ox / oz)
+    o1 = ndc_coeffs[1] * (oy / oz)
+    o2 = 1 - 2 * near / oz
+
+    d0 = ndc_coeffs[0] * (dx / dz - ox / oz)
+    d1 = ndc_coeffs[1] * (dy / dz - oy / oz)
+    d2 = 2 * near / oz;
+
+    origins = torch.stack([o0, o1, o2], -1)
+    directions = torch.stack([d0, d1, d2], -1)
+    return origins, directions
+

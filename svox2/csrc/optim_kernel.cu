@@ -16,10 +16,10 @@ __inline__ __device__ void rmsprop_once(
         float* __restrict__ ptr_data,
         float* __restrict__ ptr_rms,
         float* __restrict__ ptr_grad,
-        const float beta, const float lr, const float epsilon) {
+        const float beta, const float lr, const float epsilon, float minval) {
     float rms = lerp(_SQR(*ptr_grad), *ptr_rms, beta);
     *ptr_rms = rms;
-    *ptr_data -= lr * (*ptr_grad) / (sqrtf(rms) + epsilon);
+    *ptr_data = fmaxf(*ptr_data - lr * (*ptr_grad) / (sqrtf(rms) + epsilon), minval);
     *ptr_grad = 0.f;
 }
 
@@ -30,14 +30,16 @@ __global__ void rmsprop_step_kernel(
         torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> all_grad,
         float beta,
         float lr,
-        float epsilon) {
+        float epsilon,
+        float minval) {
     CUDA_GET_THREAD_ID(tid, all_data.size(0) * all_data.size(1));
     rmsprop_once(all_data.data() + tid,
                  all_rms.data() + tid,
                  all_grad.data() + tid,
                  beta,
                  lr,
-                 epsilon);
+                 epsilon,
+                 minval);
 }
 
 
@@ -49,7 +51,8 @@ __global__ void rmsprop_mask_step_kernel(
         const bool* __restrict__ mask,
         float beta,
         float lr,
-        float epsilon) {
+        float epsilon,
+        float minval) {
     CUDA_GET_THREAD_ID(tid, all_data.size(0) * all_data.size(1));
     if (mask[tid / all_data.size(1)] == false) return;
     rmsprop_once(all_data.data() + tid,
@@ -57,7 +60,8 @@ __global__ void rmsprop_mask_step_kernel(
                  all_grad.data() + tid,
                  beta,
                  lr,
-                 epsilon);
+                 epsilon,
+                 minval);
 }
 
 __launch_bounds__(RMSPROP_STEP_CUDA_THREADS, MIN_BLOCKS_PER_SM)
@@ -68,7 +72,8 @@ __global__ void rmsprop_index_step_kernel(
         torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> indices,
         float beta,
         float lr,
-        float epsilon) {
+        float epsilon,
+        float minval) {
     CUDA_GET_THREAD_ID(tid, indices.size(0) * all_data.size(1));
     int32_t i = indices[tid / all_data.size(1)];
     int32_t j = tid % all_data.size(1);
@@ -77,7 +82,8 @@ __global__ void rmsprop_index_step_kernel(
                  all_grad.data() + off,
                  beta,
                  lr,
-                 epsilon);
+                 epsilon,
+                 minval);
 }
 
 
@@ -141,7 +147,8 @@ void rmsprop_step(
         torch::Tensor indexer,
         float beta,
         float lr,
-        float epsilon) {
+        float epsilon,
+        float minval) {
 
     DEVICE_GUARD(data);
     CHECK_INPUT(data);
@@ -160,7 +167,8 @@ void rmsprop_step(
                 grad.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
                 beta,
                 lr,
-                epsilon);
+                epsilon,
+                minval);
     } else if (indexer.size(0) == 0) {
         // Skip
     } else if (indexer.scalar_type() == at::ScalarType::Bool) {
@@ -173,7 +181,8 @@ void rmsprop_step(
                 indexer.data_ptr<bool>(),
                 beta,
                 lr,
-                epsilon);
+                epsilon,
+                minval);
     } else {
         const size_t Q = indexer.size(0) * data.size(1);
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
@@ -184,7 +193,8 @@ void rmsprop_step(
                 indexer.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
                 beta,
                 lr,
-                epsilon);
+                epsilon,
+                minval);
     }
 
     CUDA_CHECK_ERRORS;

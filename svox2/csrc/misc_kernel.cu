@@ -45,8 +45,61 @@ __global__ void dilate_kernel(
 // Probably can speed up the following functions, however they are really not
 // the bottleneck
 
-// A kind of L-infty distance transform-ish thing
+// ** Distance transforms
 // TODO: Maybe replace this with an euclidean distance transform eg PBA
+// Actual L-infty distance transform; turns out this is slower than the geometric way
+__global__ void accel_linf_dist_transform_kernel(
+        torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> grid,
+        int32_t* __restrict__ tmp,
+        int d2) {
+    const int d0 = d2 == 0 ? 1 : 0;
+    const int d1 = 3 - d0 - d2;
+    CUDA_GET_THREAD_ID(tid, grid.size(d0) * grid.size(d1));
+    int32_t* __restrict__ tmp_ptr = tmp + tid * grid.size(d2);
+    int l[3];
+    l[d0] = tid / grid.size(1);
+    l[d1] = tid % grid.size(1);
+    l[d2] = 0;
+    const int INF = 0x3f3f3f3f;
+    int d01_dist = INF;
+    int d2_dist = INF;
+    for (; l[d2] < grid.size(d2); ++l[d2]) {
+        const int val = grid[l[0]][l[1]][l[2]];
+        int32_t cdist = max(- val, 0);
+        if (d2 == 0 && cdist)
+            cdist = INF;
+        const int32_t pdist = max(d2_dist, d01_dist);
+
+        if (cdist < pdist) {
+            d01_dist = cdist;
+            d2_dist = 0;
+        }
+        tmp_ptr[l[d2]] = min(cdist, pdist);
+        ++d2_dist;
+    }
+
+    l[d2] = grid.size(d2) - 1;
+    d01_dist = INF;
+    d2_dist = INF;
+    for (; l[d2] >= 0; --l[d2]) {
+        const int val = grid[l[0]][l[1]][l[2]];
+        int32_t cdist = max(- val, 0);
+        if (d2 == 0 && cdist)
+            cdist = INF;
+        const int32_t pdist = max(d2_dist, d01_dist);
+
+        if (cdist < pdist) {
+            d01_dist = cdist;
+            d2_dist = 0;
+        }
+        if (cdist) {
+            grid[l[0]][l[1]][l[2]] = -min(tmp_ptr[l[d2]], min(cdist, pdist));
+        }
+        ++d2_dist;
+    }
+}
+
+// Geometric L-infty distance transform-ish thing
 __global__ void accel_dist_set_kernel(
         const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> grid,
         bool* __restrict__ tmp) {
@@ -61,7 +114,6 @@ __global__ void accel_dist_set_kernel(
     int x = xy / grid.size(1);
 
     bool* tmp_base = tmp;
-
 
     if (grid[x][y][z] >= 0) {
         while (sz_x > 1 && sz_y > 1 && sz_z > 1) {
@@ -274,14 +326,14 @@ void accel_dist_prop(torch::Tensor grid) {
     TORCH_CHECK(!grid.is_floating_point());
     TORCH_CHECK(grid.ndimension() == 3);
 
+    int sz_x = grid.size(0);
+    int sz_y = grid.size(1);
+    int sz_z = grid.size(2);
+
     int Q = grid.size(0) * grid.size(1) * grid.size(2);
 
     const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
-
-    int sz_x = grid.size(0);
-    int sz_y = grid.size(1);
-    int sz_z = grid.size(2);
 
     size_t req_size = 0;
     while (sz_x > 1 && sz_y > 1 && sz_z > 1) {
@@ -302,6 +354,28 @@ void accel_dist_prop(torch::Tensor grid) {
     device::accel_dist_prop_kernel<<<blocks, cuda_n_threads>>>(
             grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
             tmp);
+
+
+    // int32_t* tmp;
+    // const int req_size = sz_x * sz_y * sz_z;
+    // cuda(Malloc(&tmp, req_size * sizeof(int32_t)));
+    // cuda(MemsetAsync(tmp, 0, req_size * sizeof(int32_t)));
+    //
+    // {
+    //     for (int d2 = 0; d2 < 3; ++d2) {
+    //         int d0 = d2 == 0 ? 1 : 0;
+    //         int d1 = 3 - d0 - d2;
+    //         int Q = grid.size(d0) * grid.size(d1);
+    //
+    //         const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
+    //         const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    //
+    //         device::accel_linf_dist_transform_kernel<<<blocks, cuda_n_threads>>>(
+    //                 grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+    //                 tmp,
+    //                 d2);
+    //     }
+    // }
 
     cuda(Free(tmp));
     CUDA_CHECK_ERRORS;

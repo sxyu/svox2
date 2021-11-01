@@ -1,3 +1,4 @@
+from .defs import *
 from .utils import (
     isqrt,
     eval_sh_bases,
@@ -5,6 +6,11 @@ from .utils import (
     is_pow2,
     spher2cart,
     eval_sg_at_dirs,
+    init_weights,
+    posenc,
+    net_to_dict,
+    net_from_dict,
+    convert_to_ndc,
     MAX_SH_BASIS,
     _get_c_extension,
 )
@@ -200,7 +206,10 @@ class _VolumeRenderFunction(autograd.Function):
         cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_backward"]
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
-        grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+        if ctx.grid.basis_type == BASIS_TYPE_MLP:
+            grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+        else:
+            grad_basis = torch.zeros_like(ctx.basis_data)
         # TODO save the sparse mask
         sparse_mask = cu_fn(
             ctx.grid,
@@ -313,34 +322,48 @@ class SparseGrid(nn.Module):
     :param reso: int or List[int, int, int], resolution for resampled grid, as in the constructor
     :param radius: float or List[float, float, float], the 1/2 side length of the grid, optionally in each direction
     :param center: float or List[float, float, float], the center of the grid
-    :param use_learned_basis: bool, whether to use learned spherical function (false = SH)
+    :param basis_type: int, basis type; may use svox2.BASIS_TYPE_* (1 = SH, 4 = learned 3D texture, 255 = learned MLP)
     :param basis_dim: int, size of basis / number of SH components
                            (must be square number in case of SH)
-    :param basis_reso: int, resolution of learned spherical function
+    :param basis_reso: int, resolution of grid if using BASIS_TYPE_3D_TEXTURE
     :param use_z_order: bool, if true, stores the data initially in a Z-order curve if possible
+    :param mlp_posenc_size: int, if using BASIS_TYPE_MLP, then enables standard axis-aligned positional encoding of
+                                 given size on MLP; if 0 then does not use positional encoding
+    :param mlp_width: int, if using BASIS_TYPE_MLP, specifies MLP width (hidden dimension)
     :param device: torch.device, device to store the grid
     """
 
     def __init__(
         self,
-        reso: Union[int, List[int]] = 128,
+        reso: Union[int, List[int], Tuple[int, int, int]] = 128,
         radius: Union[float, List[float]] = 1.0,
         center: Union[float, List[float]] = [0.0, 0.0, 0.0],
-        use_learned_basis: bool = True,
+        basis_type: int = BASIS_TYPE_SH,
         basis_dim: int = 9,  # SH/learned basis size; in SH case, square number
         basis_reso: int = 16,  # Learned basis resolution (x^3 embedding grid)
         use_z_order : bool=False,
         use_sphere_bound : bool=False,
+        mlp_posenc_size : int = 0,
+        mlp_width : int = 16,
+        background_nlayers : int = 0,  # BG MSI layers
+        background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
     ):
         super().__init__()
-        self.use_learned_basis = use_learned_basis
-        if not use_learned_basis:
+        self.basis_type = basis_type
+        if basis_type == BASIS_TYPE_SH:
             assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
         assert (
             basis_dim >= 1 and basis_dim <= MAX_SH_BASIS
         ), f"basis_dim 1-{MAX_SH_BASIS} supported"
         self.basis_dim = basis_dim
+
+        self.mlp_posenc_size = mlp_posenc_size
+        self.mlp_width = mlp_width
+
+        self.background_nlayers = background_nlayers
+        self.background_reso = background_reso
+        self.use_background = background_nlayers > 0
 
         if isinstance(reso, int):
             reso = [reso] * 3
@@ -409,28 +432,65 @@ class SparseGrid(nn.Module):
             torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
         )
         # Called sh for legacy reasons, but it's just the coeffients for whatever
-        # representation
+        # spherical basis functions
         self.sh_data = nn.Parameter(
             torch.zeros(
                 self.capacity, self.basis_dim * 3, dtype=torch.float32, device=device
             )
         )
 
-        if use_learned_basis:
+        self.basis_data = nn.Parameter(
+            torch.zeros(
+                (0, 0, 0, 0), dtype=torch.float32, device=device
+            ),
+            requires_grad=False
+        )
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             # Unit sphere embedded in a cube
             self.basis_data = nn.Parameter(
                 torch.zeros(
                     basis_reso, basis_reso, basis_reso,
-                    self.basis_dim, dtype=torch.float32, device=device
+                    self.basis_dim - 1, dtype=torch.float32, device=device
                 )
             )
-        else:
-            self.basis_data = nn.Parameter(
-                torch.zeros(
-                    (0, 0, 0, 0), dtype=torch.float32, device=device
-                ),
-                requires_grad=False
+        elif self.basis_type == BASIS_TYPE_MLP:
+            D_rgb = mlp_width
+            dir_in_dims = 3 + 6 * self.mlp_posenc_size
+            # Hard-coded 4 layer MLP
+            self.basis_mlp = nn.Sequential(
+                nn.Linear(dir_in_dims, D_rgb),
+                nn.ReLU(),
+                nn.Linear(D_rgb, D_rgb),
+                nn.ReLU(),
+                nn.Linear(D_rgb, D_rgb),
+                nn.ReLU(),
+                nn.Linear(D_rgb, self.basis_dim)
             )
+            self.basis_mlp = self.basis_mlp.to(device=self.sh_data.device)
+            self.basis_mlp.apply(init_weights)
+
+        if self.use_background:
+            bg_total = self.background_reso * self.background_reso * self.background_nlayers
+            self.background_density_data = nn.Parameter(
+                torch.zeros(
+                    bg_total,
+                    1, dtype=torch.float32, device=device
+                )
+            )
+            self.background_sh_data = nn.Parameter(
+                torch.zeros(
+                    bg_total,
+                    self.basis_dim * 3, dtype=torch.float32, device=device
+                )
+            )
+            init_bg_links = torch.arange(bg_total, device=device, dtype=torch.int32).view
+            self.register_buffer("background_links",
+                                  init_bg_links.view(
+                                      2,
+                                      3,
+                                      self.background_reso,
+                                      self.background_reso,
+                                      self.background_nlayers))
 
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
@@ -455,10 +515,10 @@ class SparseGrid(nn.Module):
     @property
     def basis_reso(self):
         """
-        Return the resolution of the learned spherical function data,
-        or 0 if only using SH
+        Return the resolution of the learned spherical function data if using
+        3D learned texture, or 0 if only using SH
         """
-        return self.basis_data.size(0) if self.use_learned_basis else 0
+        return self.basis_data.size(0) if self.BASIS_TYPE_3D_TEXTURE else 0
 
     @property
     def shape(self):
@@ -504,7 +564,7 @@ class SparseGrid(nn.Module):
         if use_kernel and self.links.is_cuda and _C is not None:
             assert points.is_cuda
             return _SampleGridAutogradFunction.apply(
-                self.density_data, self.sh_data, self._to_cpp(grid_coords), points, want_colors
+                self.density_data, self.sh_data, self._to_cpp(grid_coords=grid_coords), points, want_colors
             )
         else:
             if not grid_coords:
@@ -575,8 +635,10 @@ class SparseGrid(nn.Module):
         delta_scale = 1.0 / dirs.norm(dim=1)
         dirs *= delta_scale.unsqueeze(-1)
 
-        if self.use_learned_basis:
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             sh_mult = self._eval_learned_bases(viewdirs)
+        elif self.basis_type == BASIS_TYPE_MLP:
+            sh_mult = self._eval_basis_mlp(viewdirs)
         else:
             sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
         invdirs = 1.0 / dirs
@@ -700,11 +762,13 @@ class SparseGrid(nn.Module):
         assert self.opt.backend in ["cuvol"]  # , 'lerp', 'nn']
         if use_kernel and self.links.is_cuda and _C is not None:
             assert rays.is_cuda
+            basis_data = self._eval_basis_mlp(rays.dirs) if self.basis_type == BASIS_TYPE_MLP \
+                                                         else None
             return _VolumeRenderFunction.apply(
                 self.density_data,
                 self.sh_data,
-                self.basis_data,
-                self._to_cpp(),
+                basis_data,
+                self._to_cpp(replace_basis_data=basis_data),
                 rays._to_cpp(),
                 self.opt._to_cpp(randomize=randomize),
                 self.opt.backend,
@@ -735,8 +799,13 @@ class SparseGrid(nn.Module):
         assert rays.is_cuda
         grad_density, grad_sh, grad_basis = self._get_data_grads()
         rgb_out = torch.zeros_like(rgb_gt)
+        basis_data : Optional[torch.Tensor] = None
+        if self.basis_type == BASIS_TYPE_MLP:
+            with torch.enable_grad():
+                basis_data = self._eval_basis_mlp(rays.dirs)
+            grad_basis = torch.empty_like(basis_data)
         self.sparse_grad_indexer: torch.Tensor = _C.volume_render_cuvol_fused(
-            self._to_cpp(),
+            self._to_cpp(replace_basis_data=basis_data),
             rays._to_cpp(),
             self.opt._to_cpp(),
             rgb_gt,
@@ -745,11 +814,16 @@ class SparseGrid(nn.Module):
             grad_sh,
             grad_basis,
         )
+        if self.basis_type == BASIS_TYPE_MLP:
+            # Manually trigger MLP backward!
+            basis_data.backward(grad_basis)
+
         self.sparse_sh_grad_indexer = self.sparse_grad_indexer.clone()
         return rgb_out
 
     def volume_render_image(
-        self, camera: Camera, use_kernel: bool = True, randomize: bool = False
+        self, camera: Camera, use_kernel: bool = True, randomize: bool = False,
+        batch_size : int = 5000,
     ):
         """
         Standard volume rendering (entire image version).
@@ -761,21 +835,55 @@ class SparseGrid(nn.Module):
         :return: (H, W, 3), predicted RGB image
         """
         assert self.opt.backend in ["cuvol"]  # , 'lerp', 'nn']
-        if use_kernel and self.links.is_cuda and _C is not None:
-            assert camera.is_cuda
-            return _VolumeRenderImageFunction.apply(
-                self.density_data,
-                self.sh_data,
-                self.basis_data,
-                self._to_cpp(),
-                camera._to_cpp(),
-                self.opt._to_cpp(randomize=randomize),
-                self.opt.backend,
-            )
-        else:
-            raise NotImplementedError(
-                "Pure PyTorch image rendering not implemented, " + "please use rays"
-            )
+        assert camera.ndc_coeffs[0] < 0.0, "To be impl"
+        # For now we're just generating the rays (due to MLP the _VolumeRenderImageFunction no longer always works)
+
+        origins = camera.c2w[None, :3, 3].expand(camera.height * camera.width, -1).contiguous()
+        yy, xx = torch.meshgrid(
+            torch.arange(camera.height, dtype=torch.float64, device=camera.c2w.device) + 0.5,
+            torch.arange(camera.width, dtype=torch.float64, device=camera.c2w.device) + 0.5,
+        )
+        xx = (xx - camera.cx) / camera.fx
+        yy = (yy - camera.cy) / camera.fy
+        zz = torch.ones_like(xx)
+        dirs = torch.stack((xx, yy, zz), dim=-1)   # OpenCV
+        del xx, yy, zz
+        dirs /= torch.norm(dirs, dim=-1, keepdim=True)
+        dirs = dirs.reshape(-1, 3, 1)
+        dirs = (camera.c2w[None, :3, :3].double() @ dirs)[..., 0]
+        dirs = dirs.reshape(-1, 3).float()
+
+        if camera.ndc_coeffs[0] > 0.0:
+            origins, dirs = convert_to_ndc(
+                    origins,
+                    dirs,
+                    self.ndc_coeffs)
+            dirs /= torch.norm(dirs, dim=-1, keepdim=True)
+
+        all_rgb_out = []
+        for batch_start in range(0, camera.height * camera.width, batch_size):
+            rays = Rays(origins[batch_start:batch_start+batch_size], dirs[batch_start:batch_start+batch_size])
+            rgb_out_part = self.volume_render(rays, use_kernel=use_kernel, randomize=randomize)
+            all_rgb_out.append(rgb_out_part)
+
+        all_rgb_out = torch.cat(all_rgb_out, dim=0)
+        return all_rgb_out.view(camera.height, camera.width, -1)
+
+        #  if use_kernel and self.links.is_cuda and _C is not None:
+        #      assert camera.is_cuda
+        #      return _VolumeRenderImageFunction.apply(
+        #          self.density_data,
+        #          self.sh_data,
+        #          self.basis_data,
+        #          self._to_cpp(replace_basis_data=basis_data),
+        #          camera._to_cpp(),
+        #          self.opt._to_cpp(randomize=randomize),
+        #          self.opt.backend,
+        #      )
+        #  else:
+        #      raise NotImplementedError(
+        #          "Pure PyTorch image rendering not implemented, " + "please use rays"
+        #      )
 
     def resample(
         self,
@@ -1027,8 +1135,14 @@ class SparseGrid(nn.Module):
             "density_data":self.density_data.data.cpu().numpy(),
             "sh_data":self.sh_data.data.cpu().numpy().astype(np.float16),
         }
-        if self.use_learned_basis:
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
+        elif self.basis_type == BASIS_TYPE_MLP:
+            net_to_dict(data, "basis_mlp", self.basis_mlp)
+            data['mlp_posenc_size'] = np.int32(self.mlp_posenc_size)
+            data['mlp_width'] = np.int32(self.mlp_width)
+        data['basis_type'] = self.basis_type
+
         save_fn(
             path,
             **data
@@ -1059,7 +1173,9 @@ class SparseGrid(nn.Module):
             basis_dim=basis_dim,
             use_z_order=False,
             device="cpu",
-            use_learned_basis=False
+            basis_type=z['basis_type'].item() if 'basis_type' in z else BASIS_TYPE_SH,
+            mlp_posenc_size=z['mlp_posenc_size'].item() if 'mlp_posenc_size' in z else 0,
+            mlp_width=z['mlp_width'].item() if 'mlp_width' in z else 16
         )
         if sh_data.dtype != np.float32:
             sh_data = sh_data.astype(np.float32)
@@ -1073,9 +1189,15 @@ class SparseGrid(nn.Module):
         grid.capacity = grid.sh_data.size(0)
 
         # Maybe load basis_data
-        if "basis_data" in z.keys():
+        if grid.basis_type == BASIS_TYPE_MLP:
+            net_from_dict(z, "basis_mlp", grid.basis_mlp)
+            grid.basis_mlp = grid.basis_mlp.to(device=device)
+        elif grid.basis_type == BASIS_TYPE_3D_TEXTURE or \
+            "basis_data" in z.keys():
+            # Note: Checking for basis_data for compatibility with earlier vers
+            # where basis_type not stored
             basis_data = torch.from_numpy(z.f.basis_data).to(device=device)
-            grid.use_learned_basis = True
+            grid.basis_type = BASIS_TYPE_3D_TEXTURE
             grid.basis_data = nn.Parameter(basis_data)
         else:
             grid.basis_data = nn.Parameter(grid.basis_data.data.to(device=device))
@@ -1252,6 +1374,41 @@ class SparseGrid(nn.Module):
                     grad)
             self.sparse_sh_grad_indexer = None
 
+    def inplace_l2_color_grad(
+        self,
+        grad: torch.Tensor,
+        start_dim: int = 0,
+        end_dim: Optional[int] = None,
+        scaling: float = 1.0,
+    ):
+        """
+        Add gradient of L2 regularization for color
+        directly into the gradient tensor, multiplied by 'scaling'
+
+        :param start_dim: int, first color channel dimension to compute TV over (inclusive).
+                          Default 0.
+        :param end_dim: int, last color channel dimension to compute TV over (exclusive).
+                          Default None = all dimensions until the end.
+        """
+        assert (
+            _C is not None and self.sh_data.is_cuda and grad.is_cuda
+        ), "CUDA extension is currently required for total variation"
+        with torch.no_grad():
+            if end_dim is None:
+                end_dim = self.sh_data.size(1)
+            end_dim = end_dim + self.sh_data.size(1) if end_dim < 0 else end_dim
+            start_dim = start_dim + self.sh_data.size(1) if start_dim < 0 else start_dim
+
+            if self.sparse_sh_grad_indexer is None:
+                scale = scaling / self.sh_data.size(0)
+                grad[:, start_dim:end_dim] += scale * self.sh_data[:, start_dim:end_dim]
+            else:
+                indexer = self._maybe_convert_sparse_grad_indexer(sh=True)
+                nz : int = torch.count_nonzero(indexer).item() if indexer.dtype == torch.bool else \
+                           indexer.size(0)
+                scale = scaling / nz
+                grad[indexer, start_dim:end_dim] += scale * self.sh_data[indexer, start_dim:end_dim]
+
     def inplace_tv_basis_grad(
         self,
         grad: torch.Tensor,
@@ -1274,7 +1431,7 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for optimizers"
 
-        self._maybe_convert_sparse_grad_indexer()
+        indexer = self._maybe_convert_sparse_grad_indexer()
         if optim == 'rmsprop':
             if (
                 self.density_rms is None
@@ -1286,16 +1443,17 @@ class SparseGrid(nn.Module):
                 self.density_data.data,
                 self.density_rms,
                 self.density_data.grad,
-                self._get_sparse_grad_indexer(),
+                indexer,
                 beta,
                 lr,
                 epsilon,
+                -1e9
             )
         elif optim == 'sgd':
             _C.sgd_step(
                 self.density_data.data,
                 self.density_data.grad,
-                self._get_sparse_grad_indexer(),
+                indexer,
                 lr,
             )
         else:
@@ -1310,7 +1468,7 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for optimizers"
 
-        self._maybe_convert_sparse_sh_grad_indexer()
+        indexer = self._maybe_convert_sparse_grad_indexer(sh=True)
         if optim == 'rmsprop':
             if self.sh_rms is None or self.sh_rms.shape != self.sh_data.shape:
                 del self.sh_rms
@@ -1319,14 +1477,15 @@ class SparseGrid(nn.Module):
                 self.sh_data.data,
                 self.sh_rms,
                 self.sh_data.grad,
-                self._get_sparse_sh_grad_indexer(),
+                indexer,
                 beta,
                 lr,
                 epsilon,
+                -1e9
             )
         elif optim == 'sgd':
             _C.sgd_step(
-                self.sh_data.data, self.sh_data.grad, self._get_sparse_sh_grad_indexer(), lr
+                self.sh_data.data, self.sh_data.grad, indexer, lr
             )
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
@@ -1354,9 +1513,20 @@ class SparseGrid(nn.Module):
             raise NotImplementedError(f'Unsupported optimizer {optim}')
         self.basis_data.grad.zero_()
 
+    @property
+    def basis_type_name(self):
+        if self.basis_type == BASIS_TYPE_SH:
+            return "SH"
+        elif self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            return "3D_TEXTURE"
+        elif self.basis_type == BASIS_TYPE_MLP:
+            return "MLP"
+        return "UNKNOWN"
+
     def __repr__(self):
         return (
-            f"svox2.SparseGrid(basis_dim={self.basis_dim}, "
+            f"svox2.SparseGrid(basis_type={self.basis_type_name}, "
+            + f"basis_dim={self.basis_dim}, "
             + f"reso={list(self.links.shape)}, "
             + f"capacity:{self.sh_data.size(0)})"
         )
@@ -1369,7 +1539,7 @@ class SparseGrid(nn.Module):
         reso = self.links.shape
         return reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])
 
-    def _to_cpp(self, grid_coords: bool = False):
+    def _to_cpp(self, grid_coords: bool = False, replace_basis_data: Optional[torch.Tensor] = None):
         """
         Generate object to pass to C++
         """
@@ -1386,8 +1556,8 @@ class SparseGrid(nn.Module):
             gspec._scaling = self._scaling * gsz
 
         gspec.basis_dim = self.basis_dim
-        gspec.use_learned_basis = self.use_learned_basis
-        gspec.basis_data = self.basis_data
+        gspec.basis_type = self.basis_type
+        gspec.basis_data = replace_basis_data if replace_basis_data is not None else self.basis_data
         return gspec
 
     def _grid_size(self):
@@ -1423,37 +1593,22 @@ class SparseGrid(nn.Module):
             indexer = torch.empty((), device=self.density_data.device)
         return indexer
 
-    def _maybe_convert_sparse_grad_indexer(self):
+    def _maybe_convert_sparse_grad_indexer(self, sh=False):
         """
         Automatically convert sparse grad indexer from mask to
         indices, if it is efficient
         """
+        indexer = self.sparse_sh_grad_indexer if sh else self.sparse_grad_indexer
+        if indexer is None:
+            return torch.empty((), device=self.density_data.device)
         if (
-            self.sparse_grad_indexer is not None and
-            self.sparse_grad_indexer.dtype == torch.bool and
-            torch.count_nonzero(self.sparse_grad_indexer).item()
-            < self.sparse_grad_indexer.size(0) // 8
+            indexer.dtype == torch.bool and
+            torch.count_nonzero(indexer).item()
+            < indexer.size(0) // 8
         ):
             # Highly sparse (use index)
-            self.sparse_grad_indexer = torch.nonzero(
-                self.sparse_grad_indexer.flatten(), as_tuple=False
-            ).flatten()
-
-    def _maybe_convert_sparse_sh_grad_indexer(self):
-        """
-        Automatically convert sparse grad indexer from mask to
-        indices, if it is efficient
-        """
-        if (
-            self.sparse_sh_grad_indexer is not None and
-            self.sparse_sh_grad_indexer.dtype == torch.bool and
-            torch.count_nonzero(self.sparse_sh_grad_indexer).item()
-            < self.sparse_sh_grad_indexer.size(0) // 8
-        ):
-            # Highly sparse (use index)
-            self.sparse_sh_grad_indexer = torch.nonzero(
-                self.sparse_sh_grad_indexer.flatten(), as_tuple=False
-            ).flatten()
+            indexer = torch.nonzero(indexer.flatten(), as_tuple=False).flatten()
+        return indexer
 
     def _get_rand_cells(self, sparse_frac: float):
         if sparse_frac < 1.0:
@@ -1469,9 +1624,23 @@ class SparseGrid(nn.Module):
         basis_data = self.basis_data.permute([3, 2, 1, 0])[None]
         samples = F.grid_sample(basis_data, dirs[None, None, None], mode='bilinear', padding_mode='zeros', align_corners=True)
         samples = samples[0, :, 0, 0, :].permute([1, 0])
-        #  dc = torch.ones_like(samples[:, :1])
-        #  samples = torch.cat([dc, samples], dim=-1)
+        dc = torch.full_like(samples[:, :1], fill_value=0.28209479177387814)
+        samples = torch.cat([dc, samples], dim=-1)
         return samples
+
+    def _eval_basis_mlp(self, dirs: torch.Tensor):
+        if self.mlp_posenc_size > 0:
+            dirs_enc = posenc(
+                dirs,
+                None,
+                0,
+                self.mlp_posenc_size,
+                include_identity=True,
+                enable_ipe=False,
+            )
+        else:
+            dirs_enc = dirs
+        return self.basis_mlp(dirs_enc)
 
     def reinit_learned_bases(self,
             init_type: str = 'sh',
@@ -1531,7 +1700,7 @@ class SparseGrid(nn.Module):
             u2 = torch.arange(0, n_comps) + torch.rand((n_comps,))
             u2 /= n_comps
             fourier_dirvecs = spher2cart(u1 * np.pi, u2 * np.pi * 2)
-            fourier_freqs = torch.linspace(0.0, 2.0, n_comps + 1)[:-1]
+            fourier_freqs = torch.linspace(0.0, 1.0, n_comps + 1)[:-1]
             fourier_freqs += torch.rand_like(fourier_freqs) * (fourier_freqs[1] - fourier_freqs[0])
             fourier_freqs = torch.exp(fourier_freqs)
             fourier_freqs = fourier_freqs[torch.randperm(n_comps)]
