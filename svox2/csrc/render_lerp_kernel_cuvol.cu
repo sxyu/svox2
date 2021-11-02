@@ -134,7 +134,7 @@ __device__ __inline__ void trace_ray_cuvol(
         //         );
 
         const float* cubemap_data = grid.background_cubemap;
-        const int cubemap_step = 6 * grid.background_reso * grid.background_reso * 4;
+        const int cubemap_step = 6 * grid.background_reso * grid.background_reso * /*n_channels*/ 4;
         for (int i = 0; i < grid.background_nlayers; ++i) {
             const float radius = float(grid.background_nlayers) /
                                 (float(grid.background_nlayers - i - 0.5f));
@@ -160,19 +160,21 @@ __device__ __inline__ void trace_ray_cuvol(
                                            grid.background_reso,
                                            /*n_channels*/ 4,
                                            3);
-                const float group_color = cubemap_sample(cubemap_data,
-                                               query,
-                                               grid.background_reso,
-                                               /*n_channels*/ 4,
-                                               lane_colorgrp);
+                if (sigma > opt.sigma_thresh) {
+                    const float group_color = cubemap_sample(cubemap_data,
+                            query,
+                            grid.background_reso,
+                            /*n_channels*/ 4,
+                            lane_colorgrp);
 
-                const float pcnt = csi.world_step_scale * (t_inter - t_last) * sigma;
-                const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
-                light_intensity -= pcnt;
-                // printf(" wsc=%f, t_inter=%f, t_last=%f, sigma=%f, weight=%f, li=%f\n",
-                //        csi.world_step_scale, t_inter, t_last, sigma, weight, light_intensity);
+                    const float pcnt = csi.world_step_scale * (t_inter - t_last) * sigma;
+                    const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
+                    light_intensity -= pcnt;
+                    // printf(" wsc=%f, t_inter=%f, t_last=%f, sigma=%f, weight=%f, li=%f\n",
+                    //        csi.world_step_scale, t_inter, t_last, sigma, weight, light_intensity);
 
-                outv += weight * fmaxf(group_color + 0.5f, 0.f);  // Clamp to [+0, infty)
+                    outv += weight * fmaxf(group_color + 0.5f, 0.f);  // Clamp to [+0, infty)
+                }
                 t_last = t_inter;
             }
             cubemap_data += cubemap_step;
@@ -321,7 +323,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         csi.intersect(r_min + 1e-4f, &t_last);
 
         const float* cubemap_data = grid.background_cubemap;
-        const int cubemap_step = 6 * grid.background_reso * grid.background_reso * grid.background_nlayers;
+        float* grad_cubemap_data = grads.grad_background_out;
+        const int cubemap_step = 6 * grid.background_reso * grid.background_reso * /*n_channels*/ 4;
         for (int i = 0; i < grid.background_nlayers; ++i) {
             const float radius = float(grid.background_nlayers) / (float(grid.background_nlayers - i - 0.5f));
             float t_inter;
@@ -342,55 +345,58 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                                            grid.background_reso,
                                            /*n_channels*/ 4,
                                            3);
-                const float group_color = cubemap_sample(cubemap_data,
-                                               query,
-                                               grid.background_reso,
-                                               /*n_channels*/ 4,
-                                               lane_colorgrp);
-
-                const float pcnt = csi.world_step_scale * (t_inter - t_last) * sigma;
-                const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
-                light_intensity -= pcnt;
-
-                float total_color = fmaxf(group_color + 0.5f, 0.f);
-                float color_in_01 = total_color == group_color;
-                total_color *= gout; // Clamp to [+0, 1]
-
-                float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim);
-                total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
-                total_color += total_color_c1;
-
-                // color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim);
-                const float curr_grad_color = weight * color_in_01 * gout;
-
-                accum -= weight * total_color;
-                float curr_grad_sigma = ray.world_step * (
-                        total_color * _EXP(light_intensity) - accum);
-
-                if (lane_colorgrp_id == 0) {
-                    cubemap_sample_backward(
-                            grads.grad_background_out,
+                if (sigma > opt.sigma_thresh) {
+                    const float group_color = cubemap_sample(cubemap_data,
                             query,
                             grid.background_reso,
-                            4,
-                            curr_grad_color,
-                            lane_colorgrp);
+                            /*n_channels*/ 4,
+                            lane_colorgrp) + 0.5f;
 
-                    if (lane_id == 0) {
+                    const float pcnt = csi.world_step_scale * (t_inter - t_last) * sigma;
+                    const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
+                    light_intensity -= pcnt;
+
+                    float total_color = fmaxf(group_color, 0.f);
+                    float color_in_01 = total_color == group_color;
+                    total_color *= gout;
+
+                    float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim);
+                    total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
+                    total_color += total_color_c1;
+
+                    // color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim);
+                    const float curr_grad_color = weight * color_in_01 * gout;
+
+                    accum -= weight * total_color;
+                    float curr_grad_sigma = csi.world_step_scale * (t_inter - t_last) * (
+                            total_color * _EXP(light_intensity) - accum);
+
+                    if (lane_colorgrp_id == 0) {
                         cubemap_sample_backward(
-                            grads.grad_background_out,
-                            query,
-                            grid.background_reso,
-                            4,
-                            curr_grad_sigma,
-                            0,
-                            grads.mask_background_out);
+                                grad_cubemap_data,
+                                query,
+                                grid.background_reso,
+                                4,
+                                curr_grad_color,
+                                lane_colorgrp);
+
+                        if (lane_id == 0) {
+                            cubemap_sample_backward(
+                                    grad_cubemap_data,
+                                    query,
+                                    grid.background_reso,
+                                    4,
+                                    curr_grad_sigma,
+                                    3,
+                                    grads.mask_background_out);
+                        }
                     }
                 }
 
                 t_last = t_inter;
             }
             cubemap_data += cubemap_step;
+            grad_cubemap_data += cubemap_step;
         }
     }
 }

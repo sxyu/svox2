@@ -172,6 +172,7 @@ class _VolumeRenderFunction(autograd.Function):
         data_density: torch.Tensor,
         data_sh: torch.Tensor,
         data_basis: torch.Tensor,
+        data_background: torch.Tensor,
         grid,
         rays,
         opt,
@@ -197,10 +198,14 @@ class _VolumeRenderFunction(autograd.Function):
             grad_basis = torch.zeros_like(ctx.basis_data)
         else:
             grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+        grad_background = torch.zeros_like(ctx.grid.background_cubemap.data)
         grad_holder = _C.GridOutputGrads()
         grad_holder.grad_density_out = grad_density_grid
         grad_holder.grad_sh_out = grad_sh_grid
-        grad_holder.grad_basis_out = grad_basis
+        if ctx.needs_input_grad[2]:
+            grad_holder.grad_basis_out = grad_basis
+        if ctx.needs_input_grad[3]:
+            grad_holder.grad_background_out = grad_background
         cu_fn(
             ctx.grid,
             ctx.rays,
@@ -216,9 +221,12 @@ class _VolumeRenderFunction(autograd.Function):
             grad_sh_grid = None
         if not ctx.needs_input_grad[2]:
             grad_basis = None
+        if not ctx.needs_input_grad[3]:
+            grad_background = None
         ctx.basis_data = None
 
-        return grad_density_grid, grad_sh_grid, grad_basis, None, None, None, None
+        return grad_density_grid, grad_sh_grid, grad_basis, grad_background, \
+               None, None, None, None
 
 
 class _VolumeRenderImageFunction(autograd.Function):
@@ -228,6 +236,7 @@ class _VolumeRenderImageFunction(autograd.Function):
         data_density: torch.Tensor,
         data_sh: torch.Tensor,
         data_basis: torch.Tensor,
+        data_background: torch.Tensor,
         grid,
         cam,
         opt,
@@ -253,11 +262,15 @@ class _VolumeRenderImageFunction(autograd.Function):
             grad_basis = torch.zeros_like(ctx.basis_data)
         else:
             grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+        grad_background = torch.zeros_like(ctx.grid.background_cubemap.data)
 
         grad_holder = _C.GridOutputGrads()
         grad_holder.grad_density_out = grad_density_grid
         grad_holder.grad_sh_out = grad_sh_grid
-        grad_holder.grad_basis_out = grad_basis
+        if ctx.needs_input_grad[2]:
+            grad_holder.grad_basis_out = grad_basis
+        if ctx.needs_input_grad[3]:
+            grad_holder.grad_background_out = grad_background
         # TODO save the sparse mask
         sparse_mask = cu_fn(
             ctx.grid,
@@ -274,8 +287,11 @@ class _VolumeRenderImageFunction(autograd.Function):
             grad_sh_grid = None
         if not ctx.needs_input_grad[2]:
             grad_basis = None
+        if not ctx.needs_input_grad[3]:
+            grad_background = None
         ctx.basis_data = None
-        return grad_density_grid, grad_sh_grid, grad_basis, None, None, None, None
+        return grad_density_grid, grad_sh_grid, grad_basis, grad_background, \
+               None, None, None, None
 
 
 class _TotalVariationFunction(autograd.Function):
@@ -360,7 +376,6 @@ class SparseGrid(nn.Module):
 
         self.background_nlayers = background_nlayers
         self.background_reso = background_reso
-        self.use_background = background_nlayers > 0
 
         if isinstance(reso, int):
             reso = [reso] * 3
@@ -509,6 +524,10 @@ class SparseGrid(nn.Module):
         3D learned texture, or 0 if only using SH
         """
         return self.basis_data.size(0) if self.BASIS_TYPE_3D_TEXTURE else 0
+
+    @property
+    def use_background(self):
+        return self.background_nlayers > 0
 
     @property
     def shape(self):
@@ -793,6 +812,7 @@ class SparseGrid(nn.Module):
                 self.density_data,
                 self.sh_data,
                 basis_data,
+                self.background_cubemap,
                 self._to_cpp(replace_basis_data=basis_data),
                 rays._to_cpp(),
                 self.opt._to_cpp(randomize=randomize),
@@ -822,7 +842,7 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for fused"
         assert rays.is_cuda
-        grad_density, grad_sh, grad_basis = self._get_data_grads()
+        grad_density, grad_sh, grad_basis, grad_bg = self._get_data_grads()
         rgb_out = torch.zeros_like(rgb_gt)
         basis_data : Optional[torch.Tensor] = None
         if self.basis_type == BASIS_TYPE_MLP:
@@ -836,8 +856,14 @@ class SparseGrid(nn.Module):
         grad_holder = _C.GridOutputGrads()
         grad_holder.grad_density_out = grad_density
         grad_holder.grad_sh_out = grad_sh
-        grad_holder.grad_basis_out = grad_basis
+        if self.basis_type != BASIS_TYPE_SH:
+            grad_holder.grad_basis_out = grad_basis
         grad_holder.mask_out = self.sparse_grad_indexer
+        if self.use_background:
+            grad_holder.grad_background_out = grad_bg
+            self.sparse_background_indexer = torch.zeros(list(self.background_cubemap.shape[:-1]),
+                    dtype=torch.bool, device=self.background_cubemap.device)
+            grad_holder.mask_background_out = self.sparse_background_indexer
 
         _C.volume_render_cuvol_fused(
             self._to_cpp(replace_basis_data=basis_data),
@@ -908,6 +934,7 @@ class SparseGrid(nn.Module):
         #          self.density_data,
         #          self.sh_data,
         #          self.basis_data,
+        #          self.background_cubemap,
         #          self._to_cpp(replace_basis_data=basis_data),
         #          camera._to_cpp(),
         #          self.opt._to_cpp(randomize=randomize),
@@ -1600,7 +1627,7 @@ class SparseGrid(nn.Module):
 
     def _get_data_grads(self):
         ret = []
-        for subitem in ["density_data", "sh_data", "basis_data"]:
+        for subitem in ["density_data", "sh_data", "basis_data", "background_cubemap"]:
             param = self.__getattr__(subitem)
             if not param.requires_grad:
                 ret.append(torch.zeros_like(param.data))

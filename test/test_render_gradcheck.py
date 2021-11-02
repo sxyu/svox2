@@ -26,8 +26,8 @@ grid.sh_data.data[..., 0] = 0.5
 grid.sh_data.data[..., 1:].normal_(std=0.01)
 grid.density_data.data[:] = 0.1
 
-if grid.background_nlayers:
-	grid.background_cubemap.data[..., -1] = 1.0
+if grid.use_background:
+	grid.background_cubemap.data[..., -1] = 0.5
 	grid.background_cubemap.data[..., :-1] = torch.randn_like(
             grid.background_cubemap.data[..., :-1]) * 0.01
 
@@ -45,7 +45,7 @@ rays = svox2.Rays(origins, dirs)
 
 rgb_gt = torch.zeros((N_RAYS, 3), device=device, dtype=dtype)
 
-grid.requires_grad_(True)
+#  grid.requires_grad_(True)
 
 #  samps = grid.volume_render(rays, use_kernel=True)
 #  sampt = grid.volume_render(grid, origins, dirs, use_kernel=False)
@@ -59,12 +59,14 @@ with Timing("ours_backward"):
     s.backward()
 grid_sh_grad_s = grid.sh_data.grad.clone().cpu()
 grid_density_grad_s = grid.density_data.grad.clone().cpu()
-if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
-    grid_basis_grad_s = grid.basis_data.grad.clone().cpu()
 grid.sh_data.grad = None
 grid.density_data.grad = None
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
+    grid_basis_grad_s = grid.basis_data.grad.clone().cpu()
     grid.basis_data.grad = None
+if grid.use_background:
+    grid_bg_grad_s = grid.background_cubemap.grad.clone().cpu()
+    grid.background_cubemap.grad = None
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
@@ -76,11 +78,15 @@ if ENABLE_TORCH_CHECK:
     grid_density_grad_t = grid.density_data.grad.clone().cpu()
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         grid_basis_grad_t = grid.basis_data.grad.clone().cpu()
+    if grid.use_background:
+        grid_bg_grad_t = grid.background_cubemap.grad.clone().cpu()
 
     E = torch.abs(grid_sh_grad_s-grid_sh_grad_t)
     Ed = torch.abs(grid_density_grad_s-grid_density_grad_t)
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         Eb = torch.abs(grid_basis_grad_s-grid_basis_grad_t)
+    if grid.use_background:
+        Ebg = torch.abs(grid_bg_grad_s-grid_bg_grad_t)
     print('err', torch.abs(samps - sampt).max())
     print('err_sh_grad\n', E.max())
     print(' mean\n', E.mean())
@@ -89,6 +95,9 @@ if ENABLE_TORCH_CHECK:
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         print('err_basis_grad\n', Eb.max())
         print(' mean\n', Eb.mean())
+    if grid.use_background:
+        print('err_background_grad\n', Ebg.max())
+        print(' mean\n', Ebg.mean())
     print()
     print('g_ours sh min/max\n', grid_sh_grad_s.min(), grid_sh_grad_s.max())
     print('g_torch sh min/max\n', grid_sh_grad_t.min(), grid_sh_grad_t.max())
@@ -97,3 +106,6 @@ if ENABLE_TORCH_CHECK:
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         print('g_ours basis min/max\n', grid_basis_grad_s.min(), grid_basis_grad_s.max())
         print('g_torch basis min/max\n', grid_basis_grad_t.min(), grid_basis_grad_t.max())
+    if grid.use_background:
+        print('g_ours bg min/max\n', grid_bg_grad_s.min(), grid_bg_grad_s.max())
+        print('g_torch bg min/max\n', grid_bg_grad_t.min(), grid_bg_grad_t.max())
