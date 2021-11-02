@@ -195,8 +195,7 @@ __device__ __inline__ void trilerp_backward_cuvol_one_density(
 
 #define MAYBE_ADD_LINK_DEN(u, val) if (link_ptr[u] >= 0) { \
               atomicAdd(&grad_data_out[link_ptr[u]], val); \
-              if (mask_out != nullptr) \
-                  mask_out[link_ptr[u]] = true; \
+              mask_out[link_ptr[u]] = true; \
         }
     MAYBE_ADD_LINK_DEN(0, ay * az * xo);
     MAYBE_ADD_LINK_DEN(1, ay * pos[2] * xo);

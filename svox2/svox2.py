@@ -215,8 +215,7 @@ class _VolumeRenderFunction(autograd.Function):
         grad_holder.grad_density_out = grad_density_grid
         grad_holder.grad_sh_out = grad_sh_grid
         grad_holder.grad_basis_out = grad_basis
-        # TODO save the sparse mask
-        sparse_mask = cu_fn(
+        cu_fn(
             ctx.grid,
             ctx.rays,
             ctx.opt,
@@ -642,7 +641,7 @@ class SparseGrid(nn.Module):
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             sh_mult = self._eval_learned_bases(viewdirs)
         elif self.basis_type == BASIS_TYPE_MLP:
-            sh_mult = self._eval_basis_mlp(viewdirs)
+            sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
         else:
             sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
         invdirs = 1.0 / dirs
@@ -809,12 +808,16 @@ class SparseGrid(nn.Module):
                 basis_data = self._eval_basis_mlp(rays.dirs)
             grad_basis = torch.empty_like(basis_data)
 
+        self.sparse_grad_indexer = torch.zeros((self.density_data.size(0),),
+                dtype=torch.bool, device=self.density_data.device)
+
         grad_holder = _C.GridOutputGrads()
         grad_holder.grad_density_out = grad_density
         grad_holder.grad_sh_out = grad_sh
         grad_holder.grad_basis_out = grad_basis
+        grad_holder.mask_out = self.sparse_grad_indexer
 
-        self.sparse_grad_indexer: torch.Tensor = _C.volume_render_cuvol_fused(
+        _C.volume_render_cuvol_fused(
             self._to_cpp(replace_basis_data=basis_data),
             rays._to_cpp(),
             self.opt._to_cpp(),
