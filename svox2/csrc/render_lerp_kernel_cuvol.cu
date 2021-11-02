@@ -123,7 +123,8 @@ __device__ __inline__ void trace_ray_cuvol(
         const float* cubemap_data = grid.background_cubemap;
         const int cubemap_step = 6 * grid.background_reso * grid.background_reso * grid.background_nlayers;
         for (int i = 0; i < grid.background_nlayers; ++i) {
-            const float radius = float(grid.background_nlayers) / (float(grid.background_nlayers - i - 0.5f));
+            const float radius = float(grid.background_nlayers) /
+                                (float(grid.background_nlayers - i - 0.5f));
             float t_inter;
             if (csi.intersect(radius, &t_inter)) {
 #pragma unroll 3
@@ -286,7 +287,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         t += opt.step_size;
     }
 
-    if (grid.background_nlayers > 0 && light_intensity > -20.f && grads.grad_background_out != nullptr) {
+    if (grid.background_nlayers > 0 && light_intensity > -20.f &&
+        grads.grad_background_out != nullptr) {
         // TODO WIP
 
         ConcentricSpheresIntersector csi(

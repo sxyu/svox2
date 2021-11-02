@@ -7,7 +7,8 @@ torch.random.manual_seed(123)
 g = svox2.SparseGrid(center=[0.0, 0.0, 0.0],
                      radius=[1.0, 1.0, 1.0],
                      device=device,
-                     basis_type=svox2.BASIS_TYPE_SH)
+                     basis_type=svox2.BASIS_TYPE_SH,
+                     background_nlayers=12)
 
 g.opt.sigma_thresh = 0.0
 g.opt.stop_thresh = 0.0
@@ -15,7 +16,11 @@ g.opt.stop_thresh = 0.0
 g.sh_data.data.normal_()
 g.density_data.data[..., 0] = 1.5
 g.sh_data.data[..., 0] = 0.5
-g.sh_data.data[..., 1:] = 0.0
+g.sh_data.data[..., 1:] = torch.randn_like(g.sh_data.data[..., 1:]) * 0.1
+
+g.background_cubemap.data[..., -1] = 1.0
+g.background_cubemap.data[..., :-1] = torch.randn_like(g.background_cubemap.data[..., :-1])
+
 g.basis_data.data.normal_()
 g.basis_data.data *= 10.0
 #  print('use frustum?', g.use_frustum)

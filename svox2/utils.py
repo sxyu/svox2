@@ -1,8 +1,10 @@
 from functools import partial
 import torch
 from torch import nn
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
+from dataclasses import dataclass
+import math
 
 def inthroot(x : int, n : int):
     if x <= 0:
@@ -159,76 +161,248 @@ def eval_sh_bases(basis_dim : int, dirs : torch.Tensor):
                     result[..., 24] = SH_C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy));
     return result
 
-# Cubemaps
-def cubemap2xyz(index : torch.Tensor, uv : torch.Tensor):
+# BEGIN Cubemaps
+@dataclass
+class CubemapCoord:
+    ax : torch.Tensor
+    ori : torch.Tensor
+    u : torch.Tensor
+    v : torch.Tensor
+
+    def query_in(self, cubemap : torch.Tensor):
+        return cubemap[self.ax * 2 + self.ori, self.u, self.v]
+
+    def clone(self):
+        return CubemapCoord(
+                self.ax.clone(),
+                self.ori.clone(),
+                self.u.clone(),
+                self.v.clone())
+
+@dataclass
+class CubemapBilerpQuery:
+    i00: CubemapCoord
+    i01: CubemapCoord
+    i10: CubemapCoord
+    i11: CubemapCoord
+    du: torch.Tensor
+    dv: torch.Tensor
+
+
+def dir_to_cubemap_coord(xyz : torch.Tensor,
+                   face_reso : int,
+                   eac : bool = True) -> CubemapCoord:
     """
-    Cubemap coords to directional vector (nor normalized, max dim=1)
+    Convert a direction on a sphere (not necessarily normalized)
 
-    :param index: integer Tensor (B,), 0-5 for face (x+, x-, y+, y-, z+, z-)
-    :param uv: float Tensor (B, 2), [-1, 1]^2 xy coord in each face
+    :param xyz: direction (not necessarily normalized)
+    :param face_reso: int, resolution of cubemap face
+    :param eac: bool, if true (default) then uses equi-angular cubemaps (EAC)
+                      instead of standard cubemap; see
+      https://blog.google/products/google-ar-vr/bringing-pixels-front-and-center-vr-video/
 
-    :return: float tensor (B, 3), directions
+    :return: CubemapCoord
     """
-    xyz = torch.empty((uv.size(0), 3), dtype=uv.dtype, device=uv.device)
-    ones = torch.ones_like(uv[:, 0])
-    m = index == 0
-    xyz[m] = torch.stack([ones[m], uv[m, 1], -uv[m, 0]], dim=-1)
-    m = index == 1
-    xyz[m] = torch.stack([-ones[m], uv[m, 1], uv[m, 0]], dim=-1)
-    m = index == 2
-    xyz[m] = torch.stack([uv[m, 0], ones[m], -uv[m, 1]], dim=-1)
-    m = index == 3
-    xyz[m] = torch.stack([uv[m, 0], -ones[m], uv[m, 1]], dim=-1)
-    m = index == 4
-    xyz[m] = torch.stack([uv[m, 0], uv[m, 1], ones[m]], dim=-1)
-    m = index == 5
-    xyz[m] = torch.stack([-uv[m, 0], uv[m, 1], -ones[m]], dim=-1)
-    return xyz
+    xyz = xyz.float()
+    maxv, ax = torch.max(torch.abs(xyz), dim=-1)
+    xyz = xyz * (1.0 / maxv.unsqueeze(-1))
+    if eac:
+        xyz_eac = torch.atan(xyz) * (4 / math.pi)
+    else:
+        xyz_eac = xyz
 
-def xyz2cubemap(xyz :  torch.Tensor):
+    arr = torch.arange(ax.size(0))
+    ud = (ax ^ 1) & 1
+    vd = (ax ^ 2) & 2
+    u_eac = xyz_eac[arr, ud]
+    v_eac = xyz_eac[arr, vd]
+
+    ori = (xyz_eac[arr, ax] >= 0).long()
+
+    u = ((u_eac + 1) * face_reso - 1.0) * 0.5
+    v = ((v_eac + 1) * face_reso - 1.0) * 0.5
+    return CubemapCoord(ax, ori, u, v)
+
+def cubemap_build_query(idx : CubemapCoord, face_reso : int,
+                        mode : str = 'linear') ->  CubemapBilerpQuery:
     """
-    Vector (not necessarily normalized) to cubemap coords
+    Compute the points on the cubemap for bilinear sampling
+    given a cubemap coordinate from dir_to_cubemap_coord;
+    to be used with cubemap_sample.
 
-    :param xyz: float tensor (B, 3), directions
+    :param idx: CubemapCoord, cube map coordinate from dir_to_cubemap_coord
+    :param face_reso: int, resolution of cubemap face
+    :param mode: str, interpolation mode; one of nearest, linear_simple, linear;
+                      linear_simple interpolates per-face, while linear also
+                      interpolates across edges (this is the only one supported
+                      in CUDA)
 
-    :return: index, long Tensor (B,), 0-5 for face (x+, x-, y+, y-, z+, z-);
-             uv, float Tensor (B, 2), [-1, 1]^2 xy coord in each face
+    :return: CubemapBilerpQuery
     """
-    x, y, z = xyz.unbind(-1)
-    abs_x = torch.abs(x)
-    abs_y = torch.abs(y)
-    abs_z = torch.abs(z)
-    x_pos = x > 0
-    y_pos = y > 0
-    z_pos = z > 0
+    if mode == 'nearest':
+        uf = torch.floor(idx.u + 0.5).long().clamp_(0, face_reso - 1)
+        vf = torch.floor(idx.v + 0.5).long().clamp_(0, face_reso - 1)
+        idx_ul = CubemapCoord(idx.ax, idx.ori, uf, vf)
+        # Corner: triple average
+        return CubemapBilerpQuery(idx_ul, idx_ul, idx_ul, idx_ul,
+                    torch.zeros_like(idx.u), torch.zeros_like(idx.v))
+    elif mode == 'linear_simple':
+        u = idx.u.clamp(0, face_reso - 2)
+        v = idx.v.clamp(0, face_reso - 2)
+        uf = torch.floor(u).long()
+        vf = torch.floor(v).long()
+        uc = uf + 1
+        vc = vf + 1
+        du = u - uf
+        dv = v - vf
+        return CubemapBilerpQuery(
+                    CubemapCoord(idx.ax, idx.ori, uf, vf),
+                    CubemapCoord(idx.ax, idx.ori, uf, vc),
+                    CubemapCoord(idx.ax, idx.ori, uc, vf),
+                    CubemapCoord(idx.ax, idx.ori, uc, vc),
+                    du, dv)
+    elif mode == 'linear':
+        uf = torch.floor(idx.u).long()
+        vf = torch.floor(idx.v).long()
+        uc = uf + 1
+        vc = vf + 1
 
-    max_axis = torch.max(torch.max(abs_x, abs_y), abs_z)
-    x_max_mask = (abs_x >= abs_y) & (abs_x >= abs_z)
-    y_max_mask = (~x_max_mask) & (abs_y >= abs_z)
-    z_max_mask = (~x_max_mask) & (~y_max_mask)
+        m0u = uf < 0
+        m0v = vf < 0
+        m1u = uc > (face_reso - 1)
+        m1v = vc > (face_reso - 1)
 
-    index = torch.empty(x.shape, dtype=torch.long, device=xyz.device)
-    uv = torch.empty_like(xyz[:, :2])
-    uv[x_max_mask, 0] = z[x_max_mask]
-    uv[x_max_mask & x_pos, 0] *= -1
-    uv[x_max_mask, 1] = y[x_max_mask]
-    index[x_max_mask & x_pos] = 0
-    index[x_max_mask & ~x_pos] = 1
+        ud = (idx.ax ^ 1) & 1
+        vd = (idx.ax ^ 2) & 2
 
-    uv[y_max_mask, 0] = x[y_max_mask]
-    uv[y_max_mask, 1] = z[y_max_mask]
-    uv[y_max_mask & y_pos, 1] *= -1
-    index[y_max_mask & y_pos] = 2
-    index[y_max_mask & ~y_pos] = 3
+        def _index_across_sides(nidx : CubemapCoord, uori, vori, mu, mv):
+            mdiagonal = mu & mv
+            # FIXME not quite correct (matches CUDA impl)
+            mu = mu & (~mdiagonal)
+            mv = mv & (~mdiagonal)
+            nidx.u[mdiagonal] = nidx.u[mdiagonal].clamp(0, face_reso - 1)
+            nidx.v[mdiagonal] = nidx.v[mdiagonal].clamp(0, face_reso - 1)
 
-    uv[z_max_mask, 0] = x[z_max_mask]
-    uv[z_max_mask & ~z_pos, 0] *= -1
-    uv[z_max_mask, 1] = y[z_max_mask]
-    index[z_max_mask & z_pos] = 4
-    index[z_max_mask & ~z_pos] = 5
+            def _index_across_one_side(mask, d, ori, other_coord):
+                nax = d[mask]
 
-    uv = uv / max_axis.unsqueeze(-1)
-    return index, uv
+                nud = (nax ^ 1) & 1
+                #  nvd = (nax ^ 2) & 2
+
+                ax_is_u = nud == nidx.ax[mask]
+                ax_is_v = ~ax_is_u
+
+                ax_is_u_m = torch.zeros_like(mask)
+                ax_is_u_m[mask] = ax_is_u
+
+                ax_is_v_m = torch.zeros_like(mask)
+                ax_is_v_m[mask] = ax_is_v
+
+                nidx.u[ax_is_v_m] = other_coord[ax_is_v_m]
+                nidx.v[ax_is_u_m] = other_coord[ax_is_u_m]
+
+                nidx.u[ax_is_u_m] = nidx.ori[ax_is_u_m] * (face_reso - 1)
+                nidx.v[ax_is_v_m] = nidx.ori[ax_is_v_m] * (face_reso - 1)
+
+                nidx.ax[mask] = nax
+                nidx.ori[mask] = ori
+
+            _index_across_one_side(mu, ud, uori, nidx.v)
+            _index_across_one_side(mv, vd, vori, nidx.u)
+            return nidx
+
+        i00 = _index_across_sides(CubemapCoord(idx.ax, idx.ori, uf, vf).clone(),
+                0, 0, m0u, m0v)
+        i01 = _index_across_sides(CubemapCoord(idx.ax, idx.ori, uf, vc).clone(),
+                0, 1, m0u, m1v)
+        i10 = _index_across_sides(CubemapCoord(idx.ax, idx.ori, uc, vf).clone(),
+                1, 0, m1u, m0v)
+        i11 = _index_across_sides(CubemapCoord(idx.ax, idx.ori, uc, vc).clone(),
+                1, 1, m1u, m1v)
+
+        du = idx.u - uf
+        dv = idx.v - vf
+        return CubemapBilerpQuery(
+                    i00,
+                    i01,
+                    i10,
+                    i11,
+                    du,
+                    dv)
+    else:
+        raise NotImplementedError()
+
+
+def cubemap_sample(cubemap: torch.Tensor, idx4 : CubemapBilerpQuery):
+    """
+    Perform bilinear sampling on a cubemap given a query from cubemap_build_query
+
+    :param cubemap: torch.Tensor float (6, face_reso, face_reso, C)
+    :param idx4: CubemapBilerpQuery from cubemap_build_query where
+                 each tensor has batch size B
+
+    :return: (B, C)
+    """
+    face_reso = cubemap.size(2)
+    v00 = idx4.i00.query_in(cubemap)
+    v01 = idx4.i01.query_in(cubemap)
+    v10 = idx4.i10.query_in(cubemap)
+    v11 = idx4.i11.query_in(cubemap)
+    du = idx4.du.view([-1] + (v00.dim() - 1) * [1])
+    dv = idx4.dv.view([-1] + (v00.dim() - 1) * [1])
+
+    r0 = v00 * (1 - dv) + v01 * dv
+    r1 = v10 * (1 - dv) + v11 * dv
+    return r0 * (1 - du) + r1 * du
+
+# END Cubemaps
+
+# Ray-sphere intersector for MSI
+class ConcentricSpheresIntersector:
+    def __init__(self,
+            size : torch.Tensor,
+            rorigins : torch.Tensor,
+            rdirs : torch.Tensor,
+            rworld_step : torch.Tensor):
+        sphere_scaling = 2.0 / size
+
+        origins = (rorigins + 0.5) * sphere_scaling - 1.0
+        dirs = rdirs * sphere_scaling
+        inorm = 1.0 / dirs.norm(dim=-1)
+
+        self.world_step_scale = rworld_step * inorm
+        dirs *= inorm.unsqueeze(-1)
+
+        self.q2a : torch.Tensor = 2 * (dirs * dirs).sum(-1)
+        self.qb : torch.Tensor = 2 * (origins * dirs).sum(-1)
+        self.f = self.qb.square() - 2 * self.q2a * (origins * origins).sum(-1)
+        self.origins = origins
+        self.dirs = dirs
+
+    def intersect(self, r : float):
+        """
+        Find far intersection of all rays with sphere of radius r
+        """
+        det = self._det(r)
+        success_mask = det >= 0
+        result = torch.zeros_like(self.q2a)
+        result[success_mask] = (-self.qb[success_mask] +
+                torch.sqrt(det[success_mask])) / self.q2a[success_mask]
+        return success_mask, result
+
+    def intersect_near(self, r : float):
+        """
+        Find near intersection of all rays with sphere of radius r
+        """
+        det = self._det(r)
+        success_mask = det >= 0
+        result = torch.zeros_like(self.q2a)
+        result[success_mask] = (-self.qb[success_mask] -
+                torch.sqrt(det[success_mask])) / self.q2a[success_mask]
+        return success_mask, result
+
+    def _det(self, r : float) -> torch.Tensor:
+        return self.f + 2 * self.q2a * (r * r)
 
 
 def memlog(device='cuda'):

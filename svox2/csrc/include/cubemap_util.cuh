@@ -17,7 +17,7 @@ struct CubemapCoord {
 
 struct CubemapLocation {
     uint8_t face;
-    uint16_t uv[2];
+    int16_t uv[2];
 };
 
 struct CubemapBilerpQuery {
@@ -114,6 +114,7 @@ __device__ __host__ __inline__ CubemapCoord
     idx.uv[1] = ((xyz[(ax ^ 2) & 2] + 1) * face_reso - 1) * 0.5;
     const int ori = xyz[ax] >= 0;
     idx.face = _FACE(ax, ori);
+
     return idx;
 }
 
@@ -129,21 +130,24 @@ __device__ __host__ __inline__ CubemapBilerpQuery
     m[1][0] = uv_idx[1] < 0;
     m[1][1] = uv_idx[1] > face_reso - 2;
 
-    const int ax = _AXIS(idx.face);
-    const int ori = _ORI(idx.face);
+    const int face = idx.face;
+    const int ax = _AXIS(face);
+    const int ori = _ORI(face);
     // if ax is one of {0, 1, 2}, this trick gets the 2
     //  of {0, 1, 2} other than ax
     const int uvd[2] = {((ax ^ 1) & 1), ((ax ^ 2) & 2)};
     int uv_ori[2];
 
     CubemapBilerpQuery result;
+    result.duv[0] = idx.uv[0] - uv_idx[0];
+    result.duv[1] = idx.uv[1] - uv_idx[1];
 
 #pragma unroll 2
     for (uv_ori[0] = 0; uv_ori[0] < 2; ++uv_ori[0]) {
 #pragma unroll 2
         for (uv_ori[1] = 0; uv_ori[1] < 2; ++uv_ori[1]) {
             CubemapLocation& nidx = result.ptr[uv_ori[0]][uv_ori[1]];
-            nidx.face = idx.face;
+            nidx.face = face;
             nidx.uv[0] = uv_idx[0] + uv_ori[0];
             nidx.uv[1] = uv_idx[1] + uv_ori[1];
 
@@ -159,7 +163,6 @@ __device__ __host__ __inline__ CubemapBilerpQuery
                     // at each cube corner
                     nidx.uv[0] = min(max(nidx.uv[0], 0), face_reso - 1);
                     nidx.uv[1] = min(max(nidx.uv[1], 0), face_reso - 1);
-                    continue;
                 } else {
                     edge_idx = 0;
                 }
@@ -169,7 +172,7 @@ __device__ __host__ __inline__ CubemapBilerpQuery
             }
             if (~edge_idx) {
                 const int nax = uvd[edge_idx];
-                const uint16_t other_coord = nidx.uv[1 - edge_idx];
+                const int16_t other_coord = nidx.uv[1 - edge_idx];
 
                 // Determine directions in the new face
                 const int nud = (nax ^ 1) & 1;
@@ -190,8 +193,6 @@ __device__ __host__ __inline__ CubemapBilerpQuery
         }
     }
 
-    result.duv[0] = idx.uv[0] - uv_idx[0];
-    result.duv[1] = idx.uv[1] - uv_idx[1];
     return result;
 }
 
