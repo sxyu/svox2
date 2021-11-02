@@ -233,14 +233,12 @@ __device__ __inline__ void
                 bool* __restrict__ mask_out = nullptr) {
 
         // NOTE: assuming address will fit in int32
-        const int stride0 = face_reso * face_reso;
-
         const float bu = query.duv[0], bv = query.duv[1];
         const float au = 1.f - bu, av = 1.f - bv;
 
 #define _ADD_CUBEVERT(i, j, val) { \
             const CubemapLocation& p00 = query.ptr[i][j]; \
-            const int idx = p00.face * stride0 + p00.uv[0] * face_reso + p00.uv[1]; \
+            const int idx = (p00.face * face_reso + p00.uv[0]) * face_reso + p00.uv[1]; \
             float* __restrict__ v00 = &cubemap_grad[idx * n_channels + chnl_id]; \
             atomicAdd(v00, val); \
             if (mask_out != nullptr) { \

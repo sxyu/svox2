@@ -310,7 +310,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
     if (grid.background_nlayers > 0 && light_intensity > -20.f &&
         grads.grad_background_out != nullptr) {
-        // TODO WIP
+        // Performance SUCKS
 
         ConcentricSpheresIntersector csi(
                 grid.size,
@@ -364,7 +364,6 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                     total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
                     total_color += total_color_c1;
 
-                    // color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim);
                     const float curr_grad_color = weight * color_in_01 * gout;
 
                     accum -= weight * total_color;

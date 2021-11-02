@@ -195,7 +195,8 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         device=device,
                         basis_reso=args.basis_reso,
                         basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
-                        mlp_posenc_size=4)
+                        mlp_posenc_size=4,
+                        background_nlayers=8)
 
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
