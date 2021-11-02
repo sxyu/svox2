@@ -40,7 +40,7 @@ __device__ __inline__ void trace_ray_cuvol(
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
 
-    if (ray.tmin > ray.tmax) {
+    if (ray.tmin > ray.tmax && grid.background_nlayers == 0) {
         out[lane_colorgrp] = opt.background_brightness;
         return;
     }
@@ -119,18 +119,35 @@ __device__ __inline__ void trace_ray_cuvol(
         const float r_min = _dist_ray_to_origin(csi.origin, csi.dir);
         float t_last;
         csi.intersect(r_min + 1e-4f, &t_last);
+        // printf("ray_ori=[%f, %f, %f] ray_dir=[%f, %f, %f] ray_w=[%f]\n",
+        //             ray.origin[0], ray.origin[1], ray.origin[2],
+        //             ray.dir[0], ray.dir[1], ray.dir[2],
+        //             ray.world_step
+        //        );
+        // printf("csi_ori=[%f, %f, %f] csi_dir=[%f, %f, %f] csi_wss=%f csi_q2a=%f qb=%f f=%f\n",
+        //             csi.origin[0], csi.origin[1], csi.origin[2],
+        //             csi.dir[0], csi.dir[1], csi.dir[2],
+        //             csi.world_step_scale,
+        //             csi.q2a,
+        //             csi.qb,
+        //             csi.f
+        //         );
 
         const float* cubemap_data = grid.background_cubemap;
-        const int cubemap_step = 6 * grid.background_reso * grid.background_reso * grid.background_nlayers;
+        const int cubemap_step = 6 * grid.background_reso * grid.background_reso * 4;
         for (int i = 0; i < grid.background_nlayers; ++i) {
             const float radius = float(grid.background_nlayers) /
                                 (float(grid.background_nlayers - i - 0.5f));
             float t_inter;
+            // printf("i=%d r=%f\n", i, radius);
             if (csi.intersect(radius, &t_inter)) {
 #pragma unroll 3
                 for (int j = 0; j < 3; ++j) {
                     ray.pos[j] = fmaf(t_inter, csi.dir[j], csi.origin[j]);
                 }
+                // printf(" I! t_inter=%f pos=[%f, %f, %f]\n",
+                //        t_inter,
+                //        ray.pos[0], ray.pos[1], ray.pos[2]);
 
                 const CubemapCoord coord = dir_to_cubemap_coord(ray.pos,
                                                                 grid.background_reso, /* EAC */ true);
@@ -152,6 +169,8 @@ __device__ __inline__ void trace_ray_cuvol(
                 const float pcnt = csi.world_step_scale * (t_inter - t_last) * sigma;
                 const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
                 light_intensity -= pcnt;
+                // printf(" wsc=%f, t_inter=%f, t_last=%f, sigma=%f, weight=%f, li=%f\n",
+                //        csi.world_step_scale, t_inter, t_last, sigma, weight, light_intensity);
 
                 outv += weight * fmaxf(group_color + 0.5f, 0.f);  // Clamp to [+0, infty)
                 t_last = t_inter;
@@ -182,7 +201,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim));
 
-    if (ray.tmin > ray.tmax) return;
+    if (ray.tmin > ray.tmax && grid.background_nlayers == 0) return;
     float t = ray.tmin;
 
     const float gout = grad_output[lane_colorgrp];

@@ -29,7 +29,7 @@ grid.density_data.data[:] = 0.1
 if grid.background_nlayers:
 	grid.background_cubemap.data[..., -1] = 1.0
 	grid.background_cubemap.data[..., :-1] = torch.randn_like(
-            grid.background_cubemap.data[..., :-1])
+            grid.background_cubemap.data[..., :-1]) * 0.01
 
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
     grid.basis_data.data.normal_()

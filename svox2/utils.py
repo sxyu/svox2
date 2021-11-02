@@ -170,7 +170,10 @@ class CubemapCoord:
     v : torch.Tensor
 
     def query_in(self, cubemap : torch.Tensor):
-        return cubemap[self.ax * 2 + self.ori, self.u, self.v]
+        face = self.ax * 2 + self.ori
+        #  print(cubemap.shape, face.min(), face.max(), ' ',
+        #        self.u.min(), self.u.max(),
+        return cubemap[face, self.u, self.v]
 
     def clone(self):
         return CubemapCoord(

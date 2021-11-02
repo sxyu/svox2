@@ -1,19 +1,5 @@
 from .defs import *
-from .utils import (
-    isqrt,
-    eval_sh_bases,
-    gen_morton,
-    is_pow2,
-    spher2cart,
-    eval_sg_at_dirs,
-    init_weights,
-    posenc,
-    net_to_dict,
-    net_from_dict,
-    convert_to_ndc,
-    MAX_SH_BASIS,
-    _get_c_extension,
-)
+from . import utils
 import torch
 from torch import nn, autograd
 import torch.nn.functional as F
@@ -24,7 +10,7 @@ from functools import reduce
 from tqdm import tqdm
 import numpy as np
 
-_C = _get_c_extension()
+_C = utils._get_c_extension()
 
 
 @dataclass
@@ -363,10 +349,10 @@ class SparseGrid(nn.Module):
         super().__init__()
         self.basis_type = basis_type
         if basis_type == BASIS_TYPE_SH:
-            assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
+            assert utils.isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
         assert (
-            basis_dim >= 1 and basis_dim <= MAX_SH_BASIS
-        ), f"basis_dim 1-{MAX_SH_BASIS} supported"
+            basis_dim >= 1 and basis_dim <= utils.MAX_SH_BASIS
+        ), f"basis_dim 1-{utils.MAX_SH_BASIS} supported"
         self.basis_dim = basis_dim
 
         self.mlp_posenc_size = mlp_posenc_size
@@ -383,7 +369,7 @@ class SparseGrid(nn.Module):
                 len(reso) == 3
             ), "reso must be an integer or indexable object of 3 ints"
 
-        if use_z_order and not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
+        if use_z_order and not (reso[0] == reso[1] and reso[0] == reso[2] and utils.is_pow2(reso[0])):
             print("Morton code requires a cube grid of power-of-2 size, ignoring...")
             use_z_order = False
 
@@ -405,7 +391,7 @@ class SparseGrid(nn.Module):
 
         n3: int = reduce(lambda x, y: x * y, reso)
         if use_z_order:
-            init_links = gen_morton(reso[0], device=device, dtype=torch.int32).flatten()
+            init_links = utils.gen_morton(reso[0], device=device, dtype=torch.int32).flatten()
         else:
             init_links = torch.arange(n3, device=device, dtype=torch.int32)
 
@@ -478,12 +464,13 @@ class SparseGrid(nn.Module):
                 nn.Linear(D_rgb, self.basis_dim)
             )
             self.basis_mlp = self.basis_mlp.to(device=self.sh_data.device)
-            self.basis_mlp.apply(init_weights)
+            self.basis_mlp.apply(utils.init_weights)
 
         if self.use_background:
             self.background_cubemap = nn.Parameter(
                 torch.zeros(
-                    6, self.background_reso, self.background_reso, self.background_nlayers,
+                    self.background_nlayers,
+                    6, self.background_reso, self.background_reso,
                     4, dtype=torch.float32, device=device
                 )
             )
@@ -643,13 +630,14 @@ class SparseGrid(nn.Module):
         elif self.basis_type == BASIS_TYPE_MLP:
             sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
         else:
-            sh_mult = eval_sh_bases(self.basis_dim, viewdirs)
+            sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
         invdirs = 1.0 / dirs
         invdirs[dirs == 0] = 1e9
 
         gsz = self._grid_size()
+        gsz_cu = gsz.to(device=dirs.device)
         t1 = (-0.5 - origins) * invdirs
-        t2 = (gsz.to(device=dirs.device) - 0.5 - origins) * invdirs
+        t2 = (gsz_cu - 0.5 - origins) * invdirs
         t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(0.0)
         tmax = torch.min(torch.max(t1, t2), dim=-1).values
 
@@ -657,17 +645,20 @@ class SparseGrid(nn.Module):
         out_rgb = torch.zeros((B, 3), device=origins.device)
         good_indices = torch.arange(B, device=origins.device)
 
+        origins_ini = origins
+        dirs_ini = dirs
+
         mask = t < tmax
         good_indices = good_indices[mask]
         origins = origins[mask]
         dirs = dirs[mask]
-        invdirs = invdirs[mask]
+
+        #  invdirs = invdirs[mask]
+        del invdirs
         t = t[mask]
         sh_mult = sh_mult[mask]
         tmax = tmax[mask]
 
-        grid_cen_x = (self.links.size(0) - 1) * 0.5;
-        grid_cen_y = (self.links.size(1) - 1) * 0.5;
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
 
@@ -741,10 +732,41 @@ class SparseGrid(nn.Module):
             good_indices = good_indices[mask]
             origins = origins[mask]
             dirs = dirs[mask]
-            invdirs = invdirs[mask]
+            #  invdirs = invdirs[mask]
             t = t[mask]
             sh_mult = sh_mult[mask]
             tmax = tmax[mask]
+
+        if self.use_background:
+            # Render the MSI background model
+            csi = utils.ConcentricSpheresIntersector(
+                    gsz_cu,
+                    origins_ini,
+                    dirs_ini,
+                    delta_scale)
+            r_min = torch.cross(csi.origins, csi.dirs).norm(dim=-1)
+            _, t_last = csi.intersect(r_min + 1e-4)
+            for i in range(self.background_nlayers):
+                r : float = self.background_nlayers / (self.background_nlayers - i - 0.5)
+                active_mask, t_inter = csi.intersect(r)
+                t_inter_sub = t_inter[active_mask]
+                sphpos = csi.origins[active_mask] + \
+                         t_inter_sub.unsqueeze(-1) * csi.dirs[active_mask]
+                coord = utils.dir_to_cubemap_coord(sphpos, self.background_reso, eac=True)
+                query = utils.cubemap_build_query(coord, self.background_reso)
+
+                rgba = utils.cubemap_sample(self.background_cubemap[i], query)
+
+                log_att = -csi.world_step_scale * torch.relu(rgba[:, -1]) * (
+                            t_inter_sub - t_last[active_mask])
+                weight = torch.exp(log_light_intensity[active_mask]) * (
+                    1.0 - torch.exp(log_att)
+                )
+                rgb = torch.clamp_min(rgba[:, :3] + 0.5, 0.0)
+                out_rgb[active_mask] += rgb * weight[:, None]
+                log_light_intensity[active_mask] += log_att
+                t_last = t_inter
+
         out_rgb += (
             torch.exp(log_light_intensity).unsqueeze(-1)
             * self.opt.background_brightness
@@ -865,7 +887,7 @@ class SparseGrid(nn.Module):
         dirs = dirs.reshape(-1, 3).float()
 
         if camera.ndc_coeffs[0] > 0.0:
-            origins, dirs = convert_to_ndc(
+            origins, dirs = utils.convert_to_ndc(
                     origins,
                     dirs,
                     self.ndc_coeffs)
@@ -932,7 +954,7 @@ class SparseGrid(nn.Module):
                     len(reso) == 3
                 ), "reso must be an integer or indexable object of 3 ints"
 
-            if use_z_order and not (reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])):
+            if use_z_order and not (reso[0] == reso[1] and reso[0] == reso[2] and utils.is_pow2(reso[0])):
                 print("Morton code requires a cube grid of power-of-2 size, ignoring...")
                 use_z_order = False
 
@@ -962,7 +984,7 @@ class SparseGrid(nn.Module):
             points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
 
             if use_z_order:
-                morton = gen_morton(reso[0], dtype=torch.long).view(-1)
+                morton = utils.gen_morton(reso[0], dtype=torch.long).view(-1)
                 points[morton] = points.clone()
             points = points.to(device=device)
 
@@ -1065,10 +1087,10 @@ class SparseGrid(nn.Module):
 
         :param basis_dim: new basis dimension, must be square number
         """
-        assert isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
+        assert utils.isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
         assert (
-            basis_dim >= 1 and basis_dim <= MAX_SH_BASIS
-        ), f"basis_dim 1-{MAX_SH_BASIS} supported"
+            basis_dim >= 1 and basis_dim <= utils.MAX_SH_BASIS
+        ), f"basis_dim 1-{utils.MAX_SH_BASIS} supported"
         old_basis_dim = self.basis_dim
         self.basis_dim = basis_dim
         device = self.sh_data.device
@@ -1149,7 +1171,7 @@ class SparseGrid(nn.Module):
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
-            net_to_dict(data, "basis_mlp", self.basis_mlp)
+            utils.net_to_dict(data, "basis_mlp", self.basis_mlp)
             data['mlp_posenc_size'] = np.int32(self.mlp_posenc_size)
             data['mlp_width'] = np.int32(self.mlp_width)
         data['basis_type'] = self.basis_type
@@ -1201,7 +1223,7 @@ class SparseGrid(nn.Module):
 
         # Maybe load basis_data
         if grid.basis_type == BASIS_TYPE_MLP:
-            net_from_dict(z, "basis_mlp", grid.basis_mlp)
+            utils.net_from_dict(z, "basis_mlp", grid.basis_mlp)
             grid.basis_mlp = grid.basis_mlp.to(device=device)
         elif grid.basis_type == BASIS_TYPE_3D_TEXTURE or \
             "basis_data" in z.keys():
@@ -1548,7 +1570,7 @@ class SparseGrid(nn.Module):
         This allows for conversion to svox 1 and Z-order curve (Morton code)
         """
         reso = self.links.shape
-        return reso[0] == reso[1] and reso[0] == reso[2] and is_pow2(reso[0])
+        return reso[0] == reso[1] and reso[0] == reso[2] and utils.is_pow2(reso[0])
 
     def _to_cpp(self, grid_coords: bool = False, replace_basis_data: Optional[torch.Tensor] = None):
         """
@@ -1643,7 +1665,7 @@ class SparseGrid(nn.Module):
 
     def _eval_basis_mlp(self, dirs: torch.Tensor):
         if self.mlp_posenc_size > 0:
-            dirs_enc = posenc(
+            dirs_enc = utils.posenc(
                 dirs,
                 None,
                 0,
@@ -1680,9 +1702,9 @@ class SparseGrid(nn.Module):
         points /= points.norm(dim=-1).unsqueeze(-1)
 
         if init_type == 'sh':
-            assert isqrt(n_comps) is not None, \
+            assert utils.isqrt(n_comps) is not None, \
                    "n_comps (learned basis SH init) must be a square number; maybe try SG init"
-            sph_vals = eval_sh_bases(n_comps, points)
+            sph_vals = utils.eval_sh_bases(n_comps, points)
         elif init_type == 'sg':
             # Low-disparity direction sampling
             u1 = torch.arange(0, n_comps) + torch.rand((n_comps,))
@@ -1690,7 +1712,7 @@ class SparseGrid(nn.Module):
             u1 = u1[torch.randperm(n_comps)]
             u2 = torch.arange(0, n_comps) + torch.rand((n_comps,))
             u2 /= n_comps
-            sg_dirvecs = spher2cart(u1 * np.pi, u2 * np.pi * 2)
+            sg_dirvecs = utils.spher2cart(u1 * np.pi, u2 * np.pi * 2)
             if upper_hemi:
                 sg_dirvecs[..., 2] = -torch.abs(sg_dirvecs[..., 2])
 
@@ -1704,7 +1726,7 @@ class SparseGrid(nn.Module):
             # L1-Normalization
             #  sg_sigmas : np.ndarray = sg_lambdas / (2 * np.pi * (1.0 - np.exp(-2 * sg_lambdas)))
             #  sg_sigmas[sg_lambdas == 0.0] = 1.0 / (2 *  (1.0 - 1.0 / np.exp(1)) * np.pi)
-            sph_vals = eval_sg_at_dirs(sg_lambdas, sg_dirvecs, points) * sg_sigmas
+            sph_vals = utils.eval_sg_at_dirs(sg_lambdas, sg_dirvecs, points) * sg_sigmas
         elif init_type == 'fourier':
             # Low-disparity direction sampling
             u1 = torch.arange(0, n_comps) + torch.rand((n_comps,))
@@ -1712,7 +1734,7 @@ class SparseGrid(nn.Module):
             u1 = u1[torch.randperm(n_comps)]
             u2 = torch.arange(0, n_comps) + torch.rand((n_comps,))
             u2 /= n_comps
-            fourier_dirvecs = spher2cart(u1 * np.pi, u2 * np.pi * 2)
+            fourier_dirvecs = utils.spher2cart(u1 * np.pi, u2 * np.pi * 2)
             fourier_freqs = torch.linspace(0.0, 1.0, n_comps + 1)[:-1]
             fourier_freqs += torch.rand_like(fourier_freqs) * (fourier_freqs[1] - fourier_freqs[0])
             fourier_freqs = torch.exp(fourier_freqs)
