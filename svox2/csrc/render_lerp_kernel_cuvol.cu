@@ -157,7 +157,8 @@ __device__ __inline__ void trace_ray_cuvol(
                 // }
 
                 const CubemapCoord coord = dir_to_cubemap_coord(ray.pos,
-                                                                grid.background_reso, /* EAC */ true);
+                                                                grid.background_reso,
+                                                                /* EAC */ true);
                 const CubemapBilerpQuery query = cubemap_build_query(coord,
                                                                      grid.background_reso);
 
@@ -177,14 +178,8 @@ __device__ __inline__ void trace_ray_cuvol(
                     const float pcnt = csi.world_step_scale * thickness * sigma;
                     const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
                     light_intensity -= pcnt;
-                    // if (csi.dir[0] < 0.0) {
-                    //     printf(" wsc=%f, t_inter=%f, t_last=%f, sigma=%f, weight=%f, li=%f\n",
-                    //             csi.world_step_scale, t_inter, t_last, sigma, weight, light_intensity);
-                    // }
-
                     outv += weight * fmaxf(group_color + 0.5f, 0.f);  // Clamp to [+0, infty)
                 }
-                // t_last = t_inter;
             }
             if (cubemap_data != nullptr)
                 cubemap_data += cubemap_step;

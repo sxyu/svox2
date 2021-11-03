@@ -31,9 +31,9 @@ class NSVFDataset:
         root,
         split,
         device: Union[str, torch.device] = "cpu",
-        scene_scale: float = 2/3,
+        scene_scale: float = 1.0, #2/3,
         factor: int = 1,
-        scale : float=1.0/2.0,
+        scale : float=1.0, #1.0/2.0,
         permutation: bool = True,
         white_bkgd: bool = True,
         normalize_by_bbox: bool = True,
@@ -130,7 +130,7 @@ class NSVFDataset:
                 scene_scale = 1.0 / radius.max()
                 print(' Overriding scene_scale by ', scene_scale)
             else:
-                warn('You specified normalize_by_bbox but bbox.txt was not available')
+                warn('normalize_by_bbox=True but bbox.txt was not available')
 
         self.c2w_f64[:, :3, 3] *= scene_scale
         self.c2w = self.c2w_f64.float()

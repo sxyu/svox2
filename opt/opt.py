@@ -88,6 +88,9 @@ group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cos
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
+group.add_argument('--bg_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
+group.add_argument('--lr_sigma_bg', type=float, default=3e-2, help='SGD/rmsprop lr for background')
+group.add_argument('--lr_color_bg', type=float, default=1e-2, help='SGD/rmsprop lr for background')
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
@@ -109,7 +112,7 @@ group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--upsamp_every', type=int, default=
                      2 * 12800,
                     help='upsample the grid every x iters')
-group.add_argument('--save_every', type=int, default=5,#2,
+group.add_argument('--save_every', type=int, default=2, #5,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
@@ -196,8 +199,8 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         basis_reso=args.basis_reso,
                         basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
                         mlp_posenc_size=4,
-                        background_nlayers=0,
-                        background_reso=256)
+                        background_nlayers=16,
+                        background_reso=256)#1024)
 
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
@@ -207,7 +210,7 @@ grid.density_data.data[:] = args.init_sigma
 
 if grid.use_background:
     grid.background_cubemap.data[..., -1] = args.init_sigma
-    grid.background_cubemap.data[..., :-1] = 0.49 / svox2.utils.SH_C0
+    grid.background_cubemap.data[..., :-1] = 0.0 / svox2.utils.SH_C0
 
 #  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
@@ -241,6 +244,9 @@ grid.opt.step_size = step_size
 grid.opt.sigma_thresh = 1e-8
 grid.opt.background_brightness = 1.0
 grid.opt.backend = 'cuvol'
+
+# FIXME: Testing
+grid.opt.background_msi_scale = 1.0
 
 gstep_id_base = 0
 
@@ -450,7 +456,7 @@ while True:
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
             grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
-                grid.optim_background_step(lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
+                grid.optim_background_step(args.lr_sigma_bg, args.lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
             if gstep_id >= args.lr_basis_begin_step:
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)

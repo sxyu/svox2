@@ -1164,6 +1164,9 @@ class SparseGrid(nn.Module):
             utils.net_to_dict(data, "basis_mlp", self.basis_mlp)
             data['mlp_posenc_size'] = np.int32(self.mlp_posenc_size)
             data['mlp_width'] = np.int32(self.mlp_width)
+
+        if self.use_background:
+            data['background_cubemap'] = self.background_cubemap.data.cpu().numpy()
         data['basis_type'] = self.basis_type
 
         save_fn(
@@ -1185,6 +1188,12 @@ class SparseGrid(nn.Module):
         else:
             sh_data = z.f.sh_data
             density_data = z.f.density_data
+
+        if 'background_cubemap' in z:
+            background_cubemap = z['background_cubemap']
+        else:
+            background_cubemap = None
+
         links = z.f.links
         basis_dim = (sh_data.shape[1]) // 3
         radius = z.f.radius.tolist() if "radius" in z.files else [1.0, 1.0, 1.0]
@@ -1198,7 +1207,8 @@ class SparseGrid(nn.Module):
             device="cpu",
             basis_type=z['basis_type'].item() if 'basis_type' in z else BASIS_TYPE_SH,
             mlp_posenc_size=z['mlp_posenc_size'].item() if 'mlp_posenc_size' in z else 0,
-            mlp_width=z['mlp_width'].item() if 'mlp_width' in z else 16
+            mlp_width=z['mlp_width'].item() if 'mlp_width' in z else 16,
+            background_nlayers=0,
         )
         if sh_data.dtype != np.float32:
             sh_data = sh_data.astype(np.float32)
@@ -1224,6 +1234,13 @@ class SparseGrid(nn.Module):
             grid.basis_data = nn.Parameter(basis_data)
         else:
             grid.basis_data = nn.Parameter(grid.basis_data.data.to(device=device))
+
+        if background_cubemap is not None:
+            background_cubemap = torch.from_numpy(background_cubemap).to(device=device)
+            grid.background_nlayers = background_cubemap.size(0)
+            grid.background_reso = background_cubemap.size(2)
+            grid.background_cubemap = nn.Parameter(background_cubemap)
+
         if grid.links.is_cuda:
             grid.accelerate()
         return grid
@@ -1318,6 +1335,28 @@ class SparseGrid(nn.Module):
             self.sh_data, self.links, start_dim, end_dim, logalpha, logalpha_delta,
             True,
             ndc_coeffs
+        )
+
+    def tv_background(self):
+        """
+        Compute total variation on color
+
+        :param start_dim: int, first color channel dimension to compute TV over (inclusive).
+                          Default 0.
+        :param end_dim: int, last color channel dimension to compute TV over (exclusive).
+                          Default None = all dimensions until the end.
+
+        :return: torch.Tensor, size scalar, the TV value (sum over channels,
+                 mean over voxels)
+        """
+        assert (
+            _C is not None and self.sh_data.is_cuda
+        ), "CUDA extension is currently required for total variation"
+        n_chnl = self.background_cubemap.size(-1)
+        return _TotalVariationFunction.apply(
+            self.background_cubemap.view(-1, n_chnl), self.links, 0, n_chnl, False, 1.0,
+            True,
+            (-1, -1)
         )
 
     def tv_basis(self):

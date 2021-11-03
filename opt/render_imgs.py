@@ -27,6 +27,14 @@ parser.add_argument('--render_path',
                     action='store_true',
                     default=False,
                     help="Render path instead of test images (no metrics will be given)")
+parser.add_argument('--nofg',
+                    action='store_true',
+                    default=False,
+                    help="Do not render foreground (if using BG model)")
+parser.add_argument('--nobg',
+                    action='store_true',
+                    default=False,
+                    help="Do not render background (if using BG model)")
 args = parser.parse_args()
 device = 'cuda:0'
 
@@ -35,14 +43,23 @@ render_dir = path.join(path.dirname(args.ckpt),
 if args.render_path:
     assert not args.train
     render_dir += '_path'
-print('Writing to', render_dir)
-os.makedirs(render_dir, exist_ok=True)
 
 dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test")
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
-grid.background_cubemap.data = grid.background_cubemap.data.cuda()
 grid.opt.last_sample_opaque = dset.last_sample_opaque
+
+if grid.use_background:
+    if args.nobg:
+        #  grid.background_cubemap.data = grid.background_cubemap.data.cuda()
+        grid.background_cubemap.data[..., -1] = 0.0
+        render_dir += '_nobg'
+    if args.nofg:
+        grid.density_data.data[:] = 0.0
+        render_dir += '_nofg'
+
+print('Writing to', render_dir)
+os.makedirs(render_dir, exist_ok=True)
 
 step_size = 0.5  # 0.5 of a voxel!
 grid.opt.step_size = step_size
@@ -50,6 +67,8 @@ grid.opt.sigma_thresh = 1e-8
 #  grid.opt.stop_thresh = 1e-8
 grid.opt.background_brightness = 1.0
 grid.opt.backend = 'cuvol'
+
+grid.opt.background_msi_scale = 1.0
 
 with torch.no_grad():
     im_size = dset.h * dset.w

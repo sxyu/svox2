@@ -21,6 +21,16 @@ void calculate_ray_scale(float ndc_coeffx,
                          float maxy,
                          float maxz,
                          float* __restrict__ scale) {
+    // Cubemap
+    //
+    const float radius = opt.background_msi_scale * float(grid.background_nlayers) /
+                        (float(grid.background_nlayers - i - 0.5f));
+    const float full_thickness = opt.background_msi_scale * float(grid.background_nlayers) /
+                        (float(grid.background_nlayers - i + 0.5f)) - radius;
+    scale[0] = 1.f / radius; // Approx, not ideal
+    scale[1] = 1.f / radius; // Approx, not ideal
+    scale[2] = 1.f / full_thickness;
+
     if (ndc_coeffx > 0.f) {
         // Normalized to [-1, 1] (with 0.5 padding)
         // const float x_norm = (x + 0.5) / maxx * 2 - 1;
