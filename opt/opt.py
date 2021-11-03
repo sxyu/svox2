@@ -119,7 +119,7 @@ group.add_argument('--eval_every', type=int, default=1,
 
 group = parser.add_argument_group("initialization")
 group.add_argument('--init_sigma', type=float,
-                   default=0.1,
+                   default=0.1,#0.1,
                    help='initialization sigma')
 
 group = parser.add_argument_group("misc experiments")
@@ -130,7 +130,7 @@ group.add_argument('--sigma_thresh', type=float,
                     default=1.0,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--weight_thresh', type=float,
-                    default=0.0002,
+                    default=0.0005,
                    help='Resample (upsample to 512) weight threshold')
 group.add_argument('--use_weight_thresh', action='store_true', default=True,
                     help='use weight thresholding')
@@ -138,13 +138,13 @@ group.add_argument('--use_weight_thresh', action='store_true', default=True,
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
-group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-5)#1e-5)
+group.add_argument('--rms_beta', type=float, default=0.99)
+group.add_argument('--lambda_tv', type=float, default=1e-5)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)#1e-3)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)

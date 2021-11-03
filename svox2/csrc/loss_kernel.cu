@@ -39,13 +39,13 @@ void calculate_ray_scale(float ndc_coeffx,
 
         // NDC distances
         const float disparity = (1 - z_norm) / 2.f; // in [0, 1]
-        scale[0] = (ndc_coeffx * disparity) * maxx * 0.5f;
-        scale[1] = (ndc_coeffy * disparity) * maxy * 0.5f;
-        scale[2] = -((z_norm - 1.f + 2.f / maxz) * disparity);
+        scale[0] = (ndc_coeffx * disparity);//maxx * 0.5f;
+        scale[1] = (ndc_coeffy * disparity);//maxy * 0.5f;
+        scale[2] = -((z_norm - 1.f + 2.f / maxz) * disparity) / (maxz * 0.5f);
     } else {
-        scale[0] = maxx * 0.5f;
-        scale[1] = maxy * 0.5f;
-        scale[2] = maxz * 0.5f;
+        scale[0] = 1.f; //maxx * 0.5f;
+        scale[1] = 1.f; //maxy * 0.5f;
+        scale[2] = 1.f; //maxz * 0.5f;
     }
 }
 
@@ -158,10 +158,13 @@ __global__ void tv_grad_kernel(
         gptr001 = grad_data + lnk;
     } else if (ignore_edge) v001 = v000;
 
-    const float dx = (v100 - v000) * scaling[0];
-    const float dy = (v010 - v000) * scaling[1];
-    const float dz = (v001 - v000) * scaling[2];
-    const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
+    float dx = (v100 - v000);
+    float dy = (v010 - v000);
+    float dz = (v001 - v000);
+    const float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
+    dx *= scaling[0];
+    dy *= scaling[1];
+    dz *= scaling[2];
     if (dx != 0.f) atomicAdd(gptr100, dx * idelta);
     if (dy != 0.f) atomicAdd(gptr010, dy * idelta);
     if (dz != 0.f) atomicAdd(gptr001, dz * idelta);
@@ -203,10 +206,15 @@ __global__ void tv_grad_sparse_kernel(
                 v010 = links_ptr[offy] >= 0 ? data[links_ptr[offy]][idx] : null_val,
                 v100 = links_ptr[offx] >= 0 ? data[links_ptr[offx]][idx] : null_val;
 
-    const float dx = (v100 - v000) * scaling[0];
-    const float dy = (v010 - v000) * scaling[1];
-    const float dz = (v001 - v000) * scaling[2];
-    const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
+    float dx = (v100 - v000);
+    float dy = (v010 - v000);
+    float dz = (v001 - v000);
+    const float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
+
+    dx *= scaling[0];
+    dy *= scaling[1];
+    dz *= scaling[2];
+
 #define MAYBE_ADD_SET(gp, val) if (links_ptr[gp] >= 0 && val != 0.f) { \
     atomicAdd(&grad_data[links_ptr[gp] * data.size(1) + idx], val * idelta); \
     if (mask_out != nullptr) { \
