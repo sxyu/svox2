@@ -207,7 +207,7 @@ grid.density_data.data[:] = args.init_sigma
 
 if grid.use_background:
     grid.background_cubemap.data[..., -1] = args.init_sigma
-    grid.background_cubemap.data[..., :-1] = 0.49
+    grid.background_cubemap.data[..., :-1] = 0.49 / svox2.utils.SH_C0
 
 #  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
@@ -448,7 +448,7 @@ while True:
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
             grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
-                grid.optim_background_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
+                grid.optim_background_step(lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if gstep_id >= args.lr_basis_begin_step:
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)

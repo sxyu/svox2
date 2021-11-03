@@ -608,7 +608,7 @@ class SparseGrid(nn.Module):
         origins_ini = origins
         dirs_ini = dirs
 
-        mask = t < tmax
+        mask = t <= tmax
         good_indices = good_indices[mask]
         origins = origins[mask]
         dirs = dirs[mask]
@@ -621,12 +621,16 @@ class SparseGrid(nn.Module):
 
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
+            pos = pos.clamp_min_(0.0)
+            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz[0] - 1)
+            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz[1] - 1)
+            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz[2] - 1)
 
             l = pos.to(torch.long)
             l.clamp_min_(0)
-            l[:, 0].clamp_max_(gsz[0] - 2)
-            l[:, 1].clamp_max_(gsz[1] - 2)
-            l[:, 2].clamp_max_(gsz[2] - 2)
+            l[:, 0] = torch.clamp_max(l[:, 0], gsz[0] - 2)
+            l[:, 1] = torch.clamp_max(l[:, 1], gsz[1] - 2)
+            l[:, 2] = torch.clamp_max(l[:, 2], gsz[2] - 2)
             pos -= l
 
             # BEGIN CRAZY TRILERP
@@ -688,7 +692,7 @@ class SparseGrid(nn.Module):
             log_light_intensity[good_indices] += log_att
             t += self.opt.step_size
 
-            mask = t < tmax
+            mask = t <= tmax
             good_indices = good_indices[mask]
             origins = origins[mask]
             dirs = dirs[mask]
@@ -729,7 +733,7 @@ class SparseGrid(nn.Module):
                     1.0 - torch.exp(log_att)
                 )
                 #  print('B', r, rgba[-1].detach(), log_light_intensity[-1].detach(), weight[-1].detach(), t_inter_sub[-1], t_last[active_mask][-1])
-                rgb = torch.clamp_min(rgba[:, :3] + 0.5, 0.0)
+                rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
                 out_rgb[active_mask] += rgb * weight[:, None]
                 log_light_intensity[active_mask] += log_att
                 #  t_last[active_mask] = t_inter[active_mask]
@@ -1455,7 +1459,8 @@ class SparseGrid(nn.Module):
                 beta,
                 lr,
                 epsilon,
-                -1e9
+                -1e9,
+                lr
             )
         elif optim == 'sgd':
             _C.sgd_step(
@@ -1463,6 +1468,7 @@ class SparseGrid(nn.Module):
                 self.density_data.grad,
                 indexer,
                 lr,
+                lr
             )
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
@@ -1489,16 +1495,20 @@ class SparseGrid(nn.Module):
                 beta,
                 lr,
                 epsilon,
-                -1e9
+                -1e9,
+                lr
             )
         elif optim == 'sgd':
             _C.sgd_step(
-                self.sh_data.data, self.sh_data.grad, indexer, lr
+                self.sh_data.data, self.sh_data.grad, indexer, lr, lr
             )
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
 
-    def optim_background_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+    def optim_background_step(self,
+                              lr_sigma: float,
+                              lr_color: float,
+                              beta: float=0.9, epsilon: float = 1e-8,
                               optim : str='rmsprop'):
         """
         Execute RMSprop or sgd step on density
@@ -1522,16 +1532,18 @@ class SparseGrid(nn.Module):
                 self.background_cubemap.grad.view(-1, n_chnl),
                 indexer,
                 beta,
-                lr,
+                lr_color,
                 epsilon,
-                -1e9
+                -1e9,
+                lr_sigma
             )
         elif optim == 'sgd':
             _C.sgd_step(
                 self.background_cubemap.data.view(-1, n_chnl),
                 self.background_cubemap.grad.view(-1, n_chnl),
                 indexer,
-                lr,
+                lr_color,
+                lr_sigma
             )
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')

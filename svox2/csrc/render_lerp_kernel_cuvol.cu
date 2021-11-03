@@ -172,7 +172,7 @@ __device__ __inline__ void trace_ray_cuvol(
                             query,
                             grid.background_reso,
                             /*n_channels*/ 4,
-                            lane_colorgrp);
+                            lane_colorgrp) * C0;
 
                     const float pcnt = csi.world_step_scale * thickness * sigma;
                     const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
@@ -364,7 +364,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                             query,
                             grid.background_reso,
                             /*n_channels*/ 4,
-                            lane_colorgrp) + 0.5f;
+                            lane_colorgrp) * C0 + 0.5f;
 
                     const float pcnt = csi.world_step_scale * thickness * sigma;
                     const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
@@ -378,7 +378,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                     total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
                     total_color += total_color_c1;
 
-                    const float curr_grad_color = weight * color_in_01 * gout;
+                    const float curr_grad_color = C0 * weight * color_in_01 * gout;
 
                     accum -= weight * total_color;
                     float curr_grad_sigma = csi.world_step_scale * thickness * (

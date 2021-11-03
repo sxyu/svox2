@@ -12,7 +12,7 @@
   CHECK_CONTIGUOUS(x)
 
 #if defined(__CUDACC__)
-#define _EXP(x) __expf(x)
+#define _EXP(x) expf(x)
 #define _SIGMOID(x) (1 / (1 + _EXP(-(x))))
 
 #else

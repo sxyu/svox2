@@ -15,7 +15,7 @@ grid = svox2.SparseGrid(
                      basis_dim=9,
                      use_z_order=True,
                      device=device,
-                     background_nlayers=16,
+                     background_nlayers=32,
                      basis_type=svox2.BASIS_TYPE_SH)
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
@@ -36,8 +36,10 @@ if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
     grid.basis_data.data += 1.0
 
 ENABLE_TORCH_CHECK = True
-N_RAYS = 5000 #200 * 200
+N_RAYS = 5000 #5000 #200 * 200
+#  origins = -torch.ones((N_RAYS, 3), device=device, dtype=dtype)
 origins = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
+#  origins -= 0.99
 #  origins = torch.zeros((N_RAYS, 3), device=device, dtype=dtype)
 dirs : torch.Tensor = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
 dirs /= torch.norm(dirs, dim=-1, keepdim=True)
@@ -53,6 +55,7 @@ rgb_gt = torch.zeros((N_RAYS, 3), device=device, dtype=dtype)
 with Timing("ours"):
     samps = grid.volume_render(rays, use_kernel=True)
 s = F.mse_loss(samps, rgb_gt)
+
 print(s)
 print('bkwd..')
 with Timing("ours_backward"):

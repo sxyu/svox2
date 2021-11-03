@@ -41,6 +41,7 @@ os.makedirs(render_dir, exist_ok=True)
 dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test")
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
+grid.background_cubemap.data = grid.background_cubemap.data.cuda()
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
 step_size = 0.5  # 0.5 of a voxel!
