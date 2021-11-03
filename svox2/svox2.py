@@ -50,7 +50,7 @@ class RenderOptions:
 
     last_sample_opaque: bool = False   # Make the last sample opaque (for forward-facing)
 
-    background_msi_scale: float = 10.0
+    background_msi_scale: float = 1.0
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -1337,28 +1337,6 @@ class SparseGrid(nn.Module):
             ndc_coeffs
         )
 
-    def tv_background(self):
-        """
-        Compute total variation on color
-
-        :param start_dim: int, first color channel dimension to compute TV over (inclusive).
-                          Default 0.
-        :param end_dim: int, last color channel dimension to compute TV over (exclusive).
-                          Default None = all dimensions until the end.
-
-        :return: torch.Tensor, size scalar, the TV value (sum over channels,
-                 mean over voxels)
-        """
-        assert (
-            _C is not None and self.sh_data.is_cuda
-        ), "CUDA extension is currently required for total variation"
-        n_chnl = self.background_cubemap.size(-1)
-        return _TotalVariationFunction.apply(
-            self.background_cubemap.view(-1, n_chnl), self.links, 0, n_chnl, False, 1.0,
-            True,
-            (-1, -1)
-        )
-
     def tv_basis(self):
         bd = self.basis_data
         return torch.mean(torch.sqrt(1e-5 +
@@ -1368,7 +1346,7 @@ class SparseGrid(nn.Module):
 
     def inplace_tv_grad(self, grad: torch.Tensor,
                         scaling: float = 1.0,
-                        sparse_frac: float = 1.0,
+                        sparse_frac: float = 0.01,
                         logalpha: bool=False, logalpha_delta: float=2.0,
                         ndc_coeffs: Tuple[float, float] = (-1.0, -1.0)
                     ):
@@ -1405,7 +1383,7 @@ class SparseGrid(nn.Module):
         start_dim: int = 0,
         end_dim: Optional[int] = None,
         scaling: float = 1.0,
-        sparse_frac: float = 1.0,
+        sparse_frac: float = 0.01,
         logalpha: bool=False,
         logalpha_delta: float=2.0,
         ndc_coeffs: Tuple[float, float] = (-1.0, -1.0)
@@ -1481,6 +1459,29 @@ class SparseGrid(nn.Module):
                            indexer.size(0)
                 scale = scaling / nz
                 grad[indexer, start_dim:end_dim] += scale * self.sh_data[indexer, start_dim:end_dim]
+
+    def inplace_tv_background_grad(
+        self,
+        grad: torch.Tensor,
+        scaling: float = 1.0,
+        sparse_frac: float = 0.01
+    ):
+        """
+        Add gradient of total variation for color
+        directly into the gradient tensor, multiplied by 'scaling'
+        """
+        assert (
+            _C is not None and self.sh_data.is_cuda and grad.is_cuda
+        ), "CUDA extension is currently required for total variation"
+
+        rand_cells_bg = self._get_rand_cells_background(sparse_frac)
+        indexer = self._get_sparse_background_grad_indexer()
+        _C.msi_tv_grad_sparse(
+                          self.background_cubemap,
+                          rand_cells_bg,
+                          indexer,
+                          scaling,
+                          grad)
 
     def inplace_tv_basis_grad(
         self,
@@ -1714,6 +1715,13 @@ class SparseGrid(nn.Module):
             indexer = torch.empty((), device=self.density_data.device)
         return indexer
 
+    def _get_sparse_background_grad_indexer(self):
+        indexer = self.sparse_background_indexer
+        if indexer is None:
+            indexer = torch.empty((0, 0, 0, 0), dtype=torch.bool,
+                            device=self.density_data.device)
+        return indexer
+
     def _maybe_convert_sparse_grad_indexer(self, sh=False, bg=False):
         """
         Automatically convert sparse grad indexer from mask to
@@ -1744,6 +1752,20 @@ class SparseGrid(nn.Module):
             return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
                                             self.links.device)
         return None
+
+    def _get_rand_cells_background(self, sparse_frac: float):
+        assert self.use_background, "Can only use sparse background loss if using background"
+        assert self.sparse_background_indexer is None or self.sparse_background_indexer.dtype == torch.bool, \
+               "please call sparse loss after rendering and before gradient updates"
+        assert self.background_cubemap.size(2) == self.background_cubemap.size(3), \
+                "Incorrect cubemap size"
+        grid_size = (self.background_cubemap.size(0) - 1) * \
+                     self.background_cubemap.size(1) * \
+                    (self.background_cubemap.size(2) - 1) * \
+                    (self.background_cubemap.size(3) - 1)
+        sparse_num = max(int(sparse_frac * grid_size), 1)
+        return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
+                                        self.links.device)
 
     def _eval_learned_bases(self, dirs: torch.Tensor):
         basis_data = self.basis_data.permute([3, 2, 1, 0])[None]

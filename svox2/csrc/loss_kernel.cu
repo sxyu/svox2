@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include "cuda_util.cuh"
+#include "cubemap_util.cuh"
 
 namespace {
 
@@ -17,21 +18,13 @@ __device__ __inline__
 void calculate_ray_scale(float ndc_coeffx,
                          float ndc_coeffy,
                          float z,
-                         float maxx,
-                         float maxy,
+                         // float maxx,
+                         // float maxy,
                          float maxz,
                          float* __restrict__ scale) {
-    // Cubemap
-    //
-    const float radius = opt.background_msi_scale * float(grid.background_nlayers) /
-                        (float(grid.background_nlayers - i - 0.5f));
-    const float full_thickness = opt.background_msi_scale * float(grid.background_nlayers) /
-                        (float(grid.background_nlayers - i + 0.5f)) - radius;
-    scale[0] = 1.f / radius; // Approx, not ideal
-    scale[1] = 1.f / radius; // Approx, not ideal
-    scale[2] = 1.f / full_thickness;
-
     if (ndc_coeffx > 0.f) {
+        // FF NDC
+
         // Normalized to [-1, 1] (with 0.5 padding)
         // const float x_norm = (x + 0.5) / maxx * 2 - 1;
         // const float y_norm = (y + 0.5) / maxy * 2 - 1;
@@ -49,13 +42,24 @@ void calculate_ray_scale(float ndc_coeffx,
     }
 }
 
+// __device__ __inline__
+// void approx_msi_scale(float msi_nlayers,
+//         float msi_layer_id) {
+//     // MSI (approximate)
+//     const float radius = msi_nlayers /
+//         (msi_nlayers - msi_layer_id - 0.5f);
+//     const float full_thickness = msi_nlayers /
+//         (msi_nlayers - msi_layer_id - 1.5f) - radius;
+//     scale[0] = 1.f / full_thickness;
+//     scale[1] = scale[0];
+//     scale[2] = scale[0];
+// }
+
 
 #define CALCULATE_RAY_SCALE(out_name) float out_name[3]; \
     calculate_ray_scale( \
             ndc_coeffx, ndc_coeffy, \
             z, \
-            links.size(0), \
-            links.size(1), \
             links.size(2), \
             out_name)
 
@@ -400,6 +404,68 @@ __global__ void tv_logalpha_grad_sparse_kernel(
 #undef MAYBE_ADD_SET
 }
 
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void msi_tv_grad_sparse_kernel(
+        // (n_layers, 6, reso, reso, n_channels)
+        const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> cubemap,
+        const int32_t* __restrict__ rand_cells,
+        float scale,
+        size_t Q,
+        // Output
+        torch::PackedTensorAccessor32<bool, 4, torch::RestrictPtrTraits> cubemap_mask,
+		torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> grad_cubemap) {
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int channel_id = tid % cubemap.size(4);
+    const int msi_idx = rand_cells[tid / cubemap.size(4)];
+
+    const int v = msi_idx % (cubemap.size(3) - 1);
+    int tmp = msi_idx / (cubemap.size(3) - 1);
+    const int u = tmp % (cubemap.size(2) - 1);
+    tmp /= (cubemap.size(2) - 1);
+    const int face_id = tmp % cubemap.size(1);
+    const int layer_id = tmp / cubemap.size(1);
+
+    const float v00 = cubemap[layer_id][face_id][u][v][channel_id];
+    const float v01 = cubemap[layer_id][face_id][u][v + 1][channel_id];
+    const float v10 = cubemap[layer_id][face_id][u + 1][v][channel_id];
+    const float v_nxl = cubemap[layer_id + 1][face_id][u][v][channel_id];
+
+    float dx = (v10 - v00);
+    float dy = (v01 - v00);
+    float dz = (v_nxl - v00);
+    const float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
+
+    const float msi_nlayers = cubemap.size(0);
+
+    const float radius = msi_nlayers / (msi_nlayers - layer_id - 0.5f);
+    const float nxl_radius = msi_nlayers / (msi_nlayers - layer_id - 1.5f);
+    float coord00[3], coord01[3], coord10[3], coord_nxl[3];
+    invert_cubemap(u, v, radius, cubemap.size(2), coord00);
+    invert_cubemap(u + 1, v, radius, cubemap.size(2), coord01);
+    invert_cubemap(u, v + 1, radius, cubemap.size(2), coord10);
+    invert_cubemap(u, v, nxl_radius + 1.f, cubemap.size(2), coord_nxl);
+
+    xsuby3d(coord01, coord00);
+    xsuby3d(coord10, coord00);
+    xsuby3d(coord_nxl, coord00);
+    dx *= _rnorm(coord01);
+    dy *= _rnorm(coord10);
+    dz *= _rnorm(coord_nxl);
+
+#define MAYBE_ADD_SET(layer_id, face_id, u, v, val) if (val != 0.f) { \
+    atomicAdd(&grad_cubemap[layer_id][face_id][u][v][channel_id], val * idelta); \
+    if (cubemap_mask.size(0) > 0) \
+        cubemap_mask[layer_id][face_id][u][v] = true; \
+} \
+
+    const float sm = -(dx + dy + dz);
+    MAYBE_ADD_SET(layer_id, face_id, u, v, sm);
+    MAYBE_ADD_SET(layer_id + 1, face_id, u, v, dz);
+    MAYBE_ADD_SET(layer_id, face_id, u, v + 1, dy);
+    MAYBE_ADD_SET(layer_id, face_id, u + 1, v, dx);
+#undef MAYBE_ADD_SET
+}
+
 }  // namespace device
 }  // namespace
 
@@ -568,5 +634,37 @@ void tv_grad_sparse(torch::Tensor links,
                 (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
                 grad_data.data_ptr<float>());
     }
+    CUDA_CHECK_ERRORS;
+}
+
+void msi_tv_grad_sparse(torch::Tensor cubemap,
+             torch::Tensor rand_cells,
+             torch::Tensor mask_out,
+             float scale,
+             torch::Tensor grad_cubemap) {
+    DEVICE_GUARD(cubemap);
+    CHECK_INPUT(cubemap);
+    CHECK_INPUT(grad_cubemap);
+    CHECK_INPUT(rand_cells);
+    CHECK_INPUT(mask_out);
+    TORCH_CHECK(cubemap.is_floating_point());
+    TORCH_CHECK(grad_cubemap.is_floating_point());
+    TORCH_CHECK(cubemap.ndimension() == 5);
+    TORCH_CHECK(grad_cubemap.ndimension() == 5);
+    TORCH_CHECK(mask_out.ndimension() == 4);
+
+    int nl = rand_cells.size(0);
+    size_t Q = rand_cells.size(0) * cubemap.size(4);
+
+    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    device::msi_tv_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
+            cubemap.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            rand_cells.data_ptr<int32_t>(),
+            scale / nl,
+            Q,
+            // Output
+            mask_out.packed_accessor32<bool, 4, torch::RestrictPtrTraits>(),
+            grad_cubemap.packed_accessor32<float, 5, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 }

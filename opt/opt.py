@@ -149,6 +149,9 @@ group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
 
+group.add_argument('--lambda_tv_background', type=float, default=1e-1)
+group.add_argument('--tv_background_sparsity', type=float, default=0.01)
+
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
 
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
@@ -210,7 +213,7 @@ grid.density_data.data[:] = args.init_sigma
 
 if grid.use_background:
     grid.background_cubemap.data[..., -1] = args.init_sigma
-    grid.background_cubemap.data[..., :-1] = 0.0 / svox2.utils.SH_C0
+    grid.background_cubemap.data[..., :-1] = 0.5 / svox2.utils.SH_C0
 
 #  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
@@ -445,6 +448,10 @@ while True:
             if args.lambda_l2_sh > 0.0:
                 grid.inplace_l2_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_l2_sh)
+            if args.lambda_tv_background > 0.0:
+                grid.inplace_tv_background_grad(grid.background_cubemap.grad,
+                        scaling=args.lambda_tv_background,
+                        sparse_frac=args.tv_background_sparsity)
             if args.lambda_tv_basis > 0.0:
                 tv_basis = grid.tv_basis()
                 loss_tv_basis = tv_basis * args.lambda_tv_basis

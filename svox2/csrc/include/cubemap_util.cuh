@@ -83,6 +83,20 @@ struct ConcentricSpheresIntersector {
     float q2a, qb, f;
 };
 
+__device__ __inline__ void
+    invert_cubemap(int u, int v, float r,
+                   int reso,
+                   float* __restrict__ out) {
+    const float u_norm = (u + 0.5f) / reso * 2 - 1;
+    const float v_norm = (v + 0.5f) / reso * 2 - 1;
+    const float tx = tanf((M_PI / 4) * u_norm);
+    const float ty = tanf((M_PI / 4) * v_norm);
+    const float common = r * rnorm3df(1.f, tx, ty);
+    out[0] = tx * common;
+    out[1] = ty * common;
+    out[2] = common;
+}
+
 __device__ __host__ __inline__ CubemapCoord
     dir_to_cubemap_coord(const float* __restrict__ xyz_o,
             int face_reso,

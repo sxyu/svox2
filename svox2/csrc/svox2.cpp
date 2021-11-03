@@ -41,6 +41,7 @@ void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, float, float,
              Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, float, float, Tensor);
+void msi_tv_grad_sparse(Tensor, Tensor, Tensor, float, Tensor);
 
 // Optim
 void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float, float,
@@ -61,6 +62,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(tv);
   _REG_FUNC(tv_grad);
   _REG_FUNC(tv_grad_sparse);
+  _REG_FUNC(msi_tv_grad_sparse);
 
   // Misc
   _REG_FUNC(dilate);
