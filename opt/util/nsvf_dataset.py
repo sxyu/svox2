@@ -9,6 +9,7 @@ import imageio
 from tqdm import tqdm
 import json
 import numpy as np
+from warnings import warn
 
 
 class NSVFDataset:
@@ -32,9 +33,11 @@ class NSVFDataset:
         device: Union[str, torch.device] = "cpu",
         scene_scale: float = 2/3,
         factor: int = 1,
-        scale : float=1.0,
+        scale : float=1.0/2.0,
         permutation: bool = True,
         white_bkgd: bool = True,
+        normalize_by_bbox: bool = True,
+        data_bbox_scale : float = 1.1,
     ):
         assert path.isdir(root), f"'{root}' is not a directory"
 
@@ -63,7 +66,7 @@ class NSVFDataset:
 
         img_dir_name = look_for_dir(["images", "image", "rgb"])
         pose_dir_name = look_for_dir(["poses", "pose"])
-        intrin_dir_name = look_for_dir(["intrin"], required=False)
+        #  intrin_dir_name = look_for_dir(["intrin"], required=False)
         img_files = sorted(os.listdir(path.join(root, img_dir_name)), key=sort_key)
 
         # Select subset of files
@@ -100,7 +103,7 @@ class NSVFDataset:
             image = imageio.imread(img_path)
             pose_fname = path.splitext(img_fname)[0] + ".txt"
             pose_path = path.join(root, pose_dir_name, pose_fname)
-            intrin_path = path.join(root, intrin_dir_name, pose_fname)
+            #  intrin_path = path.join(root, intrin_dir_name, pose_fname)
 
             cam_mtx = np.loadtxt(pose_path).reshape(4, 4)
             all_c2w.append(torch.from_numpy(cam_mtx))  # C2W (4, 4) OpenCV
@@ -113,6 +116,22 @@ class NSVFDataset:
 
 
         self.c2w_f64 = torch.stack(all_c2w)
+
+        if normalize_by_bbox:
+            bbox_path = path.join(root, "bbox.txt")
+            if path.exists(bbox_path):
+                bbox_data = np.loadtxt(bbox_path)
+                center = (bbox_data[:3] + bbox_data[3:6]) * 0.5
+                radius = (bbox_data[3:6] - bbox_data[:3]) * 0.5 * data_bbox_scale
+
+                # Recenter
+                self.c2w_f64[:, :3, 3] -= center
+                # Rescale
+                scene_scale = 1.0 / radius.max()
+                print(' Overriding scene_scale by ', scene_scale)
+            else:
+                warn('You specified normalize_by_bbox but bbox.txt was not available')
+
         self.c2w_f64[:, :3, 3] *= scene_scale
         self.c2w = self.c2w_f64.float()
 
@@ -168,6 +187,7 @@ class NSVFDataset:
         self.ndc_coeffs = (-1.0, -1.0)  # disable
         self.use_sphere_bound = True
         self.last_sample_opaque = False
+
 
     def gen_rays(self, factor=1):
         print(" Generating rays, scaling factor", factor)

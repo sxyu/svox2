@@ -236,17 +236,25 @@ class _VolumeRenderFunction(autograd.Function):
 class _TotalVariationFunction(autograd.Function):
     @staticmethod
     def forward(
-        ctx, data: torch.Tensor, links: torch.Tensor, start_dim: int, end_dim: int,
-        use_logalpha: bool, logalpha_delta: float,
-        ignore_edge: bool
+        ctx,
+        data: torch.Tensor,
+        links: torch.Tensor,
+        start_dim: int,
+        end_dim: int,
+        use_logalpha: bool,
+        logalpha_delta: float,
+        ignore_edge: bool,
+        ndc_coeffs: Tuple[float, float]
     ):
-        tv = _C.tv(links, data, start_dim, end_dim, use_logalpha, logalpha_delta, ignore_edge)
+        tv = _C.tv(links, data, start_dim, end_dim, use_logalpha,
+                   logalpha_delta, ignore_edge, ndc_coeffs[0], ndc_coeffs[1])
         ctx.save_for_backward(links, data)
         ctx.start_dim = start_dim
         ctx.end_dim = end_dim
         ctx.use_logalpha = use_logalpha
         ctx.logalpha_delta = logalpha_delta
         ctx.ignore_edge = ignore_edge
+        ctx.ndc_coeffs = ndc_coeffs
         return tv
 
     @staticmethod
@@ -255,11 +263,14 @@ class _TotalVariationFunction(autograd.Function):
         grad_grid = torch.zeros_like(data)
         _C.tv_grad(links, data, ctx.start_dim, ctx.end_dim, 1.0,
                    ctx.use_logalpha, ctx.logalpha_delta,
-                   ctx.ignore_edge, grad_grid)
+                   ctx.ignore_edge,
+                   ctx.ndc_coeffs[0], ctx.ndc_coeffs[1],
+                   grad_grid)
         ctx.start_dim = ctx.end_dim = None
         if not ctx.needs_input_grad[0]:
             grad_grid = None
-        return grad_grid, None, None, None
+        return grad_grid, None, None, None,\
+               None, None, None, None
 
 
 # END Differentiable CUDA functions with custom gradient
@@ -1265,7 +1276,8 @@ class SparseGrid(nn.Module):
         t[index, -1:] = self.density_data.data.to(device=device)
         return t
 
-    def tv(self, logalpha: bool=True, logalpha_delta: float=2.0):
+    def tv(self, logalpha: bool=False, logalpha_delta: float=2.0,
+           ndc_coeffs: Tuple[float, float] = (-1.0, -1.0)):
         """
         Compute total variation over sigma,
         similar to Neural Volumes [Lombardi et al., ToG 2019]
@@ -1277,11 +1289,13 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for total variation"
         return _TotalVariationFunction.apply(
-                self.density_data, self.links, 0, 1, logalpha, logalpha_delta)
+                self.density_data, self.links, 0, 1, logalpha, logalpha_delta,
+                False, ndc_coeffs)
 
     def tv_color(self,
                  start_dim: int = 0, end_dim: Optional[int] = None,
-                 logalpha: bool=False, logalpha_delta: float=2.0):
+                 logalpha: bool=False, logalpha_delta: float=2.0,
+                 ndc_coeffs: Tuple[float, float] = (-1.0, -1.0)):
         """
         Compute total variation on color
 
@@ -1301,7 +1315,9 @@ class SparseGrid(nn.Module):
         end_dim = end_dim + self.sh_data.size(1) if end_dim < 0 else end_dim
         start_dim = start_dim + self.sh_data.size(1) if start_dim < 0 else start_dim
         return _TotalVariationFunction.apply(
-            self.sh_data, self.links, start_dim, end_dim, logalpha, logalpha_delta
+            self.sh_data, self.links, start_dim, end_dim, logalpha, logalpha_delta,
+            True,
+            ndc_coeffs
         )
 
     def tv_basis(self):
@@ -1314,7 +1330,8 @@ class SparseGrid(nn.Module):
     def inplace_tv_grad(self, grad: torch.Tensor,
                         scaling: float = 1.0,
                         sparse_frac: float = 1.0,
-                        logalpha: bool=True, logalpha_delta: float=2.0
+                        logalpha: bool=False, logalpha_delta: float=2.0,
+                        ndc_coeffs: Tuple[float, float] = (-1.0, -1.0)
                     ):
         """
         Add gradient of total variation for sigma as in Neural Volumes
@@ -1333,11 +1350,13 @@ class SparseGrid(nn.Module):
                     0, 1, scaling,
                     logalpha, logalpha_delta,
                     False,
+                    ndc_coeffs[0], ndc_coeffs[1],
                     grad)
         else:
             _C.tv_grad(self.links, self.density_data, 0, 1, scaling,
                     logalpha, logalpha_delta,
                     False,
+                    ndc_coeffs[0], ndc_coeffs[1],
                     grad)
             self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
@@ -1349,7 +1368,8 @@ class SparseGrid(nn.Module):
         scaling: float = 1.0,
         sparse_frac: float = 1.0,
         logalpha: bool=False,
-        logalpha_delta: float=2.0
+        logalpha_delta: float=2.0,
+        ndc_coeffs: Tuple[float, float] = (-1.0, -1.0)
     ):
         """
         Add gradient of total variation for color
@@ -1377,12 +1397,14 @@ class SparseGrid(nn.Module):
                               logalpha,
                               logalpha_delta,
                               True,
+                              ndc_coeffs[0], ndc_coeffs[1],
                               grad)
         else:
             _C.tv_grad(self.links, self.sh_data, start_dim, end_dim, scaling,
                     logalpha,
                     logalpha_delta,
                     True,
+                    ndc_coeffs[0], ndc_coeffs[1],
                     grad)
             self.sparse_sh_grad_indexer = None
 

@@ -12,6 +12,43 @@ const int TV_GRAD_CUDA_THREADS = 256;
 const int MIN_BLOCKS_PER_SM = 4;
 
 namespace device {
+
+__device__ __inline__
+void calculate_ray_scale(float ndc_coeffx,
+                         float ndc_coeffy,
+                         float z,
+                         float maxx,
+                         float maxy,
+                         float maxz,
+                         float* __restrict__ scale) {
+    if (ndc_coeffx > 0.f) {
+        // Normalized to [-1, 1] (with 0.5 padding)
+        // const float x_norm = (x + 0.5) / maxx * 2 - 1;
+        // const float y_norm = (y + 0.5) / maxy * 2 - 1;
+        const float z_norm = (z + 0.5) / maxz * 2 - 1;
+
+        // NDC distances
+        const float disparity = (1 - z_norm) / 2.f; // in [0, 1]
+        scale[0] = (ndc_coeffx * disparity) * maxx * 0.5f;
+        scale[1] = (ndc_coeffy * disparity) * maxy * 0.5f;
+        scale[2] = -((z_norm - 1.f + 2.f / maxz) * disparity);
+    } else {
+        scale[0] = maxx * 0.5f;
+        scale[1] = maxy * 0.5f;
+        scale[2] = maxz * 0.5f;
+    }
+}
+
+
+#define CALCULATE_RAY_SCALE(out_name) float out_name[3]; \
+    calculate_ray_scale( \
+            ndc_coeffx, ndc_coeffy, \
+            z, \
+            links.size(0), \
+            links.size(1), \
+            links.size(2), \
+            out_name)
+
 __global__ void tv_kernel(
         torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
         torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
@@ -19,6 +56,7 @@ __global__ void tv_kernel(
         float scale,
         size_t Q,
         bool ignore_edge,
+        float ndc_coeffx, float ndc_coeffy,
         // Output
         float* __restrict__ out) {
     CUDA_GET_THREAD_ID_U64(tid, Q);
@@ -35,6 +73,8 @@ __global__ void tv_kernel(
 
     if (ignore_edge && links[x][y][z] == 0) return;
 
+    CALCULATE_RAY_SCALE(scaling);
+
     const float val000 = (links[x][y][z] >= 0 ?
                           data[links[x][y][z]][idx] : 0.f);
     const float null_val = (ignore_edge ? val000 : 0.f);
@@ -44,9 +84,9 @@ __global__ void tv_kernel(
                           data[links[x][y + 1][z]][idx] : null_val);
     const float val001 = (links[x][y][z + 1] >= 0 ?
                           data[links[x][y][z + 1]][idx] : null_val);
-    const float dx = val100 - val000;
-    const float dy = val010 - val000;
-    const float dz = val001 - val000;
+    const float dx = (val100 - val000) * scaling[0];
+    const float dy = (val010 - val000) * scaling[1];
+    const float dz = (val001 - val000) * scaling[2];
     const float tresult = sqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
 
     const float bresult = BlockReduce(temp_storage).Sum(tresult);
@@ -63,6 +103,7 @@ __global__ void tv_grad_kernel(
         float scale,
         size_t Q,
         bool ignore_edge,
+        float ndc_coeffx, float ndc_coeffy,
         // Output
         float* __restrict__ grad_data) {
     CUDA_GET_THREAD_ID_U64(tid, Q);
@@ -75,6 +116,8 @@ __global__ void tv_grad_kernel(
     const int x = xy / (links.size(1) - 1);
 
     if (ignore_edge && links[x][y][z] == 0) return;
+
+    CALCULATE_RAY_SCALE(scaling);
 
     const float* dptr = data.data();
     const size_t ddim = data.size(1);
@@ -105,9 +148,9 @@ __global__ void tv_grad_kernel(
         gptr001 = grad_data + lnk;
     } else if (ignore_edge) v001 = v000;
 
-    const float dx = v100 - v000;
-    const float dy = v010 - v000;
-    const float dz = v001 - v000;
+    const float dx = (v100 - v000) * scaling[0];
+    const float dy = (v010 - v000) * scaling[1];
+    const float dz = (v001 - v000) * scaling[2];
     const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
     if (dx != 0.f) atomicAdd(gptr100, dx * idelta);
     if (dy != 0.f) atomicAdd(gptr010, dy * idelta);
@@ -124,6 +167,7 @@ __global__ void tv_grad_sparse_kernel(
         float scale,
         size_t Q,
         bool ignore_edge,
+        float ndc_coeffx, float ndc_coeffy,
         // Output
         bool* __restrict__ mask_out,
         float* __restrict__ grad_data) {
@@ -138,6 +182,9 @@ __global__ void tv_grad_sparse_kernel(
     const int32_t* __restrict__ links_ptr = &links[x][y][z];
 
     if (ignore_edge && *links_ptr == 0) return;
+
+    CALCULATE_RAY_SCALE(scaling);
+
     const int offx = links.stride(0), offy = links.stride(1);
 
     const float v000 = links_ptr[0] >= 0 ? data[links_ptr[0]][idx] : 0.f;
@@ -146,9 +193,9 @@ __global__ void tv_grad_sparse_kernel(
                 v010 = links_ptr[offy] >= 0 ? data[links_ptr[offy]][idx] : null_val,
                 v100 = links_ptr[offx] >= 0 ? data[links_ptr[offx]][idx] : null_val;
 
-    const float dx = v100 - v000;
-    const float dy = v010 - v000;
-    const float dz = v001 - v000;
+    const float dx = (v100 - v000) * scaling[0];
+    const float dy = (v010 - v000) * scaling[1];
+    const float dz = (v001 - v000) * scaling[2];
     const float idelta = scale * rsqrtf(1e-5f + dx * dx + dy * dy + dz * dz);
 #define MAYBE_ADD_SET(gp, val) if (links_ptr[gp] >= 0 && val != 0.f) { \
     atomicAdd(&grad_data[links_ptr[gp] * data.size(1) + idx], val * idelta); \
@@ -343,7 +390,9 @@ torch::Tensor tv(torch::Tensor links, torch::Tensor data,
                  int start_dim, int end_dim,
                  bool use_logalpha,
                  float logalpha_delta,
-                 bool ignore_edge) {
+                 bool ignore_edge,
+                 float ndc_coeffx,
+                 float ndc_coeffy) {
     DEVICE_GUARD(data);
     CHECK_INPUT(data);
     CHECK_INPUT(links);
@@ -359,6 +408,7 @@ torch::Tensor tv(torch::Tensor links, torch::Tensor data,
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
     torch::Tensor result = torch::zeros({}, data.options());
     if (use_logalpha) {
+        // TODO this should also use scaling
         device::tv_logalpha_kernel<<<blocks, cuda_n_threads>>>(
                 links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
                 data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
@@ -379,6 +429,7 @@ torch::Tensor tv(torch::Tensor links, torch::Tensor data,
                 1.f / nl,
                 Q,
                 ignore_edge,
+                ndc_coeffx, ndc_coeffy,
                 // Output
                 result.data_ptr<float>());
     }
@@ -393,6 +444,8 @@ void tv_grad(torch::Tensor links,
              bool use_logalpha,
              float logalpha_delta,
              bool ignore_edge,
+             float ndc_coeffx,
+             float ndc_coeffy,
              torch::Tensor grad_data) {
     DEVICE_GUARD(data);
     CHECK_INPUT(data);
@@ -431,6 +484,7 @@ void tv_grad(torch::Tensor links,
                 scale / nl,
                 Q,
                 ignore_edge,
+                ndc_coeffx, ndc_coeffy,
                 // Output
                 grad_data.data_ptr<float>());
     }
@@ -446,6 +500,8 @@ void tv_grad_sparse(torch::Tensor links,
              bool use_logalpha,
              float logalpha_delta,
              bool ignore_edge,
+             float ndc_coeffx,
+             float ndc_coeffy,
              torch::Tensor grad_data) {
     DEVICE_GUARD(data);
     CHECK_INPUT(data);
@@ -489,6 +545,7 @@ void tv_grad_sparse(torch::Tensor links,
                 scale / nl,
                 Q,
                 ignore_edge,
+                ndc_coeffx, ndc_coeffy,
                 // Output
                 (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
                 grad_data.data_ptr<float>());

@@ -36,10 +36,11 @@ void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
 void sample_cubemap(Tensor, Tensor, bool, Tensor);
 
 // Loss
-Tensor tv(Tensor, Tensor, int, int, bool, float, bool);
-void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, Tensor);
+Tensor tv(Tensor, Tensor, int, int, bool, float, bool, float, float);
+void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, float, float,
+             Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
-                    float, bool, Tensor);
+                    float, bool, float, float, Tensor);
 
 // Optim
 void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float, float,

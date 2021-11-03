@@ -127,7 +127,7 @@ group.add_argument('--sigma_thresh', type=float,
                     default=1.0,
                    help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--weight_thresh', type=float,
-                    default=0.0005,
+                    default=0.0002,
                    help='Resample (upsample to 512) weight threshold')
 group.add_argument('--use_weight_thresh', action='store_true', default=True,
                     help='use weight thresholding')
@@ -136,12 +136,12 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
 group.add_argument('--rms_beta', type=float, default=0.9)
-group.add_argument('--lambda_tv', type=float, default=1e-5)
+group.add_argument('--lambda_tv', type=float, default=1e-5)#1e-5)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)#0.0)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)#1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
@@ -406,7 +406,7 @@ while True:
                     stats[stat_name] = 0.0
                 #  if args.lambda_tv > 0.0:
                 #      with torch.no_grad():
-                #          tv = grid.tv(logalpha=args.tv_logalpha)
+                #          tv = grid.tv(logalpha=args.tv_logalpha, ndc_coeffs=dset.ndc_coeffs)
                 #      summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
                 #  if args.lambda_tv_sh > 0.0:
                 #      with torch.no_grad():
@@ -429,11 +429,13 @@ while True:
                 grid.inplace_tv_grad(grid.density_data.grad,
                         scaling=args.lambda_tv,
                         sparse_frac=args.tv_sparsity,
-                        logalpha=args.tv_logalpha)
+                        logalpha=args.tv_logalpha,
+                        ndc_coeffs=dset.ndc_coeffs)
             if args.lambda_tv_sh > 0.0:
                 grid.inplace_tv_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_tv_sh,
-                        sparse_frac=args.tv_sh_sparsity)
+                        sparse_frac=args.tv_sh_sparsity,
+                        ndc_coeffs=dset.ndc_coeffs)
             if args.lambda_l2_sh > 0.0:
                 grid.inplace_l2_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_l2_sh)
