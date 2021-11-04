@@ -149,7 +149,7 @@ group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
 
-group.add_argument('--lambda_tv_background', type=float, default=1e-1)
+group.add_argument('--lambda_tv_background', type=float, default=1e-3)
 group.add_argument('--tv_background_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
@@ -213,7 +213,7 @@ grid.density_data.data[:] = args.init_sigma
 
 if grid.use_background:
     grid.background_cubemap.data[..., -1] = args.init_sigma
-    grid.background_cubemap.data[..., :-1] = 0.5 / svox2.utils.SH_C0
+    grid.background_cubemap.data[..., :-1] = 0.0 / svox2.utils.SH_C0
 
 #  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
