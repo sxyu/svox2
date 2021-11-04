@@ -5,6 +5,7 @@ from typing import NamedTuple, Optional, Union
 from os import path
 import imageio
 from tqdm import tqdm
+import cv2
 import json
 import numpy as np
 
@@ -28,12 +29,19 @@ class NeRFDataset:
         root,
         split,
         device: Union[str, torch.device] = "cpu",
-        scene_scale: float = 2/3,
+        scene_scale: Optional[float] = None,
         factor: int = 1,
+        scale : Optional[float] = None,
         permutation: bool = True,
+        white_bkgd: bool = True,
+        **kwargs
     ):
         assert path.isdir(root), f"'{root}' is not a directory"
 
+        if scene_scale is None:
+            scene_scale = 2/3
+        if scale is None:
+            scale = 1.0
         self.device = device
         self.permutation = permutation
         all_c2w = []
@@ -56,6 +64,11 @@ class NeRFDataset:
             c2w = c2w @ cam_trans  # To OpenCV
 
             im_gt = imageio.imread(fpath)
+            if scale < 1.0:
+                full_size = list(im_gt.shape[:2])
+                rsz_h, rsz_w = [round(hw * scale) for hw in full_size]
+                im_gt = cv2.resize(im_gt, (rsz_w, rsz_h), interpolation=cv2.INTER_AREA)
+
             all_c2w.append(c2w)
             all_gt.append(torch.from_numpy(im_gt))
         focal = float(
@@ -66,8 +79,11 @@ class NeRFDataset:
 
         self.gt = torch.stack(all_gt).float() / 255.0
         if self.gt.size(-1) == 4:
-            # Apply alpha channel
-            self.gt = self.gt[..., :3] * self.gt[..., 3:] + (1.0 - self.gt[..., 3:])
+            if white_bkgd:
+                # Apply alpha channel
+                self.gt = self.gt[..., :3] * self.gt[..., 3:] + (1.0 - self.gt[..., 3:])
+            else:
+                self.gt = self.gt[..., :3]
 
         self.n_images, self.h_full, self.w_full, _ = self.gt.shape
         self.intrins_full : Intrin = Intrin(focal, focal,

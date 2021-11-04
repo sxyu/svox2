@@ -14,7 +14,7 @@ from warnings import warn
 
 class NSVFDataset:
     """
-    NSVF dataset loader
+    Extended NSVF dataset loader
     """
 
     focal: float
@@ -31,15 +31,21 @@ class NSVFDataset:
         root,
         split,
         device: Union[str, torch.device] = "cpu",
-        scene_scale: float = 1.0, #2/3,
-        factor: int = 1,
-        scale : float=1.0, #1.0/2.0,
+        scene_scale: Optional[float] = None,  # Scene scaling
+        factor: int = 1,                      # Image scaling (on ray gen; use gen_rays(factor) to dynamically change scale)
+        scale : Optional[float] = 1.0,                    # Image scaling (on load)
         permutation: bool = True,
         white_bkgd: bool = True,
         normalize_by_bbox: bool = True,
         data_bbox_scale : float = 1.1,
+        **kwargs
     ):
         assert path.isdir(root), f"'{root}' is not a directory"
+
+        if scene_scale is None:
+            scene_scale = 1.0
+        if scale is None:
+            scale = 1.0
 
         self.device = device
         self.permutation = permutation

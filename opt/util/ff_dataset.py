@@ -27,21 +27,24 @@ import imageio
 import cv2
 from .util import Rays, Intrin
 from .load_llff import load_llff_data
-from typing import Union
+from typing import Union, Optional
 
 from svox2.utils import convert_to_ndc
 
 class LLFFDataset(Dataset):
+    """
+    LLFF dataset loader adapted from NeX code
+    Some arguments are inherited from them and not super useful in our case
+    """
     def __init__(
         self,
         root : str,
         split : str,
         device: Union[str, torch.device] = "cpu",
         permutation: bool = True,
-        scene_scale: float = 1.0, # ignored
         factor: int = 1,
         ref_img: str="",
-        scale : float=1.0/4.0,  # 4x downsample
+        scale : Optional[float]=1.0/4.0,  # 4x downsample
         dmin : float=-1,
         dmax : int=-1,
         invz : int= 0,
@@ -49,7 +52,10 @@ class LLFFDataset(Dataset):
         render_style="",
         hold_every=8,
         offset=250,
+        **kwargs
     ):
+        if scale is None:
+            scale = 1.0 / 4.0  # Default 1/4 size for LLFF data since it's huge
         self.scale = scale
         self.dataset = root
         self.device = device

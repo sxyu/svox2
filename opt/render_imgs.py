@@ -1,4 +1,5 @@
 # Copyright 2021 Alex Yu
+# Eval
 
 import torch
 import svox2
@@ -9,16 +10,15 @@ import os
 from os import path
 from util.dataset import datasets
 from util.util import Timing
+from util import config_util
+
 import imageio
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
-parser.add_argument('data_dir', type=str)
-parser.add_argument('--dataset_type',
-                     choices=list(datasets.keys()) + ["auto"],
-                     default="auto",
-                     help="Dataset type (specify type or use auto)")
+
+config_util.define_common_args(parser)
 
 #  parser.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
 parser.add_argument('--n_eval', '-n', type=int, default=200, help='images to evaluate (equal interval), at most evals every image')
@@ -36,6 +36,7 @@ parser.add_argument('--nobg',
                     default=False,
                     help="Do not render background (if using BG model)")
 args = parser.parse_args()
+config_util.maybe_merge_config_file(args)
 device = 'cuda:0'
 
 render_dir = path.join(path.dirname(args.ckpt),
@@ -44,7 +45,8 @@ if args.render_path:
     assert not args.train
     render_dir += '_path'
 
-dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test")
+dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test",
+                                    **config_util.build_data_options(args))
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
 grid.opt.last_sample_opaque = dset.last_sample_opaque
@@ -61,14 +63,12 @@ if grid.use_background:
 print('Writing to', render_dir)
 os.makedirs(render_dir, exist_ok=True)
 
-step_size = 0.5  # 0.5 of a voxel!
-grid.opt.step_size = step_size
-grid.opt.sigma_thresh = 1e-8
-#  grid.opt.stop_thresh = 1e-8
+grid.opt.step_size = args.step_size
+grid.opt.sigma_thresh = args.sigma_thresh
+grid.opt.stop_thresh = args.stop_thresh
 grid.opt.background_brightness = 1.0
-grid.opt.backend = 'cuvol'
-
-grid.opt.background_msi_scale = 1.0
+grid.opt.backend = args.renderer_backend
+grid.opt.background_msi_scale = args.background_msi_scale
 
 with torch.no_grad():
     im_size = dset.h * dset.w

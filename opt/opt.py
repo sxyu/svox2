@@ -20,6 +20,7 @@ import argparse
 import cv2
 from util.dataset import datasets
 from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
+from util import config_util
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -29,31 +30,42 @@ from typing import NamedTuple, Optional, Union
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
-parser.add_argument('data_dir', type=str)
-parser.add_argument('--dataset_type',
-                     choices=list(datasets.keys()) + ["auto"],
-                     default="auto",
-                     help="Dataset type (specify type or use auto)")
+config_util.define_common_args(parser)
+
 
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
-group.add_argument('--final_reso', type=int, default=
-                        512,
-                   help='FINAL grid resolution')
-group.add_argument('--init_reso', type=int, default=
-                        128,
-                   help='INITIAL grid resolution')
-#  group.add_argument('--ref_reso', type=int, default=
-#                          512,
-#                     help='reference grid resolution (for adjusting lr)')
-group.add_argument('--z_reso_factor', type=float, default=
-                        #  192/1024,
-                        1,
-                   help='z dimension resolution factor')
+
+group.add_argument('--reso',
+                        type=str,
+                        default=
+                        "[[128, 128, 128], [256, 256, 256], [512, 512, 512]]",
+                       help='List of grid resolution (will be evaled as json);'
+                            'resamples to the next one every upsamp_every iters, then ' +
+                            'stays at the last one; ' +
+                            'should be a list where each item is a list of 3 ints or an int')
+group.add_argument('--upsamp_every', type=int, default=
+                     2 * 12800,
+                    help='upsample the grid every x iters')
+
+
+group.add_argument('--basis_type',
+                    choices=['sh', '3d_texture', 'mlp'],
+                    default='sh',
+                    help='Basis function type')
+
 group.add_argument('--basis_reso', type=int, default=32,
-                   help='basis grid resolution')
+                   help='basis grid resolution (only for learned texture)')
 group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimensions (at most 10)')
+
+group.add_argument('--mlp_posenc_size', type=int, default=4, help='Positional encoding size if using MLP basis; 0 to disable')
+group.add_argument('--mlp_width', type=int, default=32, help='MLP width if using MLP basis')
+
+group.add_argument('--background_nlayers', type=int, default=32, help='Number of background layers (0=disable BG model)')
+group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
+
+
 
 group = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=
@@ -110,36 +122,31 @@ group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponen
 
 group.add_argument('--n_iters', type=int, default=20 * 12800, help='number of iters to optimize for')
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--upsamp_every', type=int, default=
-                     2 * 12800,
-                    help='upsample the grid every x iters')
 group.add_argument('--save_every', type=int, default=2, #5,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
 
-group = parser.add_argument_group("initialization")
 group.add_argument('--init_sigma', type=float,
                    default=0.1,
                    help='initialization sigma')
+
+
 
 group = parser.add_argument_group("misc experiments")
 group.add_argument('--perm', action='store_true', default=True,
                     help='sample by permutation of rays (true epoch) instead of '
                          'uniformly random rays')
-group.add_argument('--sigma_thresh', type=float,
-                    default=1.0,
-                   help='Resample (upsample to 512) sigma threshold')
 group.add_argument('--weight_thresh', type=float,
                     default=0.0005,
                    help='Resample (upsample to 512) weight threshold')
-group.add_argument('--use_weight_thresh', action='store_true', default=True,
-                    help='use weight thresholding')
 
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
-group = parser.add_argument_group("misc experiments")
+
+
+group = parser.add_argument_group("losses")
 # Foreground TV
 group.add_argument('--lambda_tv', type=float, default=1e-5)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
@@ -166,10 +173,9 @@ group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
-group.add_argument('--basis_type',
-                    choices=['sh', '3d_texture', 'mlp'],
-                    default='sh')
+
 args = parser.parse_args()
+config_util.maybe_merge_config_file(args)
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
 assert args.lr_sh_final <= args.lr_sh, "lr_sh must be >= lr_sh_final"
@@ -178,15 +184,17 @@ assert args.lr_basis_final <= args.lr_basis, "lr_basis must be >= lr_basis_final
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
+reso_list = json.loads(args.reso)
+reso_id = 0
+
 with open(path.join(args.train_dir, 'args.json'), 'w') as f:
     json.dump(args.__dict__, f, indent=2)
-    shutil.copyfile(__file__, path.join(args.train_dir, 'opt.py'))
+    # Changed name to prevent errors
+    shutil.copyfile(__file__, path.join(args.train_dir, 'opt_frozen.py'))
 
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
-reso = args.init_reso
-#  factor = args.ref_reso // reso
 factor = 1
 
 dset = datasets[args.dataset_type](
@@ -194,13 +202,13 @@ dset = datasets[args.dataset_type](
                split="train",
                device=device,
                permutation=args.perm,
-               factor=factor)
+               factor=factor,
+               **config_util.build_data_options(args))
 dset.shuffle_rays()
 dset_test = datasets[args.dataset_type](
-        args.data_dir, split="test")
+        args.data_dir, split="test", **config_util.build_data_options(args))
 
-grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
-                             reso, reso, int(reso * args.z_reso_factor)],
+grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         center=dset.scene_center,
                         radius=dset.scene_radius,
                         use_sphere_bound=dset.use_sphere_bound,
@@ -209,9 +217,10 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         device=device,
                         basis_reso=args.basis_reso,
                         basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
-                        mlp_posenc_size=4,
-                        background_nlayers=32,
-                        background_reso=512)#1024)
+                        mlp_posenc_size=args.mlp_posenc_size,
+                        mlp_width=args.mlp_width,
+                        background_nlayers=args.background_nlayers,
+                        background_reso=args.background_reso)
 
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
@@ -248,16 +257,12 @@ elif grid.basis_type == svox2.BASIS_TYPE_MLP:
 
 
 grid.requires_grad_(True)
-step_size = 0.5  # 0.5 of a voxel!
-#  step_size = 2.0
-
-grid.opt.step_size = step_size
-grid.opt.sigma_thresh = 1e-8
-grid.opt.background_brightness = 1.0
-grid.opt.backend = 'cuvol'
-
-# FIXME: Testing
-grid.opt.background_msi_scale = 1.0
+grid.opt.step_size = args.step_size
+grid.opt.sigma_thresh = args.sigma_thresh
+grid.opt.stop_thresh = args.stop_thresh
+grid.opt.background_brightness = args.background_brightness
+grid.opt.background_msi_scale = args.background_msi_scale
+grid.opt.backend = args.renderer_backend
 
 gstep_id_base = 0
 
@@ -493,30 +498,27 @@ while True:
 
     if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
         last_upsamp_step = gstep_id_base
-        if reso < args.final_reso:
-            print('* Upsampling from', reso, 'to', reso * 2)
-            non_final = reso < args.final_reso
-            if non_final:
-                reso *= 2
+        if reso_id < len(reso_list) - 1:
+            print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
+            reso_id += 1
             use_sparsify = True
-            grid.resample(reso=reso if args.z_reso_factor == 1 else [
-                             reso, reso, int(reso * args.z_reso_factor)],
-                    sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
+            grid.resample(reso=reso_list[reso_id],
+                    #  sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=2, #use_sparsify,
                     cameras=resample_cameras)
-            if non_final:
-                if args.lr_sh_upscale_factor > 1:
-                    lr_sh_factor *= args.lr_sh_upscale_factor
-                    print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
+            if args.lr_sh_upscale_factor > 1:
+                lr_sh_factor *= args.lr_sh_upscale_factor
+                print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
-        if factor > 1 and reso < args.final_reso:
+        if factor > 1 and reso_id < len(reso_list) - 1:
+            print('* Using higher resolution images due to large grid; new factor', factor)
             factor //= 2
             dset.gen_rays(factor=factor)
             dset.shuffle_rays()
 
     if gstep_id_base >= args.n_iters:
-        print('Final eval and save')
+        print('* Final eval and save')
         eval_step()
         if not args.tune_mode:
             grid.save(ckpt_path)
