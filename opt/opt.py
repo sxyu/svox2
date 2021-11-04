@@ -275,7 +275,7 @@ resample_cameras = [
                      width=dset.w,
                      height=dset.h,
                      ndc_coeffs=dset.ndc_coeffs) for c2w in dset.c2w
-    ] if args.use_weight_thresh else None
+    ]
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
