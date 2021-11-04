@@ -410,10 +410,11 @@ __global__ void msi_tv_grad_sparse_kernel(
         const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> cubemap,
         const int32_t* __restrict__ rand_cells,
         float scale,
+        float scale_last,
         size_t Q,
         // Output
         torch::PackedTensorAccessor32<bool, 4, torch::RestrictPtrTraits> cubemap_mask,
-		torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> grad_cubemap) {
+        torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> grad_cubemap) {
     CUDA_GET_THREAD_ID_U64(tid, Q);
     const int channel_id = tid % cubemap.size(4);
     const int msi_idx = rand_cells[tid / cubemap.size(4)];
@@ -429,6 +430,10 @@ __global__ void msi_tv_grad_sparse_kernel(
     const float v01 = cubemap[layer_id][face_id][u][v + 1][channel_id];
     const float v10 = cubemap[layer_id][face_id][u + 1][v][channel_id];
     const float v_nxl = cubemap[layer_id + 1][face_id][u][v][channel_id];
+
+    if (channel_id == cubemap.size(4) - 1) {
+        scale = scale_last;
+    }
 
     float dx = (v10 - v00);
     float dy = (v01 - v00);
@@ -641,6 +646,7 @@ void msi_tv_grad_sparse(torch::Tensor cubemap,
              torch::Tensor rand_cells,
              torch::Tensor mask_out,
              float scale,
+             float scale_last,
              torch::Tensor grad_cubemap) {
     DEVICE_GUARD(cubemap);
     CHECK_INPUT(cubemap);
@@ -662,6 +668,7 @@ void msi_tv_grad_sparse(torch::Tensor cubemap,
             cubemap.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
             rand_cells.data_ptr<int32_t>(),
             scale / nl,
+            scale_last / nl,
             Q,
             // Output
             mask_out.packed_accessor32<bool, 4, torch::RestrictPtrTraits>(),

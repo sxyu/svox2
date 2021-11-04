@@ -106,6 +106,7 @@ group.add_argument('--lr_basis_delay_steps', type=int, default=0,#15000,
 group.add_argument('--lr_basis_begin_step', type=int, default=0)#4 * 12800)
 group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
+group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
 group.add_argument('--n_iters', type=int, default=20 * 12800, help='number of iters to optimize for')
 group.add_argument('--print_every', type=int, default=20, help='print every')
@@ -138,7 +139,8 @@ group.add_argument('--use_weight_thresh', action='store_true', default=True,
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 
-group.add_argument('--rms_beta', type=float, default=0.95)
+group = parser.add_argument_group("misc experiments")
+# Foreground TV
 group.add_argument('--lambda_tv', type=float, default=1e-5)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
@@ -148,11 +150,17 @@ group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
+# End Foreground TV
 
-group.add_argument('--lambda_tv_background', type=float, default=1e-3)
+
+# Background TV
+group.add_argument('--lambda_tv_background_sigma', type=float, default=1e-4)
+group.add_argument('--lambda_tv_background_color', type=float, default=1e-4)
+
 group.add_argument('--tv_background_sparsity', type=float, default=0.01)
+# End Background TV
 
-group.add_argument('--lambda_tv_basis', type=float, default=0.0)
+group.add_argument('--lambda_tv_basis', type=float, default=0.0, help='Learned basis total variation loss')
 
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
@@ -202,8 +210,8 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         basis_reso=args.basis_reso,
                         basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
                         mlp_posenc_size=4,
-                        background_nlayers=16,
-                        background_reso=256)#1024)
+                        background_nlayers=32,
+                        background_reso=512)#1024)
 
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
@@ -448,9 +456,10 @@ while True:
             if args.lambda_l2_sh > 0.0:
                 grid.inplace_l2_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_l2_sh)
-            if args.lambda_tv_background > 0.0:
+            if args.lambda_tv_background_sigma > 0.0 or args.lambda_tv_background_color > 0.0:
                 grid.inplace_tv_background_grad(grid.background_cubemap.grad,
-                        scaling=args.lambda_tv_background,
+                        scaling=args.lambda_tv_background_color,
+                        scaling_density=args.lambda_tv_background_sigma,
                         sparse_frac=args.tv_background_sparsity)
             if args.lambda_tv_basis > 0.0:
                 tv_basis = grid.tv_basis()

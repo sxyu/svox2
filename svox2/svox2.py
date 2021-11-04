@@ -1464,6 +1464,7 @@ class SparseGrid(nn.Module):
         self,
         grad: torch.Tensor,
         scaling: float = 1.0,
+        scaling_density: Optional[float] = None,
         sparse_frac: float = 0.01
     ):
         """
@@ -1476,11 +1477,14 @@ class SparseGrid(nn.Module):
 
         rand_cells_bg = self._get_rand_cells_background(sparse_frac)
         indexer = self._get_sparse_background_grad_indexer()
+        if scaling_density is None:
+            scaling_density = scaling
         _C.msi_tv_grad_sparse(
                           self.background_cubemap,
                           rand_cells_bg,
                           indexer,
                           scaling,
+                          scaling_density,
                           grad)
 
     def inplace_tv_basis_grad(
