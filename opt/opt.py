@@ -40,19 +40,23 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
 group.add_argument('--reso',
                         type=str,
                         default=
-                        "[[128, 128, 128], [256, 256, 256], [512, 512, 512]]",
+                        "[[128, 128, 128], [256, 256, 256], [512, 512, 512], [768, 768, 768]]",
+                        #  "[[256, 256, 256], [512, 512, 512]]",
                        help='List of grid resolution (will be evaled as json);'
                             'resamples to the next one every upsamp_every iters, then ' +
                             'stays at the last one; ' +
                             'should be a list where each item is a list of 3 ints or an int')
 group.add_argument('--upsamp_every', type=int, default=
                      2 * 12800,
+                     #  3 * 12800,
                     help='upsample the grid every x iters')
-
+group.add_argument('--upsample_density_factor', type=float, default=
+                    1.0,
+                    help='multiply the remaining density by this amount when upsampling')
 
 group.add_argument('--basis_type',
                     choices=['sh', '3d_texture', 'mlp'],
-                    default='sh',
+                    default='3d_texture',
                     help='Basis function type')
 
 group.add_argument('--basis_reso', type=int, default=32,
@@ -62,7 +66,8 @@ group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimen
 group.add_argument('--mlp_posenc_size', type=int, default=4, help='Positional encoding size if using MLP basis; 0 to disable')
 group.add_argument('--mlp_width', type=int, default=32, help='MLP width if using MLP basis')
 
-group.add_argument('--background_nlayers', type=int, default=32, help='Number of background layers (0=disable BG model)')
+group.add_argument('--background_nlayers', type=int, default=0, #32,
+                   help='Number of background layers (0=disable BG model)')
 group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
 
 
@@ -106,11 +111,11 @@ group.add_argument('--lr_color_bg', type=float, default=1e-2, help='SGD/rmsprop 
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-3,
+                      1e-6,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_basis_final', type=float,
                       default=
-                      1e-4
+                      1e-6
                     )
 group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
 group.add_argument('--lr_basis_delay_steps', type=int, default=0,#15000,
@@ -148,13 +153,17 @@ group.add_argument('--tune_mode', action='store_true', default=False,
 
 group = parser.add_argument_group("losses")
 # Foreground TV
-group.add_argument('--lambda_tv', type=float, default=1e-5)
+group.add_argument('--lambda_tv', type=float, default=1e-3)#1e-5)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
-group.add_argument('--tv_logalpha', action='store_true', default=False,
+group.add_argument('--tv_logalpha', action='store_true', default=True,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
 group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
+
+group.add_argument('--lambda_tv_lumisphere', type=float, default=0.0)#1e-2)#1e-3)
+group.add_argument('--tv_lumisphere_sparsity', type=float, default=0.01)
+group.add_argument('--tv_lumisphere_dir_factor', type=float, default=0.0)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
 # End Foreground TV
@@ -167,7 +176,8 @@ group.add_argument('--lambda_tv_background_color', type=float, default=1e-4)
 group.add_argument('--tv_background_sparsity', type=float, default=0.01)
 # End Background TV
 
-group.add_argument('--lambda_tv_basis', type=float, default=0.0, help='Learned basis total variation loss')
+group.add_argument('--lambda_tv_basis', type=float, default=0.0,
+                   help='Learned basis total variation loss')
 
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
@@ -243,10 +253,10 @@ if grid.use_background:
 optim_basis_mlp = None
 
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
-    #  grid.reinit_learned_bases(init_type='sh')
+    grid.reinit_learned_bases(init_type='sh')
     #  grid.reinit_learned_bases(init_type='fourier')
     #  grid.reinit_learned_bases(init_type='sg', upper_hemi=True)
-    grid.basis_data.data.normal_(mean=0.28209479177387814, std=0.001)
+    #  grid.basis_data.data.normal_(mean=0.28209479177387814, std=0.001)
 
 elif grid.basis_type == svox2.BASIS_TYPE_MLP:
     # MLP!
@@ -445,6 +455,7 @@ while True:
                     grid.sh_data.data *= args.weight_decay_sigma
                 if args.weight_decay_sigma < 1.0:
                     grid.density_data.data *= args.weight_decay_sh
+            torch.cuda.synchronize()  # FIXME remove
 
             # Apply TV/Sparsity regularizers
             if args.lambda_tv > 0.0:
@@ -453,15 +464,24 @@ while True:
                         sparse_frac=args.tv_sparsity,
                         logalpha=args.tv_logalpha,
                         ndc_coeffs=dset.ndc_coeffs)
+                torch.cuda.synchronize()  # FIXME remove
             if args.lambda_tv_sh > 0.0:
                 grid.inplace_tv_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_tv_sh,
                         sparse_frac=args.tv_sh_sparsity,
                         ndc_coeffs=dset.ndc_coeffs)
+                torch.cuda.synchronize()  # FIXME remove
+            if args.lambda_tv_lumisphere > 0.0:
+                grid.inplace_tv_lumisphere_grad(grid.sh_data.grad,
+                        scaling=args.lambda_tv_lumisphere,
+                        dir_factor=args.tv_lumisphere_dir_factor,
+                        sparse_frac=args.tv_lumisphere_sparsity,
+                        ndc_coeffs=dset.ndc_coeffs)
+                torch.cuda.synchronize()  # FIXME remove
             if args.lambda_l2_sh > 0.0:
                 grid.inplace_l2_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_l2_sh)
-            if args.lambda_tv_background_sigma > 0.0 or args.lambda_tv_background_color > 0.0:
+            if grid.use_background and (args.lambda_tv_background_sigma > 0.0 or args.lambda_tv_background_color > 0.0):
                 grid.inplace_tv_background_grad(grid.background_cubemap.grad,
                         scaling=args.lambda_tv_background_color,
                         scaling_density=args.lambda_tv_background_sigma,
@@ -507,6 +527,9 @@ while True:
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=2, #use_sparsify,
                     cameras=resample_cameras)
+            
+            if args.upsample_density_factor:
+                grid.density_data.data[:] *= args.upsample_density_factor
             if args.lr_sh_upscale_factor > 1:
                 lr_sh_factor *= args.lr_sh_upscale_factor
                 print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)

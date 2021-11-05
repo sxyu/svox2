@@ -25,75 +25,30 @@ struct CubemapBilerpQuery {
     float duv[2];
 };
 
-struct ConcentricSpheresIntersector {
-    __device__
-        ConcentricSpheresIntersector(
-                const int* size,
-                const float* __restrict__ rorigin,
-                const float* __restrict__ rdir,
-                float rworld_step)
-    {
-        const float sphere_scaling[3] {
-            2.f / float(size[0]),
-            2.f / float(size[1]),
-            2.f / float(size[2])
-        };
-
-#pragma unroll 3
-        for (int i = 0; i < 3; ++i) {
-            origin[i] = fmaf(rorigin[i] + 0.5f, sphere_scaling[i], -1.f);
-            dir[i] = rdir[i] * sphere_scaling[i];
-        }
-        float inorm = 1.f / _norm(dir);
-        world_step_scale = rworld_step * inorm;
-#pragma unroll 3
-        for (int i = 0; i < 3; ++i) {
-            dir[i] *= inorm;
-        }
-
-        q2a = 2 * _dot(dir, dir);
-        qb = 2 * _dot(origin, dir);
-        f = qb * qb - 2 * q2a * _dot(origin, origin);
-    }
-
-    // Get the far intersection, which we want for rendering MSI
-    __device__
-    bool intersect(float r, float* __restrict__ out) {
-        float det = _det(r);
-        if (det < 0) return false;
-        *out = (-qb + sqrtf(det)) / q2a;
-        return true;
-    }
-
-    __device__
-    bool intersect_near(float r, float* __restrict__ out) {
-        float det = _det(r);
-        if (det < 0) return false;
-        *out = (-qb - sqrtf(det)) / q2a;
-        return true;
-    }
-
-    __device__ __host__
-    float _det (float r) {
-        return f + 2 * q2a * r * r;
-    }
-
-    float origin[3], dir[3];
-    float world_step_scale;
-    float q2a, qb, f;
-};
-
 __device__ __inline__ void
     invert_cubemap(int u, int v, float r,
                    int reso,
                    float* __restrict__ out) {
     const float u_norm = (u + 0.5f) / reso * 2 - 1;
     const float v_norm = (v + 0.5f) / reso * 2 - 1;
+    // EAC
     const float tx = tanf((M_PI / 4) * u_norm);
     const float ty = tanf((M_PI / 4) * v_norm);
     const float common = r * rnorm3df(1.f, tx, ty);
     out[0] = tx * common;
     out[1] = ty * common;
+    out[2] = common;
+}
+
+__device__ __inline__ void
+    invert_cubemap_traditional(int u, int v, float r,
+                   int reso,
+                   float* __restrict__ out) {
+    const float u_norm = (u + 0.5f) / reso * 2 - 1;
+    const float v_norm = (v + 0.5f) / reso * 2 - 1;
+    const float common = r * rnorm3df(1.f, u_norm, v_norm);
+    out[0] = u_norm * common;
+    out[1] = v_norm * common;
     out[2] = common;
 }
 
@@ -267,6 +222,57 @@ __device__ __inline__ void
 #undef _ADD_CUBEVERT
 
     }
+
+__device__ __host__ __inline__ float
+    multi_cubemap_sample(
+                const float* __restrict__ cubemap1, // (6, face_reso, face_reso, n_channels)
+                const float* __restrict__ cubemap2, // (6, face_reso, face_reso, n_channels)
+                const CubemapBilerpQuery& query,
+                float interp_wt,
+                int face_reso,
+                int n_channels,
+                int chnl_id) {
+        const float val1 = cubemap_sample(cubemap1, 
+                query,
+                face_reso,
+                n_channels,
+                chnl_id);
+        const float val2 = cubemap_sample(cubemap2,
+                query,
+                face_reso,
+                n_channels,
+                chnl_id);
+        return lerp(val1, val2, interp_wt);
+    }
+
+__device__ __inline__ void
+    multi_cubemap_sample_backward(
+                float* __restrict__ cubemap_grad1, // (6, face_reso, face_reso, n_channels)
+                float* __restrict__ cubemap_grad2, // (6, face_reso, face_reso, n_channels)
+                const CubemapBilerpQuery& query,
+                float interp_wt,
+                int face_reso,
+                int n_channels,
+                float grad_out,
+                int chnl_id,
+                bool* __restrict__ mask_out1 = nullptr,
+                bool* __restrict__ mask_out2 = nullptr) {
+        cubemap_sample_backward(cubemap_grad1,
+                query,
+                face_reso,
+                n_channels,
+                grad_out * (1.f - interp_wt),
+                chnl_id,
+                mask_out1);
+        cubemap_sample_backward(cubemap_grad2,
+                query,
+                face_reso,
+                n_channels,
+                grad_out * interp_wt,
+                chnl_id,
+                mask_out2);
+    }
+
 
 }  // namespace device
 }  // namespace

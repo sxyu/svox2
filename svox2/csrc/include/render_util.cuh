@@ -298,18 +298,17 @@ __device__ __inline__ void calc_sphfunc(
             p[j] -= static_cast<float>(l[j]);
         }
 
-        if (lane_id > 0 && lane_id < grid.basis_dim) {
+        if (lane_id < grid.basis_dim) {
             out[lane_id] =
                     fmaxf(
                         trilerp_one(
                         grid.basis_data,
                         grid.basis_reso,
-                        grid.basis_dim - 1,
+                        grid.basis_dim,
                         l, p,
-                        lane_id - 1),
+                        lane_id),
                         0.f);
         }
-        out[0] = C0;
     } else if (grid.basis_type == BASIS_TYPE_MLP) {
         const float* __restrict__ basis_ptr = grid.basis_data + grid.basis_dim * ray_id;
         if (lane_id < grid.basis_dim) {
@@ -343,13 +342,13 @@ __device__ __inline__ void calc_sphfunc_backward(
         }
 
         __syncwarp((1U << grid.sh_data_dim) - 1);
-        if (lane_id > 0 && lane_id < grid.basis_dim && output_saved[lane_id] > 0.f) {
+        if (lane_id < grid.basis_dim && output_saved[lane_id] > 0.f) {
             trilerp_backward_one<float, int32_t>(grad_basis_data,
                     grid.basis_reso,
-                    grid.basis_dim - 1,
+                    grid.basis_dim,
                     l, p,
                     grad_output[lane_id],
-                    lane_id - 1);
+                    lane_id);
         }
     } else if (grid.basis_type == BASIS_TYPE_MLP) {
         float* __restrict__ grad_basis_ptr = grad_basis_data + grid.basis_dim * ray_id;
@@ -384,7 +383,7 @@ __device__ __inline__ float _get_delta_scale(
     dir[0] *= scaling[0];
     dir[1] *= scaling[1];
     dir[2] *= scaling[2];
-    float delta_scale = 1.f / _norm(dir);
+    float delta_scale = _rnorm(dir);
     dir[0] *= delta_scale;
     dir[1] *= delta_scale;
     dir[2] *= delta_scale;
@@ -448,7 +447,7 @@ __device__ __inline__ void ray_find_bounds(
     // Warning: modifies ray.dir
     ray.world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
 
-    ray.tmin = 0.0f;
+    ray.tmin = opt.near_clip;
     ray.tmax = 2e3f;
     for (int i = 0; i < 3; ++i) {
         const float invdir = 1.0 / ray.dir[i];
@@ -458,6 +457,104 @@ __device__ __inline__ void ray_find_bounds(
             ray.tmin = max(ray.tmin, min(t1, t2));
             ray.tmax = min(ray.tmax, max(t1, t2));
         }
+    }
+}
+
+// struct ConcentricSpheresIntersector {
+//     __device__
+//         ConcentricSpheresIntersector(
+//                 const int* size,
+//                 const float* __restrict__ rorigin,
+//                 const float* __restrict__ rdir,
+//                 float rworld_step)
+//     {
+//         const float sphere_scaling[3] {
+//             2.f / float(size[0]),
+//             2.f / float(size[1]),
+//             2.f / float(size[2])
+//         };
+//
+// #pragma unroll 3
+//         for (int i = 0; i < 3; ++i) {
+//             origin[i] = fmaf(rorigin[i] + 0.5f, sphere_scaling[i], -1.f);
+//             dir[i] = rdir[i] * sphere_scaling[i];
+//         }
+//         float inorm = 1.f / _norm(dir);
+//         world_step_scale = rworld_step * inorm;
+// #pragma unroll 3
+//         for (int i = 0; i < 3; ++i) {
+//             dir[i] *= inorm;
+//         }
+//
+//         q2a = 2 * _dot(dir, dir);
+//         qb = 2 * _dot(origin, dir);
+//         f = qb * qb - 2 * q2a * _dot(origin, origin);
+//     }
+//
+//     // Get the far intersection, which we want for rendering MSI
+//     __device__
+//     bool intersect(float r, float* __restrict__ out) {
+//         float det = _det(r);
+//         if (det < 0) return false;
+//         *out = (-qb + sqrtf(det)) / q2a;
+//         return true;
+//     }
+//
+//     __device__
+//     bool intersect_near(float r, float* __restrict__ out) {
+//         float det = _det(r);
+//         if (det < 0) return false;
+//         *out = (-qb - sqrtf(det)) / q2a;
+//         return true;
+//     }
+//
+//     __device__ __host__
+//     float _det (float r) {
+//         return f + 2 * q2a * r * r;
+//     }
+//
+//     float origin[3], dir[3];
+//     float world_step_scale;
+//     float q2a, qb, f;
+// };
+
+__device__ __inline__ void ray_find_bounds_bg(
+        SingleRaySpec& __restrict__ ray,
+        const PackedSparseGridSpec& __restrict__ grid,
+        const RenderOptions& __restrict__ opt) {
+    // Warning: modifies ray.origin
+    transform_coord(ray.origin, grid._scaling, grid._offset);
+    // Warning: modifies ray.dir
+    ray.world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
+
+    const float sphere_scaling[3] {
+        2.f / float(grid.size[0]),
+        2.f / float(grid.size[1]),
+        2.f / float(grid.size[2])
+    };
+
+#pragma unroll 3
+    for (int i = 0; i < 3; ++i) {
+        ray.origin[i] = fmaf(ray.origin[i] + 0.5f, sphere_scaling[i], -1.f);
+        ray.dir[i] = ray.dir[i] * sphere_scaling[i];
+    }
+
+    const float inorm = _rnorm(ray.dir);
+    ray.world_step *= inorm;
+#pragma unroll 3
+    for (int i = 0; i < 3; ++i) {
+        ray.dir[i] *= inorm;
+    }
+
+    float q2a = 2 * _dot(ray.dir, ray.dir);
+    float qb = 2 * _dot(ray.origin, ray.dir);
+    float f = qb * qb - 2 * q2a * _dot(ray.origin, ray.origin);
+    const float det = f + 2 * q2a * opt.background_msi_scale * opt.background_msi_scale;
+
+    if (det < 0.f) {
+        ray.tmin = opt.background_msi_scale; 
+    } else {
+        ray.tmin = (-qb + sqrtf(det)) / q2a;
     }
 }
 

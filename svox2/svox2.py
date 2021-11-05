@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from warnings import warn
 from functools import reduce
 from tqdm import tqdm
+from scipy.spatial.transform import Rotation
 import numpy as np
 
 _C = utils._get_c_extension()
@@ -51,6 +52,7 @@ class RenderOptions:
     last_sample_opaque: bool = False   # Make the last sample opaque (for forward-facing)
 
     background_msi_scale: float = 1.0
+    near_clip: float = 0.0
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -61,6 +63,8 @@ class RenderOptions:
         opt.step_size = self.step_size
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
+        opt.near_clip = self.near_clip
+
         opt.last_sample_opaque = self.last_sample_opaque
         opt.background_msi_scale = self.background_msi_scale
         #  opt.randomize = randomize
@@ -325,6 +329,7 @@ class SparseGrid(nn.Module):
         self.mlp_width = mlp_width
 
         self.background_nlayers = background_nlayers
+        assert background_nlayers != 1, "1 layer breaks trilerp"
         self.background_reso = background_reso
 
         if isinstance(reso, int):
@@ -412,7 +417,7 @@ class SparseGrid(nn.Module):
             self.basis_data = nn.Parameter(
                 torch.zeros(
                     basis_reso, basis_reso, basis_reso,
-                    self.basis_dim - 1, dtype=torch.float32, device=device
+                    self.basis_dim, dtype=torch.float32, device=device
                 )
             )
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -609,7 +614,7 @@ class SparseGrid(nn.Module):
         gsz_cu = gsz.to(device=dirs.device)
         t1 = (-0.5 - origins) * invdirs
         t2 = (gsz_cu - 0.5 - origins) * invdirs
-        t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(0.0)
+        t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(self.opt.near_clip)
         tmax = torch.min(torch.max(t1, t2), dim=-1).values
 
         log_light_intensity = torch.zeros(B, device=origins.device)
@@ -994,6 +999,7 @@ class SparseGrid(nn.Module):
             self.density_data.grad = None
             self.sh_data.grad = None
             self.sparse_grad_indexer = None
+            self.sparse_sh_grad_indexer = None
             self.density_rms = None
             self.sh_rms = None
 
@@ -1407,9 +1413,15 @@ class SparseGrid(nn.Module):
 
         rand_cells = self._get_rand_cells(sparse_frac)
         if rand_cells is not None:
+            indexer = self._get_sparse_sh_grad_indexer()
+            #  if self.links.size(0) == 512:
+            #      print('rc', rand_cells.shape, self.links.shape, self.sh_data.shape,
+            #                  start_dim, end_dim,
+            #                  indexer.shape)
+            #      breakpoint()
             _C.tv_grad_sparse(self.links, self.sh_data,
                               rand_cells,
-                              self._get_sparse_sh_grad_indexer(),
+                              indexer,
                               start_dim, end_dim, scaling,
                               logalpha,
                               logalpha_delta,
@@ -1424,6 +1436,81 @@ class SparseGrid(nn.Module):
                     ndc_coeffs[0], ndc_coeffs[1],
                     grad)
             self.sparse_sh_grad_indexer = None
+
+    def inplace_tv_lumisphere_grad(
+        self,
+        grad: torch.Tensor,
+        start_dim: int = 0,
+        end_dim: Optional[int] = None,
+        scaling: float = 1.0,
+        sparse_frac: float = 0.01,
+        logalpha: bool=False,
+        logalpha_delta: float=2.0,
+        ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
+        dir_factor: float=1.0,
+        dir_perturb_radians: float=0.05
+    ):
+        assert (
+            _C is not None and self.sh_data.is_cuda and grad.is_cuda
+        ), "CUDA extension is currently required for total variation"
+        assert self.basis_type != BASIS_TYPE_MLP, "MLP not supported"
+             #  SparseGridSpec& grid,
+             #  torch::Tensor rand_cells,
+             #  torch::Tensor sample_dirs,
+             #  float scale,
+             #  float ndc_coeffx,
+             #  float ndc_coeffy,
+             #  float dir_factor,
+             #  GridOutputGrads& grads) {
+        rand_cells = self._get_rand_cells(sparse_frac)
+        grad_holder = _C.GridOutputGrads()
+
+        indexer = self._get_sparse_sh_grad_indexer()
+        assert indexer is not None
+        grad_holder.mask_out = indexer
+        grad_holder.grad_sh_out = grad
+
+        batch_size = rand_cells.size(0)
+
+        dirs = torch.randn(3, device=rand_cells.device)
+        dirs /= torch.norm(dirs)
+
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            sh_mult = self._eval_learned_bases(dirs[None])
+        elif self.basis_type == BASIS_TYPE_MLP:
+            sh_mult = torch.sigmoid(self._eval_basis_mlp(dirs[None]))
+        else:
+            sh_mult = utils.eval_sh_bases(self.basis_dim, dirs[None])
+        sh_mult = sh_mult[0]
+
+        if dir_factor > 0.0:
+            axis = torch.randn((batch_size, 3))
+            axis /= torch.norm(axis, dim=-1, keepdim=True)
+            axis *= dir_perturb_radians
+            R = Rotation.from_rotvec(axis.numpy()).as_matrix()
+            R = torch.from_numpy(R).float().to(device=rand_cells.device)
+            dirs_perturb = (R * dirs.unsqueeze(-2)).sum(-1)
+        else:
+            dirs_perturb = dirs # Dummy, since it won't be used
+
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            sh_mult_u = self._eval_learned_bases(dirs_perturb[None])
+        elif self.basis_type == BASIS_TYPE_MLP:
+            sh_mult_u = torch.sigmoid(self._eval_basis_mlp(dirs_perturb[None]))
+        else:
+            sh_mult_u = utils.eval_sh_bases(self.basis_dim, dirs_perturb[None])
+        sh_mult_u = sh_mult_u[0]
+
+        _C.lumisphere_tv_grad_sparse(
+                          self._to_cpp(),
+                          rand_cells,
+                          sh_mult,
+                          sh_mult_u,
+                          scaling,
+                          ndc_coeffs[0], ndc_coeffs[1],
+                          dir_factor,
+                          grad_holder)
+
 
     def inplace_l2_color_grad(
         self,
@@ -1710,13 +1797,13 @@ class SparseGrid(nn.Module):
     def _get_sparse_grad_indexer(self):
         indexer = self.sparse_grad_indexer
         if indexer is None:
-            indexer = torch.empty((), device=self.density_data.device)
+            indexer = torch.empty((0,), dtype=torch.bool, device=self.density_data.device)
         return indexer
 
     def _get_sparse_sh_grad_indexer(self):
         indexer = self.sparse_sh_grad_indexer
         if indexer is None:
-            indexer = torch.empty((), device=self.density_data.device)
+            indexer = torch.empty((0,), dtype=torch.bool, device=self.density_data.device)
         return indexer
 
     def _get_sparse_background_grad_indexer(self):
@@ -1747,8 +1834,8 @@ class SparseGrid(nn.Module):
             indexer = torch.nonzero(indexer.flatten(), as_tuple=False).flatten()
         return indexer
 
-    def _get_rand_cells(self, sparse_frac: float):
-        if sparse_frac < 1.0:
+    def _get_rand_cells(self, sparse_frac: float, force: bool = False):
+        if sparse_frac < 1.0 or force:
             assert self.sparse_grad_indexer is None or self.sparse_grad_indexer.dtype == torch.bool, \
                    "please call sparse loss after rendering and before gradient updates"
             grid_size = (self.links.size(0) - 1) * (self.links.size(1) - 1) * (self.links.size(2) - 1)
@@ -1775,8 +1862,8 @@ class SparseGrid(nn.Module):
         basis_data = self.basis_data.permute([3, 2, 1, 0])[None]
         samples = F.grid_sample(basis_data, dirs[None, None, None], mode='bilinear', padding_mode='zeros', align_corners=True)
         samples = samples[0, :, 0, 0, :].permute([1, 0])
-        dc = torch.full_like(samples[:, :1], fill_value=0.28209479177387814)
-        samples = torch.cat([dc, samples], dim=-1)
+        #  dc = torch.full_like(samples[:, :1], fill_value=0.28209479177387814)
+        #  samples = torch.cat([dc, samples], dim=-1)
         return samples
 
     def _eval_basis_mlp(self, dirs: torch.Tensor):

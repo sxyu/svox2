@@ -353,16 +353,16 @@ void accel_dist_prop(torch::Tensor grid) {
     TORCH_CHECK(!grid.is_floating_point());
     TORCH_CHECK(grid.ndimension() == 3);
 
-    int sz_x = grid.size(0);
-    int sz_y = grid.size(1);
-    int sz_z = grid.size(2);
+    int64_t sz_x = grid.size(0);
+    int64_t sz_y = grid.size(1);
+    int64_t sz_z = grid.size(2);
 
     int Q = grid.size(0) * grid.size(1) * grid.size(2);
 
     const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
 
-    size_t req_size = 0;
+    int64_t req_size = 0;
     while (sz_x > 1 && sz_y > 1 && sz_z > 1) {
         sz_x = int_div2_ceil(sz_x);
         sz_y = int_div2_ceil(sz_y);
@@ -370,17 +370,19 @@ void accel_dist_prop(torch::Tensor grid) {
         req_size += sz_x * sz_y * sz_z;
     }
 
-    bool* tmp;
-    cuda(Malloc(&tmp, req_size * sizeof(bool)));
-    cuda(MemsetAsync(tmp, 0, req_size * sizeof(bool)));
-
+    auto tmp_options = torch::TensorOptions()
+                  .dtype(torch::kBool)
+                  .layout(torch::kStrided)
+                  .device(grid.device())
+                  .requires_grad(false);
+    torch::Tensor tmp = torch::zeros({req_size}, tmp_options);
     device::accel_dist_set_kernel<<<blocks, cuda_n_threads>>>(
             grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-            tmp);
+            tmp.data_ptr<bool>());
 
     device::accel_dist_prop_kernel<<<blocks, cuda_n_threads>>>(
             grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-            tmp);
+            tmp.data_ptr<bool>());
 
 
     // int32_t* tmp;
@@ -404,7 +406,7 @@ void accel_dist_prop(torch::Tensor grid) {
     //     }
     // }
 
-    cuda(Free(tmp));
+    // cuda(Free(tmp));
     CUDA_CHECK_ERRORS;
 }
 
