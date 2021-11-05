@@ -40,18 +40,18 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
 group.add_argument('--reso',
                         type=str,
                         default=
-                        "[[128, 128, 128], [256, 256, 256], [512, 512, 512], [768, 768, 768]]",
+                        "[[256, 256, 256], [512, 512, 512], [768, 768, 768]]",
                         #  "[[256, 256, 256], [512, 512, 512]]",
                        help='List of grid resolution (will be evaled as json);'
                             'resamples to the next one every upsamp_every iters, then ' +
                             'stays at the last one; ' +
                             'should be a list where each item is a list of 3 ints or an int')
 group.add_argument('--upsamp_every', type=int, default=
-                     2 * 12800,
-                     #  3 * 12800,
+                     #  2 * 12800,
+                     3 * 12800,
                     help='upsample the grid every x iters')
 group.add_argument('--upsample_density_factor', type=float, default=
-                    1.0,
+                    1.5,
                     help='multiply the remaining density by this amount when upsampling')
 
 group.add_argument('--basis_type',
@@ -66,7 +66,7 @@ group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimen
 group.add_argument('--mlp_posenc_size', type=int, default=4, help='Positional encoding size if using MLP basis; 0 to disable')
 group.add_argument('--mlp_width', type=int, default=32, help='MLP width if using MLP basis')
 
-group.add_argument('--background_nlayers', type=int, default=0, #32,
+group.add_argument('--background_nlayers', type=int, default=32,
                    help='Number of background layers (0=disable BG model)')
 group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
 
@@ -153,9 +153,9 @@ group.add_argument('--tune_mode', action='store_true', default=False,
 
 group = parser.add_argument_group("losses")
 # Foreground TV
-group.add_argument('--lambda_tv', type=float, default=1e-3)#1e-5)
+group.add_argument('--lambda_tv', type=float, default=1e-5)#1e-5)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
-group.add_argument('--tv_logalpha', action='store_true', default=True,
+group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
 group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
