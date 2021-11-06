@@ -40,23 +40,23 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
 group.add_argument('--reso',
                         type=str,
                         default=
+                        #  "[[128, 128, 128], [256, 256, 256], [512, 512, 512], [768, 768, 768]]",
                         "[[256, 256, 256], [512, 512, 512], [768, 768, 768]]",
-                        #  "[[256, 256, 256], [512, 512, 512]]",
                        help='List of grid resolution (will be evaled as json);'
                             'resamples to the next one every upsamp_every iters, then ' +
                             'stays at the last one; ' +
                             'should be a list where each item is a list of 3 ints or an int')
 group.add_argument('--upsamp_every', type=int, default=
-                     #  2 * 12800,
-                     3 * 12800,
+                     2 * 12800,
+                     #  3 * 12800,
                     help='upsample the grid every x iters')
 group.add_argument('--upsample_density_factor', type=float, default=
-                    1.5,
+                    1.0,
                     help='multiply the remaining density by this amount when upsampling')
 
 group.add_argument('--basis_type',
                     choices=['sh', '3d_texture', 'mlp'],
-                    default='3d_texture',
+                    default='sh',
                     help='Basis function type')
 
 group.add_argument('--basis_reso', type=int, default=32,
@@ -66,13 +66,14 @@ group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimen
 group.add_argument('--mlp_posenc_size', type=int, default=4, help='Positional encoding size if using MLP basis; 0 to disable')
 group.add_argument('--mlp_width', type=int, default=32, help='MLP width if using MLP basis')
 
-group.add_argument('--background_nlayers', type=int, default=32,
+group.add_argument('--background_nlayers', type=int, default=0,#32,
                    help='Number of background layers (0=disable BG model)')
 group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
 
 
 
 group = parser.add_argument_group("optimization")
+group.add_argument('--n_iters', type=int, default=20 * 12800, help='total number of iters to optimize for')
 group.add_argument('--batch_size', type=int, default=
                      5000,
                      #100000,
@@ -86,8 +87,7 @@ group.add_argument('--lr_sigma', type=float, default=3e1,
         help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-2)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=
-                    15000,
+group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
                    help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)
 
@@ -106,8 +106,10 @@ group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
 group.add_argument('--bg_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
-group.add_argument('--lr_sigma_bg', type=float, default=3e-2, help='SGD/rmsprop lr for background')
-group.add_argument('--lr_color_bg', type=float, default=1e-2, help='SGD/rmsprop lr for background')
+group.add_argument('--lr_sigma_bg', type=float, default=3e-1,#3e-2,
+                    help='SGD/rmsprop lr for background')
+group.add_argument('--lr_color_bg', type=float, default=1e-2, #1e-2,
+                    help='SGD/rmsprop lr for background')
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
@@ -125,7 +127,6 @@ group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
 group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
-group.add_argument('--n_iters', type=int, default=20 * 12800, help='number of iters to optimize for')
 group.add_argument('--print_every', type=int, default=20, help='print every')
 group.add_argument('--save_every', type=int, default=2, #5,
                    help='save every x epochs')
@@ -139,9 +140,6 @@ group.add_argument('--init_sigma', type=float,
 
 
 group = parser.add_argument_group("misc experiments")
-group.add_argument('--perm', action='store_true', default=True,
-                    help='sample by permutation of rays (true epoch) instead of '
-                         'uniformly random rays')
 group.add_argument('--weight_thresh', type=float,
                     default=0.0005,
                    help='Resample (upsample to 512) weight threshold')
@@ -170,7 +168,7 @@ group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
 
 
 # Background TV
-group.add_argument('--lambda_tv_background_sigma', type=float, default=1e-4)
+group.add_argument('--lambda_tv_background_sigma', type=float, default=1e-5)
 group.add_argument('--lambda_tv_background_color', type=float, default=1e-4)
 
 group.add_argument('--tv_background_sparsity', type=float, default=0.01)
@@ -211,10 +209,12 @@ dset = datasets[args.dataset_type](
                args.data_dir,
                split="train",
                device=device,
-               permutation=args.perm,
                factor=factor,
                **config_util.build_data_options(args))
-dset.shuffle_rays()
+
+if args.background_nlayers > 0 and not dset.should_use_background:
+    print('Using a background model for dataset type ', type(dset), 'which typically does not use background')
+
 dset_test = datasets[args.dataset_type](
         args.data_dir, split="test", **config_util.build_data_options(args))
 
@@ -271,7 +271,6 @@ grid.opt.step_size = args.step_size
 grid.opt.sigma_thresh = args.sigma_thresh
 grid.opt.stop_thresh = args.stop_thresh
 grid.opt.background_brightness = args.background_brightness
-grid.opt.background_msi_scale = args.background_msi_scale
 grid.opt.backend = args.renderer_backend
 
 gstep_id_base = 0
@@ -302,6 +301,7 @@ last_upsamp_step = 0
 
 epoch_id = -1
 while True:
+    dset.shuffle_rays()
     epoch_id += 1
     epoch_size = dset.rays.origins.size(0)
     batches_per_epoch = (epoch_size-1)//args.batch_size+1
@@ -309,6 +309,7 @@ while True:
     def eval_step():
         # Put in a function to avoid memory leak
         print('Eval step')
+        grid.opt.stop_thresh = args.stop_thresh
         with torch.no_grad():
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
@@ -395,6 +396,7 @@ while True:
 
     def train_step():
         print('Train step')
+        grid.opt.stop_thresh = args.train_stop_thresh
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
@@ -527,7 +529,7 @@ while True:
                     weight_thresh=args.weight_thresh if use_sparsify else 0.0,
                     dilate=2, #use_sparsify,
                     cameras=resample_cameras)
-            
+
             if args.upsample_density_factor:
                 grid.density_data.data[:] *= args.upsample_density_factor
             if args.lr_sh_upscale_factor > 1:

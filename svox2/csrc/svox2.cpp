@@ -19,7 +19,7 @@ void volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 
 void volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                               Tensor, Tensor, GridOutputGrads &);
+                               Tensor, float, Tensor, GridOutputGrads &);
 
 // Tensor volume_render_cuvol_image(SparseGridSpec &, CameraSpec &,
 //                                  RenderOptions &);
@@ -116,9 +116,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("sigma_thresh", &RenderOptions::sigma_thresh)
       .def_readwrite("stop_thresh", &RenderOptions::stop_thresh)
       .def_readwrite("near_clip", &RenderOptions::near_clip)
-      .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque)
-      .def_readwrite("background_msi_scale",
-                     &RenderOptions::background_msi_scale);
+      .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("_m1", &RenderOptions::_m1)
   // .def_readwrite("_m2", &RenderOptions::_m2)

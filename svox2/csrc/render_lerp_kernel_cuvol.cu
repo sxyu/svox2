@@ -42,7 +42,7 @@ __device__ __inline__ void trace_ray_cuvol(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
 
     if (ray.tmin > ray.tmax) {
-        out[lane_colorgrp] = opt.background_brightness;
+        out[lane_colorgrp] = (grid.background_nlayers == 0) ? opt.background_brightness : 0.f;
         if (out_log_transmit != nullptr) {
             *out_log_transmit = 0.f;
         }
@@ -53,6 +53,7 @@ __device__ __inline__ void trace_ray_cuvol(
     float outv = 0.f;
 
     float log_transmit = 0.f;
+    // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
 
     while (t <= ray.tmax) {
 #pragma unroll 3
@@ -62,6 +63,11 @@ __device__ __inline__ void trace_ray_cuvol(
             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
             ray.pos[j] -= static_cast<float>(ray.l[j]);
         }
+        // if (lane_id == 0) {
+        //     printf("[%d %d %d] [%f %f %f] %f\n",
+        //             ray.l[0], ray.l[1], ray.l[2],
+        //             ray.pos[0], ray.pos[1], ray.pos[2], log_transmit);
+        // }
 
         const float skip = compute_skip_dist(ray,
                        grid.links, grid.stride_x,
@@ -111,14 +117,13 @@ __device__ __inline__ void trace_ray_cuvol(
         t += opt.step_size;
     }
 
-    if (out_log_transmit != nullptr) {
-        *out_log_transmit = log_transmit;
-    }
-
     if (grid.background_nlayers == 0) {
         outv += _EXP(log_transmit) * opt.background_brightness;
     }
     if (lane_colorgrp_id == 0) {
+        if (out_log_transmit != nullptr) {
+            *out_log_transmit = log_transmit;
+        }
         out[lane_colorgrp] = outv;
     }
 }
@@ -133,6 +138,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         const float* __restrict__ sphfunc_val,
         float* __restrict__ grad_sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
+        float log_transmit_in,
+        float beta_loss,
         PackedGridOutputGrads& __restrict__ grads,
         float* __restrict__ accum_out,
         float* __restrict__ log_transmit_out
@@ -141,19 +148,26 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim));
 
+    float accum = fmaf(color_cache[0], grad_output[0],
+                      fmaf(color_cache[1], grad_output[1],
+                           color_cache[2] * grad_output[2]));
+
+    if (beta_loss > 0.f) {
+        const float transmit_in = _EXP(log_transmit_in);
+        beta_loss = beta_loss * (1 - transmit_in / (1 - transmit_in)); // d beta_loss / d log_transmit_in
+        accum += beta_loss;
+        // Interesting how this loss turns out, kinda nice?
+    }
+
     if (ray.tmin > ray.tmax) {
-        if (log_transmit_out != nullptr) {
-            *log_transmit_out = 0.f;
-        }
+        if (accum_out != nullptr) { *accum_out = accum; }
+        if (log_transmit_out != nullptr) { *log_transmit_out = 0.f; }
+        // printf("accum_end_fg_fast=%f\n", accum);
         return;
     }
     float t = ray.tmin;
 
     const float gout = grad_output[lane_colorgrp];
-
-    float accum = fmaf(color_cache[0], grad_output[0],
-                      fmaf(color_cache[1], grad_output[1],
-                           color_cache[2] * grad_output[2]));
 
     float log_transmit = 0.f;
 
@@ -250,11 +264,17 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         }
         t += opt.step_size;
     }
-    if (accum_out != nullptr) {
-        *accum_out = accum;
-    }
-    if (log_transmit_out != nullptr) {
-        *log_transmit_out = log_transmit;
+    if (lane_id == 0) {
+        if (accum_out != nullptr) {
+            if (beta_loss > 0.f) {
+                // Cancel beta loss out in case of background
+                accum -= beta_loss;
+            }
+            *accum_out = accum;
+        }
+        if (log_transmit_out != nullptr) { *log_transmit_out = log_transmit; }
+        // printf("accum_end_fg=%f\n", accum);
+        // printf("log_transmit_fg=%f\n", log_transmit);
     }
 }
 
@@ -267,21 +287,34 @@ __device__ __inline__ void render_background_forward(
             float* __restrict__ out
         ) {
 
-    float t = ray.tmin;
-    float inv_t = 1.f / t;
-    const float step_size = inv_t * opt.step_size / grid.background_nlayers;
+    ConcentricSpheresIntersector csi(ray.origin, ray.dir);
+
+    const float inner_radius = fmaxf(_dist_ray_to_origin(ray.origin, ray.dir) + 1e-3f, 1.f);
+    float t, t_last;
+    const int n_steps = int(grid.background_nlayers / opt.step_size) + 2;
+
+    csi.intersect(inner_radius, &t_last);
+
+    // printf("RAY o[%f,%f,%f] d[%f,%f,%f] rad=%f, t_last=%f ws=%f\n",
+    //         ray.origin[0], ray.origin[1], ray.origin[2],
+    //         ray.dir[0], ray.dir[1], ray.dir[2],
+    //         inner_radius,
+    //         t_last, ray.world_step);
 
     float outv[3] = {0.f, 0.f, 0.f};
     const int cubemap_step = 6 * grid.background_reso * grid.background_reso * /*n_channels*/ 4;
-    while (inv_t > step_size) {
-        t = 1.f / inv_t;
-        const float world_step = 1.f / (inv_t - step_size) - t;
+    const float layer_scale = (float(grid.background_nlayers - 1) / (n_steps + 1));
+    for (int i = 0; i < n_steps; ++i) {
+        float r = n_steps / (n_steps - i - 0.5);
+        if (r < inner_radius || !csi.intersect(r, &t)) continue;
+        const float t_mid = (t + t_last) * 0.5f;
+
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = fmaf(t_mid, ray.dir[j], ray.origin[j]);
         }
-        const float normalized_inv_radius = fminf(fmaxf(_rnorm(ray.pos) * opt.background_msi_scale *
-                        grid.background_nlayers - 0.5f, 0.f), grid.background_nlayers - 1);
+        const float normalized_inv_radius = fminf((i + 1.f) * layer_scale,
+                                                  grid.background_nlayers - 1);
         int layerid = min((int)floorf(normalized_inv_radius), grid.background_nlayers - 2);
         const float interp_wt = normalized_inv_radius - layerid;
         const float* __restrict__ cubemap_data = grid.background_cubemap + cubemap_step * layerid;
@@ -300,8 +333,15 @@ __device__ __inline__ void render_background_forward(
                 grid.background_reso,
                 /*n_channels*/ 4,
                 3);
+        // printf("SAMP p[%f,%f,%f] invr=%f layerid=%d interp_wt=%f sigma=%f log_li=%f\n",
+        //         ray.pos[0], ray.pos[1], ray.pos[2],
+        //         normalized_inv_radius,
+        //         layerid,
+        //         interp_wt,
+        //         sigma,
+        //         log_transmit);
         if (sigma > opt.sigma_thresh) {
-            const float pcnt = world_step * sigma;
+            const float pcnt = (t - t_last) * ray.world_step * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
 #pragma unroll 3
@@ -314,6 +354,7 @@ __device__ __inline__ void render_background_forward(
                         grid.background_reso,
                         /*n_channels*/ 4,
                         i) * C0;
+                // printf("%f %d: %f %f\n", r, i, sigma, fmaxf(color + 0.5f, 0.f));
                 outv[i] += weight * fmaxf(color + 0.5f, 0.f);  // Clamp to [+0, infty)
             }
             if (_EXP(log_transmit) < opt.stop_thresh) {
@@ -322,7 +363,7 @@ __device__ __inline__ void render_background_forward(
         }
         if (cubemap_data != nullptr)
             cubemap_data += cubemap_step;
-        inv_t -= step_size;
+        t_last = t;
     }
 #pragma unroll 3
     for (int i = 0; i < 3; ++i) {
@@ -339,33 +380,31 @@ __device__ __inline__ void render_background_backward(
             float accum,
             PackedGridOutputGrads& __restrict__ grads
         ) {
-    // ConcentricSpheresIntersector csi(
-    //         grid.size,
-    //         ray.origin,
-    //         ray.dir,
-    //         ray.world_step / opt.step_size);
+    // printf("accum_init=%f\n", accum);
+    // printf("log_transmit_init=%f\n", log_transmit);
+    ConcentricSpheresIntersector csi(ray.origin, ray.dir);
 
-    // const float r_min = fmaxf(_dist_ray_to_origin(csi.origin, csi.dir), opt.background_msi_scale);
-    // float t;
-    // if (!csi.intersect(1.f, &t)) {
-    //     t = 1.f;
-    // }
-    float t = ray.tmin;
-    float inv_t = 1.f / t;
-    const float step_size = inv_t * opt.step_size / grid.background_nlayers;
-
+    float t, t_last;
+    const int n_steps = int(grid.background_nlayers / opt.step_size) + 2;
     const int cubemap_step = 6 * grid.background_reso * grid.background_reso;
 
-    while (inv_t > step_size) {
-        t = 1.f / inv_t;
-        const float world_step = 1.f / (inv_t - step_size) - t;
+    const float inner_radius = fmaxf(_dist_ray_to_origin(ray.origin, ray.dir) + 1e-3f, 1.f);
+    csi.intersect(inner_radius, &t_last);
+    const float layer_scale = (float(grid.background_nlayers - 1) / (n_steps + 1));
+
+    for (int i = 0; i < n_steps; ++i) {
+        float r = n_steps / (n_steps - i - 0.5);
+
+        if (r < inner_radius || !csi.intersect(r, &t)) continue;
+
+        const float t_mid = (t + t_last) * 0.5f;
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = fmaf(t_mid, ray.dir[j], ray.origin[j]);
         }
 
-        const float normalized_inv_radius = fminf(fmaxf(_rnorm(ray.pos) * opt.background_msi_scale *
-                        grid.background_nlayers - 0.5f, 0.f), grid.background_nlayers - 1);
+        const float normalized_inv_radius = fminf((i + 1.f) * layer_scale,
+                                                  grid.background_nlayers - 1);
         int layerid = min((int)floorf(normalized_inv_radius), grid.background_nlayers - 2);
         const float interp_wt = normalized_inv_radius - layerid;
         const float* __restrict__ cubemap_data = grid.background_cubemap + cubemap_step * 4 * layerid;
@@ -389,7 +428,7 @@ __device__ __inline__ void render_background_backward(
                 3);
         if (sigma > opt.sigma_thresh) {
             float total_color = 0.f;
-            const float pcnt = world_step * sigma;
+            const float pcnt = ray.world_step * (t - t_last) * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
 
@@ -418,7 +457,7 @@ __device__ __inline__ void render_background_backward(
             }
 
             accum -= weight * total_color;
-            float curr_grad_sigma = world_step * (
+            float curr_grad_sigma = ray.world_step * (t - t_last) * (
                     total_color * _EXP(log_transmit) - accum);
 
             multi_cubemap_sample_backward(
@@ -437,8 +476,7 @@ __device__ __inline__ void render_background_backward(
                 break;
             }
         }
-
-        inv_t -= step_size;
+        t_last = t;
     }
 }
 
@@ -493,6 +531,8 @@ __global__ void render_ray_backward_kernel(
     PackedRaysSpec rays,
     RenderOptions opt,
     bool grad_out_is_rgb,
+    const float* __restrict__ log_transmit_in,
+    float beta_loss,
     PackedGridOutputGrads grads,
     float* __restrict__ accum_out = nullptr,
     float* __restrict__ log_transmit_out = nullptr) {
@@ -550,6 +590,8 @@ __global__ void render_ray_backward_kernel(
         sphfunc_val[ray_blk_id],
         grad_sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
+        log_transmit_in == nullptr ? 0.f : log_transmit_in[ray_id],
+        beta_loss,
         grads,
         accum_out == nullptr ? nullptr : accum_out + ray_id,
         log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
@@ -573,7 +615,7 @@ __global__ void render_background_kernel(
     CUDA_GET_THREAD_ID(ray_id, int(rays.origins.size(0)));
     if (log_transmit[ray_id] < -25.f) return;
     SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
-    ray_find_bounds_bg(ray_spec, grid, opt);
+    ray_find_bounds_bg(ray_spec, grid);
     render_background_forward(
         grid,
         ray_spec,
@@ -597,7 +639,7 @@ __global__ void render_background_backward_kernel(
     CUDA_GET_THREAD_ID(ray_id, int(rays.origins.size(0)));
     if (log_transmit[ray_id] < -25.f) return;
     SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
-    ray_find_bounds_bg(ray_spec, grid, opt);
+    ray_find_bounds_bg(ray_spec, grid);
 
     float grad_out[3];
     if (grad_out_is_rgb) {
@@ -665,6 +707,7 @@ torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOp
     }
 
     if (use_background) {
+        // printf("RENDER BG\n");
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_BG_CUDA_THREADS);
         device::render_background_kernel<<<blocks, TRACE_RAY_BG_CUDA_THREADS>>>(
                 grid,
@@ -709,6 +752,8 @@ void volume_render_cuvol_backward(
                     color_cache.data_ptr<float>(),
                     rays, opt,
                     false,
+                    nullptr,
+                    0.f,
                     // Output
                     grads,
                     use_background ? accum.data_ptr<float>() : nullptr,
@@ -738,6 +783,7 @@ void volume_render_cuvol_fused(
         RaysSpec& rays,
         RenderOptions& opt,
         torch::Tensor rgb_gt,
+        float beta_loss,
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
 
@@ -750,9 +796,12 @@ void volume_render_cuvol_fused(
     const auto Q = rays.origins.size(0);
 
     bool use_background = grid.background_cubemap.size(0) > 0;
+    bool need_log_transmit = use_background || beta_loss > 0.f;
     torch::Tensor log_transmit, accum;
-    if (use_background) {
+    if (need_log_transmit) {
         log_transmit = _get_empty_1d(rays.origins);
+    }
+    if (use_background) {
         accum = _get_empty_1d(rays.origins);
     }
 
@@ -762,7 +811,7 @@ void volume_render_cuvol_fused(
                 grid, rays, opt,
                 // Output
                 rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-                use_background ? log_transmit.data_ptr<float>() : nullptr);
+                need_log_transmit ? log_transmit.data_ptr<float>() : nullptr);
     }
 
     if (use_background) {
@@ -783,6 +832,8 @@ void volume_render_cuvol_fused(
                 rgb_out.data_ptr<float>(),
                 rays, opt,
                 true,
+                beta_loss > 0.f ? log_transmit.data_ptr<float>() : nullptr,
+                beta_loss,
                 // Output
                 grads,
                 use_background ? accum.data_ptr<float>() : nullptr,

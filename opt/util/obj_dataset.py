@@ -1,4 +1,4 @@
-from .util import Rays, Intrin
+from .util import Rays, Intrin, select_or_shuffle_rays
 import torch
 import torch.nn.functional as F
 from typing import NamedTuple, Optional, Union
@@ -28,6 +28,7 @@ class NeRFDataset:
         self,
         root,
         split,
+        epoch_size : Optional[int] = None,
         device: Union[str, torch.device] = "cpu",
         scene_scale: Optional[float] = None,
         factor: int = 1,
@@ -44,6 +45,7 @@ class NeRFDataset:
             scale = 1.0
         self.device = device
         self.permutation = permutation
+        self.epoch_size = epoch_size
         all_c2w = []
         all_gt = []
 
@@ -105,6 +107,7 @@ class NeRFDataset:
         self.ndc_coeffs = (-1.0, -1.0)  # disable
         self.use_sphere_bound = True
         self.last_sample_opaque = False
+        self.should_use_background = False  # Give warning
 
     def gen_rays(self, factor=1):
         print(" Generating rays, scaling factor", factor)
@@ -148,11 +151,4 @@ class NeRFDataset:
         Shuffle all rays
         """
         if self.split == "train":
-            n_rays = self.rays.origins.size(0)
-            if self.permutation:
-                print(" Shuffling rays")
-                perm = torch.randperm(n_rays, device=self.device)
-            else:
-                print(" Randomizing rays")
-                perm = torch.randint(0, n_rays, (n_rays,), device=self.device)
-            self.rays = self.rays_init.to(device=self.device)[perm]
+            self.rays = select_or_shuffle_rays(self.rays_init, self.permutation, self.epoch_size, self.device)

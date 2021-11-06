@@ -59,9 +59,9 @@ __device__ __host__ __inline__ CubemapCoord
     float maxv;
     int ax;
     float xyz[3] = {xyz_o[0], xyz_o[1], xyz_o[2]};
-    if (fabsf(xyz[0]) > fabsf(xyz[1]) && fabsf(xyz[0]) > fabsf(xyz[2])) {
+    if (fabsf(xyz[0]) >= fabsf(xyz[1]) && fabsf(xyz[0]) >= fabsf(xyz[2])) {
         ax = 0; maxv = xyz[0];
-    } else if (fabsf(xyz[1]) > fabsf(xyz[2])) {
+    } else if (fabsf(xyz[1]) >= fabsf(xyz[2])) {
         ax = 1; maxv = xyz[1];
     } else {
         ax = 2; maxv = xyz[2];
@@ -257,6 +257,7 @@ __device__ __inline__ void
                 int chnl_id,
                 bool* __restrict__ mask_out1 = nullptr,
                 bool* __restrict__ mask_out2 = nullptr) {
+        if (cubemap_grad1 == nullptr) return;
         cubemap_sample_backward(cubemap_grad1,
                 query,
                 face_reso,
@@ -270,7 +271,7 @@ __device__ __inline__ void
                 n_channels,
                 grad_out * interp_wt,
                 chnl_id,
-                mask_out2);
+                mask_out1 == nullptr ? nullptr : mask_out2);
     }
 
 

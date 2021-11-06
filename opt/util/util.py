@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import cv2
 from matplotlib import pyplot as plt
+from warnings import warn
 
 
 @dataclass
@@ -152,3 +153,19 @@ def generate_dirs_equirect(w, h):
     uv = np.stack([x * (2.0 / w) - 1.0, y * (2.0 / h) - 1.0], axis=-1)
     camera_dirs = equirect2xyz(uv)
     return camera_dirs
+
+
+# Data
+def select_or_shuffle_rays(rays_init : Rays,
+                 permutation: int = False,
+                 epoch_size: Optional[int] = None,
+                 device: Union[str, torch.device] = "cpu"):
+    n_rays = rays_init.origins.size(0)
+    n_samp = n_rays if (epoch_size is None) else epoch_size
+    if permutation:
+        print(" Shuffling rays")
+        indexer = torch.randperm(n_rays, device='cpu')[:n_samp]
+    else:
+        print(" Selecting random rays")
+        indexer = torch.randint(n_rays, (n_samp,), device='cpu')
+    return rays_init[indexer].to(device=device)

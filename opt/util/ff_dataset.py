@@ -25,7 +25,7 @@ from collections import deque
 from tqdm import tqdm
 import imageio
 import cv2
-from .util import Rays, Intrin
+from .util import Rays, Intrin, select_or_shuffle_rays
 from .load_llff import load_llff_data
 from typing import Union, Optional
 
@@ -40,6 +40,7 @@ class LLFFDataset(Dataset):
         self,
         root : str,
         split : str,
+        epoch_size : Optional[int] = None,
         device: Union[str, torch.device] = "cpu",
         permutation: bool = True,
         factor: int = 1,
@@ -58,6 +59,7 @@ class LLFFDataset(Dataset):
             scale = 1.0 / 4.0  # Default 1/4 size for LLFF data since it's huge
         self.scale = scale
         self.dataset = root
+        self.epoch_size = epoch_size
         self.device = device
         self.permutation = permutation
         self.split = split
@@ -105,6 +107,7 @@ class LLFFDataset(Dataset):
             # Rays are not needed for testing
             self.h, self.w = self.h_full, self.w_full
             self.intrins = self.intrins_full
+        self.should_use_background = False  # Give warning
 
 
     def _load_images(self):
@@ -232,14 +235,7 @@ class LLFFDataset(Dataset):
         Shuffle all rays
         """
         if self.split == "train":
-            n_rays = self.rays.origins.size(0)
-            if self.permutation:
-                print(" Shuffling rays")
-                perm = torch.randperm(n_rays, device=self.device)
-            else:
-                print(" Randomizing rays")
-                perm = torch.randint(0, n_rays, (n_rays,), device=self.device)
-            self.rays = self.rays_init.to(device=self.device)[perm]
+            self.rays = select_or_shuffle_rays(self.rays_init, self.permutation, self.epoch_size, self.device)
 
 
 class SfMData:

@@ -120,8 +120,6 @@ struct RenderOptions {
 
   bool last_sample_opaque;
 
-  float background_msi_scale;
-
   // bool randomize;
   // uint32_t _m1, _m2, _m3;
 };

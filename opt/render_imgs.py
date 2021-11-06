@@ -68,7 +68,6 @@ grid.opt.sigma_thresh = args.sigma_thresh
 grid.opt.stop_thresh = args.stop_thresh
 grid.opt.background_brightness = 1.0
 grid.opt.backend = args.renderer_backend
-grid.opt.background_msi_scale = args.background_msi_scale
 
 with torch.no_grad():
     im_size = dset.h * dset.w

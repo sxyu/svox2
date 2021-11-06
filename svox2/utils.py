@@ -173,7 +173,10 @@ class CubemapCoord:
         face = self.ax * 2 + self.ori
         #  print(cubemap.shape, face.min(), face.max(), ' ',
         #        self.u.min(), self.u.max(),
-        return cubemap[face, self.u, self.v]
+        if cubemap.ndim == 4:
+            return cubemap[face, self.u, self.v]
+        else:
+            return cubemap[torch.arange(face.size(0), device=face.device), face, self.u, self.v]
 
     def clone(self):
         return CubemapCoord(
@@ -340,7 +343,10 @@ def cubemap_sample(cubemap: torch.Tensor, idx4 : CubemapBilerpQuery):
     """
     Perform bilinear sampling on a cubemap given a query from cubemap_build_query
 
-    :param cubemap: torch.Tensor float (6, face_reso, face_reso, C)
+    :param cubemap: torch.Tensor float
+            (6, face_reso, face_reso, C)
+            or
+            (B, 6, face_reso, face_reso, C)
     :param idx4: CubemapBilerpQuery from cubemap_build_query where
                  each tensor has batch size B
 

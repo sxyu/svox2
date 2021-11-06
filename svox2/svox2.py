@@ -51,7 +51,6 @@ class RenderOptions:
 
     last_sample_opaque: bool = False   # Make the last sample opaque (for forward-facing)
 
-    background_msi_scale: float = 1.0
     near_clip: float = 0.0
 
     def _to_cpp(self, randomize: bool = False):
@@ -66,7 +65,6 @@ class RenderOptions:
         opt.near_clip = self.near_clip
 
         opt.last_sample_opaque = self.last_sample_opaque
-        opt.background_msi_scale = self.background_msi_scale
         #  opt.randomize = randomize
         #  UINT32_MAX = 2**32-1
         #  opt._m1 = np.random.randint(0, UINT32_MAX)
@@ -329,7 +327,7 @@ class SparseGrid(nn.Module):
         self.mlp_width = mlp_width
 
         self.background_nlayers = background_nlayers
-        assert background_nlayers != 1, "1 layer breaks trilerp"
+        assert background_nlayers == 0 or background_nlayers > 1, "Please use at least 2 MSI layers (trilerp limitation)"
         self.background_reso = background_reso
 
         if isinstance(reso, int):
@@ -608,14 +606,20 @@ class SparseGrid(nn.Module):
         else:
             sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
         invdirs = 1.0 / dirs
-        invdirs[dirs == 0] = 1e9
 
         gsz = self._grid_size()
         gsz_cu = gsz.to(device=dirs.device)
         t1 = (-0.5 - origins) * invdirs
         t2 = (gsz_cu - 0.5 - origins) * invdirs
-        t = torch.max(torch.min(t1, t2), dim=-1).values.clamp_min_(self.opt.near_clip)
-        tmax = torch.min(torch.max(t1, t2), dim=-1).values
+
+        t = torch.min(t1, t2)
+        t[dirs == 0] = -1e9
+        t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
+
+        tmax = torch.max(t1, t2)
+        tmax[dirs == 0] = 1e9
+        tmax = torch.min(tmax, dim=-1).values
+        print(t, tmax)
 
         log_light_intensity = torch.zeros(B, device=origins.device)
         out_rgb = torch.zeros((B, 3), device=origins.device)
@@ -641,6 +645,7 @@ class SparseGrid(nn.Module):
             pos[:, 0] = torch.clamp_max(pos[:, 0], gsz[0] - 1)
             pos[:, 1] = torch.clamp_max(pos[:, 1], gsz[1] - 1)
             pos[:, 2] = torch.clamp_max(pos[:, 2], gsz[2] - 1)
+            #  print('pym', pos, log_light_intensity)
 
             l = pos.to(torch.long)
             l.clamp_min_(0)
@@ -724,40 +729,75 @@ class SparseGrid(nn.Module):
                     origins_ini,
                     dirs_ini,
                     delta_scale)
-            #  r_min = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1).clamp_min(
-                    #  self.opt.background_msi_scale)
-            #  _, t_last = csi.intersect(r_min + 1e-4)
-            #  print('py', csi.origins, csi.dirs, r_min, t_last, 'wsc', csi.world_step_scale)
-            for i in range(self.background_nlayers):
-                r : float = self.opt.background_msi_scale * \
-                            self.background_nlayers / (self.background_nlayers - i - 0.5)
-                thickness = r - self.opt.background_msi_scale * \
-                            self.background_nlayers / (self.background_nlayers - i)
-                active_mask, t_inter = csi.intersect(r)
-                t_inter_sub = t_inter[active_mask]
+            inner_radius = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1) + 1e-3
+            inner_radius = inner_radius.clamp_min(1.0)
+            _, t_last = csi.intersect(inner_radius)
+            #  print('py', csi.origins, csi.dirs, inner_radius.tolist(), t_last, 'wsc', csi.world_step_scale)
+            n_steps = int(self.background_nlayers / self.opt.step_size) + 2
+            layer_scale = (self.background_nlayers - 1) / (n_steps + 1)
+            for i in range(n_steps):
+                r : float = n_steps / (n_steps - i - 0.5)
+                normalized_inv_radius = min((i + 1) * layer_scale, self.background_nlayers - 1)
+                layerid = min(int(normalized_inv_radius), self.background_nlayers - 2);
+                interp_wt = normalized_inv_radius - layerid;
+
+                active_mask, t = csi.intersect(r)
+                active_mask = active_mask & (r >= inner_radius)
+                if active_mask.count_nonzero() == 0:
+                    continue
+                t_sub = t[active_mask]
+                t_mid_sub = (t_sub + t_last[active_mask]) * 0.5
                 sphpos = csi.origins[active_mask] + \
-                         t_inter_sub.unsqueeze(-1) * csi.dirs[active_mask]
-                #  print('A', r, active_mask[-1], t_inter_sub[-1], sphpos[-1])
+                         t_mid_sub.unsqueeze(-1) * csi.dirs[active_mask]
                 coord = utils.dir_to_cubemap_coord(sphpos, self.background_reso, eac=True)
+                #  print('pos', sphpos)
                 query = utils.cubemap_build_query(coord, self.background_reso)
 
-                rgba = utils.cubemap_sample(self.background_cubemap[i], query)
 
-                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * thickness
-                #  ( t_inter_sub - t_last[active_mask])
+                rgba1 = utils.cubemap_sample(self.background_cubemap[layerid], query)
+                rgba2 = utils.cubemap_sample(self.background_cubemap[layerid + 1], query)
+                rgba = rgba1 * (1.0 - interp_wt) + rgba2 * interp_wt
+
+                #  print("py SAMP r", r, "p", sphpos.cpu().numpy(), " invr=",
+                #          normalized_inv_radius,
+                #          " layerid=", layerid,
+                #          " interp_wt=", interp_wt,
+                #          " sigma=",
+                #          rgba[..., -1],
+                #          " log_li=",
+                #          log_light_intensity,
+                #          "\n")
+
+                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * (
+                            t_sub - t_last[active_mask]
+                        )
                 weight = torch.exp(log_light_intensity[active_mask]) * (
                     1.0 - torch.exp(log_att)
                 )
-                #  print('B', r, rgba[-1].detach(), log_light_intensity[-1].detach(), weight[-1].detach(), t_inter_sub[-1], t_last[active_mask][-1])
                 rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
+                #  print('py L',
+                #          layerid,
+                #          'iwt',
+                #          interp_wt,
+                #          'face',
+                #          (coord.ax * 2) +
+                #          coord.ori,
+                #          'uv',
+                #          coord.u,
+                #          coord.v,
+                #          query.du,
+                #          query.dv
+                #          )
                 out_rgb[active_mask] += rgb * weight[:, None]
                 log_light_intensity[active_mask] += log_att
-                #  t_last[active_mask] = t_inter[active_mask]
+                t_last[active_mask] = t[active_mask]
 
-        out_rgb += (
-            torch.exp(log_light_intensity).unsqueeze(-1)
-            * self.opt.background_brightness
-        )
+        # Add background color
+        if self.opt.background_brightness:
+            out_rgb += (
+                torch.exp(log_light_intensity).unsqueeze(-1)
+                * self.opt.background_brightness
+            )
         return out_rgb
 
     def volume_render(
@@ -791,7 +831,9 @@ class SparseGrid(nn.Module):
             return self._volume_render_gradcheck_lerp(rays)
 
     def volume_render_fused(
-        self, rays: Rays, rgb_gt: torch.Tensor, randomize: bool = False
+        self, rays: Rays, rgb_gt: torch.Tensor,
+        randomize: bool = False,
+        beta_loss: float = 0.0
     ):
         """
         Standard volume rendering with fused MSE gradient generation,
@@ -838,6 +880,7 @@ class SparseGrid(nn.Module):
             rays._to_cpp(),
             self.opt._to_cpp(),
             rgb_gt,
+            beta_loss,
             rgb_out,
             grad_holder
         )
