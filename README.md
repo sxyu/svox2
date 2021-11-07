@@ -11,6 +11,14 @@ in the root directory.
 
 See `opt/opt.py`
 
+`sh launch.sh <exp_name> <GPU_id> <data_dir>`
+
+## Evaluation
+
+See `opt/render_imgs.py`
+
+`python render_imgs.py <CHECKPOINT.npz> <data_dir>`
+
 ## Automatic hypertuning
 
 See `opt/autotune.py`. Configs in `opt/tasks/*.json`
