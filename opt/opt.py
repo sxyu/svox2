@@ -42,13 +42,15 @@ group.add_argument('--reso',
                         type=str,
                         default=
                         #  "[[128, 128, 128], [256, 256, 256], [512, 512, 512], [768, 768, 768]]",
-                        "[[128, 128, 128], [256, 256, 256], [512, 512, 512]]",
+                        #  "[[128, 128, 128], [256, 256, 256], [512, 512, 512]]",
+                        "[[256, 256, 256], [512, 512, 512]]",
                        help='List of grid resolution (will be evaled as json);'
                             'resamples to the next one every upsamp_every iters, then ' +
                             'stays at the last one; ' +
                             'should be a list where each item is a list of 3 ints or an int')
 group.add_argument('--upsamp_every', type=int, default=
-                     2 * 12800,
+                     #  2 * 12800,
+                     3 * 12800,
                     help='upsample the grid every x iters')
 group.add_argument('--init_iters', type=int, default=
                      0, #-12800,
@@ -152,6 +154,8 @@ group.add_argument('--weight_thresh', type=float,
 
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
+group.add_argument('--tune_nosave', action='store_true', default=False,
+                   help='do not save any checkpoint even at the end')
 
 
 
@@ -569,6 +573,6 @@ while True:
     if gstep_id_base >= args.n_iters:
         print('* Final eval and save')
         eval_step()
-        if not args.tune_mode:
+        if not args.tune_nosave:
             grid.save(ckpt_path)
         break

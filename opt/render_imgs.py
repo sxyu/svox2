@@ -141,13 +141,15 @@ with torch.no_grad():
         n_images_gen += 1
     avg_psnr /= n_images_gen
     avg_ssim /= n_images_gen
-    print('average PSNR', avg_psnr, 'SSIM', avg_ssim)
+    print('AVERAGES')
+    print('PSNR:', avg_psnr)
+    print('SSIM:', avg_ssim)
     with open(path.join(render_dir, 'psnr.txt'), 'w') as f:
         f.write(str(avg_psnr))
     with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
         f.write(str(avg_ssim))
     if not args.no_lpips:
         avg_lpips /= n_images_gen
-        print('average LPIPS', avg_lpips)
+        print('LPIPS:', avg_lpips)
         with open(path.join(render_dir, 'lpips.txt'), 'w') as f:
             f.write(str(avg_lpips))

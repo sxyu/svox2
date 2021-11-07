@@ -22,3 +22,6 @@ See `opt/render_imgs.py`
 ## Automatic hypertuning
 
 See `opt/autotune.py`. Configs in `opt/tasks/*.json`
+
+Automatic eval:
+`python autotune.py -g '<space delimited GPU ids>' tasks/eval.json`. Configs in `opt/tasks/*.json`

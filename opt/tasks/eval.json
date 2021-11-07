@@ -1,0 +1,12 @@
+{
+    "eval": true,
+    "data_root": "/home/sxyu/data/nerf_synthetic",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/256_to_512_u3_10e",
+    "variables": {
+        "scene": ["lego", "mic", "ship", "chair", "ficus", "materials", "drums", "hotdog"]
+    },
+    "tasks": [{
+        "train_dir": "train_{scene}",
+        "data_dir": "{scene}"
+    }]
+}

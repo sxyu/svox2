@@ -20,13 +20,17 @@ parser.add_argument("task_json", type=str)
 parser.add_argument("--gpus", "-g", type=str, required=True,
                             help="space delimited GPU id list (global id in nvidia-smi, "
                                  "not considering CUDA_VISIBLE_DEVICES)")
+parser.add_argument('--eval', action='store_true', default=False,
+                   help='evaluation mode (run the render_imgs script)')
 args = parser.parse_args()
 
 PSNR_FILE_NAME = 'test_psnr.txt'
 
 def run_exp(env, train_dir, data_dir, flags):
-    opt_base_cmd = [
-        "python", "-u", "opt.py", "--tune_mode",
+    opt_base_cmd = [ "python", "-u", "opt.py", "--tune_mode" ]
+
+    opt_base_cmd += ["--tune_nosave"]
+    opt_base_cmd += [
         "-t", train_dir,
         data_dir
     ]
@@ -43,13 +47,29 @@ def run_exp(env, train_dir, data_dir, flags):
         opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
                 sys.stdout.encoding)
     except subprocess.CalledProcessError:
-        print('Error occurred while running exp', train_dir)
+        print('Error occurred while running OPT for exp', train_dir)
         return
     with open(log_file_path, 'w') as f:
         f.write(opt_ret)
-    test_stats = [eval(x.split('eval stats:')[-1].strip())
-                  for x in opt_ret.split('\n') if
-                  x.startswith('eval stats: ')]
+
+    if args.eval:
+        eval_base_cmd = [
+            "python", "-u", "render_imgs.py",
+            path.join(train_dir, 'ckpt.npz'),
+            data_dir
+        ]
+        try:
+            eval_ret = subprocess.check_output(eval_base_cmd, shell=True, env=env).decode(
+                    sys.stdout.encoding)
+        except subprocess.CalledProcessError:
+            print('Error occurred while running EVAL for exp', train_dir)
+            return
+        test_stats = [{x.split(':')[0].strip(): float(x.split(':')[1])
+                      for x in eval_ret.strip().split('\n')[-3:] if ':' in x}]
+    else:
+        test_stats = [eval(x.split('eval stats:')[-1].strip())
+                      for x in opt_ret.split('\n') if
+                      x.startswith('eval stats: ')]
     if len(test_stats) == 0:
         print('note: invalid config or crash')
         final_test_psnr = 0.0
@@ -133,6 +153,10 @@ if __name__ == '__main__':
     data_root = path.expanduser(tasks_file['data_root'])  # Required
     train_root = path.expanduser(tasks_file['train_root'])  # Required
     base_flags = tasks_file.get('base_flags', [])
+
+    if 'eval' in tasks_file:
+        args.eval = tasks_file['eval']
+        print('Eval mode?', args.eval)
     pqueue = Queue()
 
     leaderboard_path = path.join(train_root, 'leaderboard.txt')
