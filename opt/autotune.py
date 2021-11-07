@@ -13,6 +13,7 @@ import subprocess
 import sys
 from typing import List, Dict
 import itertools
+from warnings import warn
 import numpy as np
 
 parser = argparse.ArgumentParser()
@@ -26,61 +27,71 @@ args = parser.parse_args()
 
 PSNR_FILE_NAME = 'test_psnr.txt'
 
-def run_exp(env, train_dir, data_dir, flags):
+def run_exp(env, eval_mode:bool, train_dir, data_dir, flags):
     opt_base_cmd = [ "python", "-u", "opt.py", "--tune_mode" ]
 
-    opt_base_cmd += ["--tune_nosave"]
+    if not eval_mode:
+        opt_base_cmd += ["--tune_nosave"]
     opt_base_cmd += [
         "-t", train_dir,
         data_dir
     ]
     log_file_path = path.join(train_dir, 'log')
     psnr_file_path = path.join(train_dir, PSNR_FILE_NAME)
+    ckpt_path = path.join(train_dir, 'ckpt.npz')
     if path.isfile(psnr_file_path):
         print('! SKIP', train_dir)
         return
     print('********************************************')
-    print('! RUN opt.py -t', train_dir)
-    opt_cmd = ' '.join(opt_base_cmd + flags)
-    print(opt_cmd)
-    try:
-        opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
-                sys.stdout.encoding)
-    except subprocess.CalledProcessError:
-        print('Error occurred while running OPT for exp', train_dir)
-        return
-    with open(log_file_path, 'w') as f:
-        f.write(opt_ret)
+    if eval_mode:
+        print('EVAL MODE')
 
-    if args.eval:
+    if eval_mode and path.isfile(ckpt_path):
+        print('! SKIP training because ckpt exists', ckpt_path)
+        opt_ret = ""  # Silence
+    else:
+        print('! RUN opt.py -t', train_dir)
+        opt_cmd = ' '.join(opt_base_cmd + flags)
+        print(opt_cmd)
+        try:
+            opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
+                    sys.stdout.encoding)
+        except subprocess.CalledProcessError:
+            print('Error occurred while running OPT for exp', train_dir)
+            return
+        with open(log_file_path, 'w') as f:
+            f.write(opt_ret)
+
+    if eval_mode:
         eval_base_cmd = [
             "python", "-u", "render_imgs.py",
-            path.join(train_dir, 'ckpt.npz'),
+            ckpt_path,
             data_dir
         ]
+        print('! RUN ', eval_base_cmd)
         try:
             eval_ret = subprocess.check_output(eval_base_cmd, shell=True, env=env).decode(
                     sys.stdout.encoding)
         except subprocess.CalledProcessError:
             print('Error occurred while running EVAL for exp', train_dir)
             return
-        test_stats = [{x.split(':')[0].strip(): float(x.split(':')[1])
-                      for x in eval_ret.strip().split('\n')[-3:] if ':' in x}]
+        #  test_stats = [{x.split(':')[0].strip().lower(): float(x.split(':')[1])
+        #                for x in eval_ret.strip().split('\n')[-3:] if ':' in x}]
     else:
         test_stats = [eval(x.split('eval stats:')[-1].strip())
                       for x in opt_ret.split('\n') if
                       x.startswith('eval stats: ')]
-    if len(test_stats) == 0:
-        print('note: invalid config or crash')
-        final_test_psnr = 0.0
-    else:
-        test_psnrs = [stats['psnr'] for stats in test_stats if 'psnr' in stats.keys()]
-        print('final psnrs', test_psnrs[-5:])
-        final_test_psnr = test_psnrs[-1]
-    with open(psnr_file_path, 'w') as f:
-        f.write(str(final_test_psnr))
+        if len(test_stats) == 0:
+            print('note: invalid config or crash')
+            final_test_psnr = 0.0
+        else:
+            test_psnrs = [stats['psnr'] for stats in test_stats if 'psnr' in stats.keys()]
+            print('final psnrs', test_psnrs[-5:])
+            final_test_psnr = test_psnrs[-1]
+        with open(psnr_file_path, 'w') as f:
+            f.write(str(final_test_psnr))
 
-def process_main(device, queue):
+def process_main(device, eval_mode:bool, queue):
     # Set CUDA_VISIBLE_DEVICES programmatically
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(device)
@@ -88,7 +99,7 @@ def process_main(device, queue):
         task = queue.get()
         if len(task) == 0:
             break
-        run_exp(env, **task)
+        run_exp(env, eval_mode, **task)
 
 # Variable value list generation helpers
 def lin(start, stop, num):
@@ -159,7 +170,7 @@ if __name__ == '__main__':
         print('Eval mode?', args.eval)
     pqueue = Queue()
 
-    leaderboard_path = path.join(train_root, 'leaderboard.txt')
+    leaderboard_path = path.join(train_root, 'results.txt' if args.eval else 'leaderboard.txt')
     print('Leaderboard path:', leaderboard_path)
 
     variables : Dict = tasks_file.get('variables', {})
@@ -195,7 +206,7 @@ if __name__ == '__main__':
 
     all_procs = []
     for i, gpu in enumerate(args.gpus):
-        process = Process(target=process_main, args=(gpu, pqueue))
+        process = Process(target=process_main, args=(gpu, args.eval, pqueue))
         process.daemon = True
         process.start()
         all_procs.append(process)
@@ -203,19 +214,42 @@ if __name__ == '__main__':
     for i, gpu in enumerate(args.gpus):
         all_procs[i].join()
 
+    if args.eval:
+        print('Done')
+        with open(leaderboard_path, 'w') as leaderboard_file:
+            lines = [f'train_dir, PSNR, SSIM, LPIPS']
+            for task in all_tasks:
+                train_dir = task['train_dir']
+                psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
+                ssim_file_path = path.join(train_dir, 'test_renders', 'ssim.txt')
+                lpips_file_path = path.join(train_dir, 'test_renders', 'lpips.txt')
 
-    with open(leaderboard_path, 'w') as leaderboard_file:
-        exps = []
-        for task in all_tasks:
-            train_dir = task['train_dir']
-            psnr_file_path = path.join(train_dir, PSNR_FILE_NAME)
+                with open(psnr_file_path, 'r') as f:
+                    psnr = float(f.read())
+                with open(ssim_file_path, 'r') as f:
+                    ssim = float(f.read())
+                if path.exists(lpips_file_path):
+                    with open(lpips_file_path, 'r') as f:
+                        lpips = float(f.read())
+                else:
+                    lpips = 1e9
+                line = f'{train_dir}, {psnr:.10f}, {ssim:.10f}, {lpips:.10f}\n'
+                lines.append(line)
+            leaderboard_file.writelines(lines)
+            
+    else:
+        with open(leaderboard_path, 'w') as leaderboard_file:
+            exps = []
+            for task in all_tasks:
+                train_dir = task['train_dir']
+                psnr_file_path = path.join(train_dir, PSNR_FILE_NAME)
 
-            with open(psnr_file_path, 'r') as f:
-                test_psnr = float(f.read())
-                print(train_dir, test_psnr)
-                exps.append((test_psnr, train_dir))
-        exps = sorted(exps, key = lambda x: -x[0])
-        lines = [f'{psnr:.10f}\t{train_dir}\n' for psnr, train_dir in exps]
-        leaderboard_file.writelines(lines)
-    print('Wrote', leaderboard_path)
+                with open(psnr_file_path, 'r') as f:
+                    test_psnr = float(f.read())
+                    print(train_dir, test_psnr)
+                    exps.append((test_psnr, train_dir))
+            exps = sorted(exps, key = lambda x: -x[0])
+            lines = [f'{psnr:.10f}\t{train_dir}\n' for psnr, train_dir in exps]
+            leaderboard_file.writelines(lines)
+        print('Wrote', leaderboard_path)
 
