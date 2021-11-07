@@ -9,7 +9,7 @@ import numpy as np
 import os
 from os import path
 from util.dataset import datasets
-from util.util import Timing
+from util.util import Timing, compute_ssim
 from util import config_util
 
 import imageio
@@ -35,6 +35,10 @@ parser.add_argument('--nobg',
                     action='store_true',
                     default=False,
                     help="Do not render background (if using BG model)")
+parser.add_argument('--blackbg',
+                    action='store_true',
+                    default=False,
+                    help="Force a black BG (behind BG model) color; useful for debugging 'clouds'")
 args = parser.parse_args()
 config_util.maybe_merge_config_file(args)
 device = 'cuda:0'
@@ -60,8 +64,6 @@ if grid.use_background:
         grid.density_data.data[:] = 0.0
         render_dir += '_nofg'
 
-print('Writing to', render_dir)
-os.makedirs(render_dir, exist_ok=True)
 
 grid.opt.step_size = args.step_size
 grid.opt.sigma_thresh = args.sigma_thresh
@@ -69,11 +71,20 @@ grid.opt.stop_thresh = args.stop_thresh
 grid.opt.background_brightness = 1.0
 grid.opt.backend = args.renderer_backend
 
+if args.blackbg:
+    print('Using black bg')
+    render_dir += '_blackbg'
+    grid.opt.background_brightness = 0.0
+
+print('Writing to', render_dir)
+os.makedirs(render_dir, exist_ok=True)
+
 with torch.no_grad():
     im_size = dset.h * dset.w
     n_images = dset.render_c2w.size(0) if args.render_path else dset.n_images
     img_eval_interval = max(n_images // args.n_eval, 1)
     avg_psnr = 0.0
+    avg_ssim = 0.0
     n_images_gen = 0
     cam = svox2.Camera(torch.tensor(0), dset.intrins.fx, dset.intrins.fy,
                        dset.intrins.cx, dset.intrins.cy,
@@ -89,8 +100,10 @@ with torch.no_grad():
             mse = (im - im_gt) ** 2
             mse_num : float = mse.mean().item()
             psnr = -10.0 * math.log10(mse_num)
+            ssim = compute_ssim(im_gt, im)
             avg_psnr += psnr
-            print(img_id, 'PSNR', psnr)
+            avg_ssim += ssim
+            print(img_id, 'PSNR', psnr, 'SSIM', ssim)
         #  all_rgbs = []
         #  all_mses = []
         #  for batch_begin in range(0, im_size, args.eval_batch_size):
@@ -113,6 +126,9 @@ with torch.no_grad():
         im = None
         n_images_gen += 1
     avg_psnr /= n_images_gen
-    print('average PSNR', avg_psnr)
+    avg_ssim /= n_images_gen
+    print('average PSNR', avg_psnr, 'SSIM', avg_ssim)
     with open(path.join(render_dir, 'psnr.txt'), 'w') as f:
         f.write(str(avg_psnr))
+    with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
+        f.write(str(avg_ssim))

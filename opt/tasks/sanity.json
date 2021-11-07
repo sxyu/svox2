@@ -1,19 +1,17 @@
 {
-    "data_root": "/home/sxyu/data/nerf_synthetic/lego",
-    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_tune/mlp_sweep",
+    "data_root": "/home/sxyu/data/nerf_synthetic/ship",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_tune/ship_sweep",
     "variables": {
-        "lr_sh": "loglin(5e-3, 5e-2, 4)",
-        "lr_basis": "loglin(1e-6, 1e-3, 8)",
-        "upsamp_every": [25600, 38400, 51200],
-        "lambda_tv_sh": "loglin(1e-5, 1e-2, 6)"
+        "lr_sh_final": "loglin(5e-7, 5e-2, 10)",
+        "lr_sigma": "loglin(5e0, 2e2, 4)",
+        "lr_sigma_delay_steps": [25000, 40000, 55000]
     },
     "tasks": [{
-        "train_dir": "lrc{lr_sh}_lrb{lr_basis}_tvc{lambda_tv_sh}_ups{upsamp_every}",
+        "train_dir": "lrcf{lr_sh_final}_lrs{lr_sigma}_del{lr_sigma_delay_steps}",
         "flags": [
-            "--upsamp_every", "{upsamp_every}",
-            "--lr_sh", "{lr_sh}",
-            "--lr_basis", "{lr_basis}",
-            "--upsamp_every", "{upsamp_every}"
+            "--lr_sh_final", "{lr_sh_final}",
+            "--lr_sigma", "{lr_sigma}",
+            "--lr_sigma_delay_steps", "{lr_sigma_delay_steps}"
         ]
     }]
 }

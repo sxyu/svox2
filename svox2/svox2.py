@@ -372,7 +372,6 @@ class SparseGrid(nn.Module):
             gsz = torch.tensor(reso)
             roffset = 1.0 / gsz - 1.0
             rscaling = 2.0 / gsz
-            print(points.dtype, roffset.dtype, rscaling.dtype)
             points = torch.addcmul(
                 roffset.to(device=points.device),
                 points,
@@ -833,7 +832,8 @@ class SparseGrid(nn.Module):
     def volume_render_fused(
         self, rays: Rays, rgb_gt: torch.Tensor,
         randomize: bool = False,
-        beta_loss: float = 0.0
+        beta_loss: float = 0.0,
+        sparsity_loss: float = 0.0
     ):
         """
         Standard volume rendering with fused MSE gradient generation,
@@ -846,6 +846,11 @@ class SparseGrid(nn.Module):
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param rgb_gt: (N, 3), GT pixel colors, each channel in [0, 1]
         :param randomize: bool, whether to use randomness (now ignored)
+        :param beta_loss: float, weighting for beta loss to add to the gradient.
+                                 (fused into the backward pass).
+                                 This is average voer the rays in the batch.
+                                 Beta loss also from neural volumes:
+                                 [Lombardi et al., ToG 2019]
         :return: (N, 3), predicted RGB
         """
         assert (
@@ -881,6 +886,7 @@ class SparseGrid(nn.Module):
             self.opt._to_cpp(),
             rgb_gt,
             beta_loss,
+            sparsity_loss,
             rgb_out,
             grad_holder
         )
@@ -965,7 +971,7 @@ class SparseGrid(nn.Module):
         cameras: Optional[List[Camera]] = None,
         use_z_order=False,
         accelerate=True,
-        weight_render_stop_thresh: float = 0.05
+        weight_render_stop_thresh: float = 0.2 #0.05
     ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -1055,7 +1061,7 @@ class SparseGrid(nn.Module):
                 scaling = (self._scaling * gsz).to(device=device)
                 max_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
                 print(" Grid weight render", sample_vals_density.shape)
-                for cam in tqdm(cameras):
+                for i, cam in enumerate(cameras):
                     _C.grid_weight_render(
                         sample_vals_density, cam._to_cpp(),
                         0.5,
@@ -1063,6 +1069,21 @@ class SparseGrid(nn.Module):
                         self.opt.last_sample_opaque,
                         offset, scaling, max_wt_grid
                     )
+                    #  if i % 5 == 0:
+                    #      # FIXME DEBUG
+                    #      tmp_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
+                    #      import os
+                    #      os.makedirs('wmax_vol', exist_ok=True)
+                    #      _C.grid_weight_render(
+                    #          sample_vals_density, cam._to_cpp(),
+                    #          0.5,
+                    #          0.0,
+                    #          self.opt.last_sample_opaque,
+                    #          offset, scaling, tmp_wt_grid
+                    #      )
+                    #  np.save(f"wmax_vol/wmax_view{i:05d}.npy", tmp_wt_grid.detach().cpu().numpy())
+                #  import sys
+                #  sys.exit(0)
                 sample_vals_mask = max_wt_grid > weight_thresh
                 del max_wt_grid
             else:
@@ -1289,6 +1310,8 @@ class SparseGrid(nn.Module):
             grid.background_nlayers = background_cubemap.size(0)
             grid.background_reso = background_cubemap.size(2)
             grid.background_cubemap = nn.Parameter(background_cubemap)
+        else:
+            grid.background_cubemap.data = grid.background_cubemap.data.to(device=device)
 
         if grid.links.is_cuda:
             grid.accelerate()
@@ -1563,17 +1586,15 @@ class SparseGrid(nn.Module):
         scaling: float = 1.0,
     ):
         """
-        Add gradient of L2 regularization for color
+        Add gradient of L2 regularization for color 
         directly into the gradient tensor, multiplied by 'scaling'
+        (no CUDA extension used)
 
         :param start_dim: int, first color channel dimension to compute TV over (inclusive).
                           Default 0.
         :param end_dim: int, last color channel dimension to compute TV over (exclusive).
                           Default None = all dimensions until the end.
         """
-        assert (
-            _C is not None and self.sh_data.is_cuda and grad.is_cuda
-        ), "CUDA extension is currently required for total variation"
         with torch.no_grad():
             if end_dim is None:
                 end_dim = self.sh_data.size(1)

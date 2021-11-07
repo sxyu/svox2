@@ -19,7 +19,7 @@ void volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 
 void volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                               Tensor, float, Tensor, GridOutputGrads &);
+                               Tensor, float, float, Tensor, GridOutputGrads &);
 
 // Tensor volume_render_cuvol_image(SparseGridSpec &, CameraSpec &,
 //                                  RenderOptions &);

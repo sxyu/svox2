@@ -140,6 +140,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         WarpReducef::TempStorage& __restrict__ temp_storage,
         float log_transmit_in,
         float beta_loss,
+        float sparsity_loss,
         PackedGridOutputGrads& __restrict__ grads,
         float* __restrict__ accum_out,
         float* __restrict__ log_transmit_out
@@ -154,7 +155,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
     if (beta_loss > 0.f) {
         const float transmit_in = _EXP(log_transmit_in);
-        beta_loss = beta_loss * (1 - transmit_in / (1 - transmit_in)); // d beta_loss / d log_transmit_in
+        beta_loss *= (1 - transmit_in / (1 - transmit_in + 1e-3)); // d beta_loss / d log_transmit_in
         accum += beta_loss;
         // Interesting how this loss turns out, kinda nice?
     }
@@ -243,6 +244,13 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             accum -= weight * total_color;
             float curr_grad_sigma = ray.world_step * (
                     total_color * _EXP(log_transmit) - accum);
+            if (sparsity_loss > 0.f) {
+                // Cauchy version (from SNeRG)
+                curr_grad_sigma += sparsity_loss * (4 * sigma / (1 + 2 * (sigma * sigma)));
+
+                // Alphs version (from PlenOctrees)
+                // curr_grad_sigma += sparsity_loss * _EXP(-pcnt) * ray.world_step;
+            }
             trilerp_backward_cuvol_one(grid.links, grads.grad_sh_out,
                     grid.stride_x,
                     grid.size[2],
@@ -266,10 +274,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     }
     if (lane_id == 0) {
         if (accum_out != nullptr) {
-            if (beta_loss > 0.f) {
-                // Cancel beta loss out in case of background
-                accum -= beta_loss;
-            }
+            // Cancel beta loss out in case of background
+            accum -= beta_loss;
             *accum_out = accum;
         }
         if (log_transmit_out != nullptr) { *log_transmit_out = log_transmit; }
@@ -533,6 +539,7 @@ __global__ void render_ray_backward_kernel(
     bool grad_out_is_rgb,
     const float* __restrict__ log_transmit_in,
     float beta_loss,
+    float sparsity_loss,
     PackedGridOutputGrads grads,
     float* __restrict__ accum_out = nullptr,
     float* __restrict__ log_transmit_out = nullptr) {
@@ -592,6 +599,7 @@ __global__ void render_ray_backward_kernel(
         temp_storage[ray_blk_id],
         log_transmit_in == nullptr ? 0.f : log_transmit_in[ray_id],
         beta_loss,
+        sparsity_loss,
         grads,
         accum_out == nullptr ? nullptr : accum_out + ray_id,
         log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
@@ -754,6 +762,7 @@ void volume_render_cuvol_backward(
                     false,
                     nullptr,
                     0.f,
+                    0.f,
                     // Output
                     grads,
                     use_background ? accum.data_ptr<float>() : nullptr,
@@ -784,6 +793,7 @@ void volume_render_cuvol_fused(
         RenderOptions& opt,
         torch::Tensor rgb_gt,
         float beta_loss,
+        float sparsity_loss,
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
 
@@ -833,7 +843,8 @@ void volume_render_cuvol_fused(
                 rays, opt,
                 true,
                 beta_loss > 0.f ? log_transmit.data_ptr<float>() : nullptr,
-                beta_loss,
+                beta_loss / Q,
+                sparsity_loss,
                 // Output
                 grads,
                 use_background ? accum.data_ptr<float>() : nullptr,
