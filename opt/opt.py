@@ -141,10 +141,10 @@ group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)#0.0)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
-group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-5)
+group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
 
 group.add_argument('--lambda_tv_basis', type=float, default=0.0)
 
@@ -196,13 +196,18 @@ grid = svox2.SparseGrid(reso=reso if args.z_reso_factor == 1 else [
                         basis_reso=args.basis_reso,
                         basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
                         mlp_posenc_size=4,
-                        background_nlayers=8)
+                        background_nlayers=8,
+                        background_reso=256)
 
 grid.opt.last_sample_opaque = dset.last_sample_opaque
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
 grid.density_data.data[:] = args.init_sigma
+
+if grid.use_background:
+    grid.background_cubemap.data[..., -1] = args.init_sigma
+    grid.background_cubemap.data[..., :-1] = 0.49
 
 #  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
@@ -315,6 +320,8 @@ while True:
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
                 psnr = -10.0 * math.log10(mse_num)
+                if math.isnan(psnr):
+                    print('NAN PSNR', i, img_id)
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
                 n_images_gen += 1
@@ -371,7 +378,10 @@ while True:
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
+            #  batch_dirs.normal_() # FIXME
+            #  batch_dirs /= batch_dirs.norm(dim=-1).unsqueeze(-1) # FIXME
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
+            #  rgb_gt[:] = 0 # FIXME
             rays = svox2.Rays(batch_origins, batch_dirs)
 
             #  with Timing("volrend_fused"):
@@ -437,6 +447,8 @@ while True:
             # Manual SGD/rmsprop step
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
             grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
+            if grid.use_background:
+                grid.optim_background_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if gstep_id >= args.lr_basis_begin_step:
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)

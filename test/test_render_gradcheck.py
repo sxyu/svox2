@@ -37,8 +37,8 @@ if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
 
 ENABLE_TORCH_CHECK = True
 N_RAYS = 5000 #200 * 200
-#  origins = torch.full((N_RAYS, 3), fill_value=0.0, device=device, dtype=dtype)
-origins = torch.zeros((N_RAYS, 3), device=device, dtype=dtype)
+origins = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
+#  origins = torch.zeros((N_RAYS, 3), device=device, dtype=dtype)
 dirs : torch.Tensor = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
 dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 rays = svox2.Rays(origins, dirs)

@@ -50,6 +50,8 @@ class RenderOptions:
 
     last_sample_opaque: bool = False   # Make the last sample opaque (for forward-facing)
 
+    background_msi_scale: float = 10.0
+
     def _to_cpp(self, randomize: bool = False):
         """
         Generate object to pass to C++
@@ -60,6 +62,7 @@ class RenderOptions:
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
         opt.last_sample_opaque = self.last_sample_opaque
+        opt.background_msi_scale = self.background_msi_scale
         #  opt.randomize = randomize
         #  UINT32_MAX = 2**32-1
         #  opt._m1 = np.random.randint(0, UINT32_MAX)
@@ -228,70 +231,6 @@ class _VolumeRenderFunction(autograd.Function):
         return grad_density_grid, grad_sh_grid, grad_basis, grad_background, \
                None, None, None, None
 
-
-class _VolumeRenderImageFunction(autograd.Function):
-    @staticmethod
-    def forward(
-        ctx,
-        data_density: torch.Tensor,
-        data_sh: torch.Tensor,
-        data_basis: torch.Tensor,
-        data_background: torch.Tensor,
-        grid,
-        cam,
-        opt,
-        backend: str,
-    ):
-        cu_fn = _C.__dict__[f"volume_render_{backend}_image"]
-        color = cu_fn(grid, cam, opt)
-        ctx.save_for_backward(color)
-        ctx.grid = grid
-        ctx.cam = cam
-        ctx.opt = opt
-        ctx.basis_data = data_basis
-        ctx.backend = backend
-        return color
-
-    @staticmethod
-    def backward(ctx, grad_out):
-        (color_cache,) = ctx.saved_tensors
-        cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_image_backward"]
-        grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
-        grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
-        if ctx.grid.basis_type == BASIS_TYPE_MLP:
-            grad_basis = torch.zeros_like(ctx.basis_data)
-        else:
-            grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
-        grad_background = torch.zeros_like(ctx.grid.background_cubemap.data)
-
-        grad_holder = _C.GridOutputGrads()
-        grad_holder.grad_density_out = grad_density_grid
-        grad_holder.grad_sh_out = grad_sh_grid
-        if ctx.needs_input_grad[2]:
-            grad_holder.grad_basis_out = grad_basis
-        if ctx.needs_input_grad[3]:
-            grad_holder.grad_background_out = grad_background
-        # TODO save the sparse mask
-        sparse_mask = cu_fn(
-            ctx.grid,
-            ctx.cam,
-            ctx.opt,
-            grad_out.contiguous(),
-            color_cache,
-            grad_holder
-        )
-        ctx.grid = ctx.cam = ctx.opt = None
-        if not ctx.needs_input_grad[0]:
-            grad_density_grid = None
-        if not ctx.needs_input_grad[1]:
-            grad_sh_grid = None
-        if not ctx.needs_input_grad[2]:
-            grad_basis = None
-        if not ctx.needs_input_grad[3]:
-            grad_background = None
-        ctx.basis_data = None
-        return grad_density_grid, grad_sh_grid, grad_basis, grad_background, \
-               None, None, None, None
 
 
 class _TotalVariationFunction(autograd.Function):
@@ -502,8 +441,10 @@ class SparseGrid(nn.Module):
         self.opt = RenderOptions()
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
+        self.sparse_background_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
+        self.background_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
 
         if self.links.is_cuda and use_sphere_bound:
@@ -763,28 +704,35 @@ class SparseGrid(nn.Module):
                     origins_ini,
                     dirs_ini,
                     delta_scale)
-            r_min = torch.cross(csi.origins, csi.dirs).norm(dim=-1)
-            _, t_last = csi.intersect(r_min + 1e-4)
+            #  r_min = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1).clamp_min(
+                    #  self.opt.background_msi_scale)
+            #  _, t_last = csi.intersect(r_min + 1e-4)
+            #  print('py', csi.origins, csi.dirs, r_min, t_last, 'wsc', csi.world_step_scale)
             for i in range(self.background_nlayers):
-                r : float = self.background_nlayers / (self.background_nlayers - i - 0.5)
+                r : float = self.opt.background_msi_scale * \
+                            self.background_nlayers / (self.background_nlayers - i - 0.5)
+                thickness = r - self.opt.background_msi_scale * \
+                            self.background_nlayers / (self.background_nlayers - i)
                 active_mask, t_inter = csi.intersect(r)
                 t_inter_sub = t_inter[active_mask]
                 sphpos = csi.origins[active_mask] + \
                          t_inter_sub.unsqueeze(-1) * csi.dirs[active_mask]
+                #  print('A', r, active_mask[-1], t_inter_sub[-1], sphpos[-1])
                 coord = utils.dir_to_cubemap_coord(sphpos, self.background_reso, eac=True)
                 query = utils.cubemap_build_query(coord, self.background_reso)
 
                 rgba = utils.cubemap_sample(self.background_cubemap[i], query)
 
-                log_att = -csi.world_step_scale * torch.relu(rgba[:, -1]) * (
-                            t_inter_sub - t_last[active_mask])
+                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * thickness
+                #  ( t_inter_sub - t_last[active_mask])
                 weight = torch.exp(log_light_intensity[active_mask]) * (
                     1.0 - torch.exp(log_att)
                 )
+                #  print('B', r, rgba[-1].detach(), log_light_intensity[-1].detach(), weight[-1].detach(), t_inter_sub[-1], t_last[active_mask][-1])
                 rgb = torch.clamp_min(rgba[:, :3] + 0.5, 0.0)
                 out_rgb[active_mask] += rgb * weight[:, None]
                 log_light_intensity[active_mask] += log_att
-                t_last = t_inter
+                #  t_last[active_mask] = t_inter[active_mask]
 
         out_rgb += (
             torch.exp(log_light_intensity).unsqueeze(-1)
@@ -1550,6 +1498,44 @@ class SparseGrid(nn.Module):
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
 
+    def optim_background_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+                              optim : str='rmsprop'):
+        """
+        Execute RMSprop or sgd step on density
+        """
+        assert (
+            _C is not None and self.sh_data.is_cuda
+        ), "CUDA extension is currently required for optimizers"
+
+        indexer = self._maybe_convert_sparse_grad_indexer(bg=True)
+        n_chnl = self.background_cubemap.size(-1)
+        if optim == 'rmsprop':
+            if (
+                self.background_rms is None
+                or self.background_rms.shape != self.background_cubemap.shape
+            ):
+                del self.background_rms
+                self.background_rms = torch.zeros_like(self.background_cubemap.data) # FIXME init?
+            _C.rmsprop_step(
+                self.background_cubemap.data.view(-1, n_chnl),
+                self.background_rms.view(-1, n_chnl),
+                self.background_cubemap.grad.view(-1, n_chnl),
+                indexer,
+                beta,
+                lr,
+                epsilon,
+                -1e9
+            )
+        elif optim == 'sgd':
+            _C.sgd_step(
+                self.background_cubemap.data.view(-1, n_chnl),
+                self.background_cubemap.grad.view(-1, n_chnl),
+                indexer,
+                lr,
+            )
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+
     def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
                          optim: str = 'rmsprop'):
         """
@@ -1655,12 +1641,16 @@ class SparseGrid(nn.Module):
             indexer = torch.empty((), device=self.density_data.device)
         return indexer
 
-    def _maybe_convert_sparse_grad_indexer(self, sh=False):
+    def _maybe_convert_sparse_grad_indexer(self, sh=False, bg=False):
         """
         Automatically convert sparse grad indexer from mask to
         indices, if it is efficient
         """
         indexer = self.sparse_sh_grad_indexer if sh else self.sparse_grad_indexer
+        if bg:
+            indexer = self.sparse_background_indexer
+            if indexer is not None:
+                indexer = indexer.view(-1)
         if indexer is None:
             return torch.empty((), device=self.density_data.device)
         if (

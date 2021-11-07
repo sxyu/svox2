@@ -19,9 +19,6 @@ const int TRACE_RAY_CUDA_RAYS_PER_BLOCK = TRACE_RAY_CUDA_THREADS / WARP_SIZE;
 const int TRACE_RAY_BKWD_CUDA_THREADS = 128;
 const int TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK = TRACE_RAY_BKWD_CUDA_THREADS / WARP_SIZE;
 
-const int TRACE_RAY_FUSED_CUDA_THREADS = 128;
-const int TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK = TRACE_RAY_FUSED_CUDA_THREADS / WARP_SIZE;
-
 const int MIN_BLOCKS_PER_SM = 8;
 typedef cub::WarpReduce<float> WarpReducef;
 
@@ -75,7 +72,7 @@ __device__ __inline__ void trace_ray_cuvol(
                 1,
                 ray.l, ray.pos,
                 0);
-        if (opt.last_sample_opaque && grid.background_nlayers == 0 && t + opt.step_size > ray.tmax) {
+        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
             sigma += 1e9;
         }
         if (sigma > opt.sigma_thresh) {
@@ -116,38 +113,48 @@ __device__ __inline__ void trace_ray_cuvol(
                 ray.dir,
                 ray.world_step / opt.step_size);
 
-        const float r_min = _dist_ray_to_origin(csi.origin, csi.dir);
-        float t_last;
-        csi.intersect(r_min + 1e-4f, &t_last);
-        // printf("ray_ori=[%f, %f, %f] ray_dir=[%f, %f, %f] ray_w=[%f]\n",
+        // float t_last;
+        // const float r_min = fmaxf(_dist_ray_to_origin(csi.origin, csi.dir), opt.background_msi_scale);
+        // csi.intersect(r_min + 1e-4f, &t_last);
+        // if (csi.dir[0] < 0.0) {
+        //     printf("ray_ori=[%f, %f, %f] ray_dir=[%f, %f, %f] ray_w=[%f]\n",
         //             ray.origin[0], ray.origin[1], ray.origin[2],
         //             ray.dir[0], ray.dir[1], ray.dir[2],
         //             ray.world_step
-        //        );
-        // printf("csi_ori=[%f, %f, %f] csi_dir=[%f, %f, %f] csi_wss=%f csi_q2a=%f qb=%f f=%f\n",
+        //           );
+        //     printf("csi_ori=[%f, %f, %f] csi_dir=[%f, %f, %f] csi_wss=%f csi_q2a=%f qb=%f f=%f r_min=%f t_last=%f\n",
         //             csi.origin[0], csi.origin[1], csi.origin[2],
         //             csi.dir[0], csi.dir[1], csi.dir[2],
         //             csi.world_step_scale,
         //             csi.q2a,
         //             csi.qb,
-        //             csi.f
-        //         );
+        //             csi.f,
+        //             r_min,
+        //             t_last
+        //           );
+        // }
 
         const float* cubemap_data = grid.background_cubemap;
         const int cubemap_step = 6 * grid.background_reso * grid.background_reso * /*n_channels*/ 4;
         for (int i = 0; i < grid.background_nlayers; ++i) {
-            const float radius = float(grid.background_nlayers) /
+            const float radius = opt.background_msi_scale * float(grid.background_nlayers) /
                                 (float(grid.background_nlayers - i - 0.5f));
+            const float thickness = radius - opt.background_msi_scale * float(grid.background_nlayers) /
+                                (float(grid.background_nlayers - i));
             float t_inter;
-            // printf("i=%d r=%f\n", i, radius);
+            // if (csi.dir[0] < 0.0) {
+            //     printf("i=%d r=%f\n", i, radius);
+            // }
             if (csi.intersect(radius, &t_inter)) {
 #pragma unroll 3
                 for (int j = 0; j < 3; ++j) {
                     ray.pos[j] = fmaf(t_inter, csi.dir[j], csi.origin[j]);
                 }
-                // printf(" I! t_inter=%f pos=[%f, %f, %f]\n",
-                //        t_inter,
-                //        ray.pos[0], ray.pos[1], ray.pos[2]);
+                // if (csi.dir[0] < 0.0) {
+                //     printf(" I! t_inter=%f pos=[%f, %f, %f]\n",
+                //             t_inter,
+                //             ray.pos[0], ray.pos[1], ray.pos[2]);
+                // }
 
                 const CubemapCoord coord = dir_to_cubemap_coord(ray.pos,
                                                                 grid.background_reso, /* EAC */ true);
@@ -167,17 +174,20 @@ __device__ __inline__ void trace_ray_cuvol(
                             /*n_channels*/ 4,
                             lane_colorgrp);
 
-                    const float pcnt = csi.world_step_scale * (t_inter - t_last) * sigma;
+                    const float pcnt = csi.world_step_scale * thickness * sigma;
                     const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
                     light_intensity -= pcnt;
-                    // printf(" wsc=%f, t_inter=%f, t_last=%f, sigma=%f, weight=%f, li=%f\n",
-                    //        csi.world_step_scale, t_inter, t_last, sigma, weight, light_intensity);
+                    // if (csi.dir[0] < 0.0) {
+                    //     printf(" wsc=%f, t_inter=%f, t_last=%f, sigma=%f, weight=%f, li=%f\n",
+                    //             csi.world_step_scale, t_inter, t_last, sigma, weight, light_intensity);
+                    // }
 
                     outv += weight * fmaxf(group_color + 0.5f, 0.f);  // Clamp to [+0, infty)
                 }
-                t_last = t_inter;
+                // t_last = t_inter;
             }
-            cubemap_data += cubemap_step;
+            if (cubemap_data != nullptr)
+                cubemap_data += cubemap_step;
         }
     }
 
@@ -240,7 +250,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                 1,
                 ray.l, ray.pos,
                 0);
-        if (opt.last_sample_opaque && grid.background_nlayers == 0 && t + opt.step_size > ray.tmax) {
+        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
             sigma += 1e9;
         }
         if (sigma > opt.sigma_thresh) {
@@ -318,15 +328,19 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                 ray.dir,
                 ray.world_step / opt.step_size);
 
-        const float r_min = _dist_ray_to_origin(csi.origin, csi.dir);
-        float t_last;
-        csi.intersect(r_min + 1e-4f, &t_last);
+        // const float r_min = fmaxf(_dist_ray_to_origin(csi.origin, csi.dir), opt.background_msi_scale);
+        // float t_last;
+        // csi.intersect(r_min + 1e-4f, &t_last);
 
         const float* cubemap_data = grid.background_cubemap;
         float* grad_cubemap_data = grads.grad_background_out;
-        const int cubemap_step = 6 * grid.background_reso * grid.background_reso * /*n_channels*/ 4;
+        bool* mask_cubemap_ptr = grads.mask_background_out;
+        const int cubemap_step = 6 * grid.background_reso * grid.background_reso;
         for (int i = 0; i < grid.background_nlayers; ++i) {
-            const float radius = float(grid.background_nlayers) / (float(grid.background_nlayers - i - 0.5f));
+            const float radius = opt.background_msi_scale * float(
+                    grid.background_nlayers) / (float(grid.background_nlayers - i - 0.5f));
+            const float thickness = radius - opt.background_msi_scale * float(grid.background_nlayers) /
+                                (float(grid.background_nlayers - i));
             float t_inter;
             if (csi.intersect(radius, &t_inter)) {
 #pragma unroll 3
@@ -352,7 +366,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                             /*n_channels*/ 4,
                             lane_colorgrp) + 0.5f;
 
-                    const float pcnt = csi.world_step_scale * (t_inter - t_last) * sigma;
+                    const float pcnt = csi.world_step_scale * thickness * sigma;
                     const float weight = _EXP(light_intensity) * (1.f - _EXP(-pcnt));
                     light_intensity -= pcnt;
 
@@ -367,7 +381,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                     const float curr_grad_color = weight * color_in_01 * gout;
 
                     accum -= weight * total_color;
-                    float curr_grad_sigma = csi.world_step_scale * (t_inter - t_last) * (
+                    float curr_grad_sigma = csi.world_step_scale * thickness * (
                             total_color * _EXP(light_intensity) - accum);
 
                     if (lane_colorgrp_id == 0) {
@@ -387,15 +401,19 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                                     4,
                                     curr_grad_sigma,
                                     3,
-                                    grads.mask_background_out);
+                                    mask_cubemap_ptr);
                         }
                     }
                 }
 
-                t_last = t_inter;
+                // t_last = t_inter;
             }
-            cubemap_data += cubemap_step;
-            grad_cubemap_data += cubemap_step;
+            if (cubemap_data != nullptr)
+                cubemap_data += cubemap_step * 4 /* n_channels */;
+            if (grad_cubemap_data != nullptr)
+                grad_cubemap_data += cubemap_step * 4/* n_channels */;
+            if (mask_cubemap_ptr != nullptr)
+                mask_cubemap_ptr += cubemap_step;
         }
     }
 }
@@ -445,12 +463,12 @@ __global__ void render_ray_kernel(
 __launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_backward_kernel(
     PackedSparseGridSpec grid,
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
-        grad_output,
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> color_cache,
-        PackedRaysSpec rays,
-        RenderOptions opt,
-    PackedGridOutputGrads grads) {
+    const float* __restrict__ grad_output,
+    const float* __restrict__ color_cache,
+    PackedRaysSpec rays,
+    RenderOptions opt,
+    PackedGridOutputGrads grads,
+    bool grad_out_is_rgb = false) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5;
     const int ray_blk_id = threadIdx.x >> 5;
@@ -478,11 +496,27 @@ __global__ void render_ray_backward_kernel(
     if (lane_id == 0) {
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
     }
+
+    float grad_out[3];
+    if (grad_out_is_rgb) {
+        const float norm_factor = 2.f / (3 * int(rays.origins.size(0)));
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            const float resid = color_cache[ray_id * 3 + i] - grad_output[ray_id * 3 + i];
+            grad_out[i] = resid * norm_factor;
+        }
+    } else {
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            grad_out[i] = grad_output[ray_id * 3 + i];
+        }
+    }
+
     __syncwarp((1U << grid.sh_data_dim) - 1);
     trace_ray_cuvol_backward(
         grid,
-        grad_output[ray_id].data(),
-        color_cache[ray_id].data(),
+        grad_out,
+        color_cache + ray_id * 3,
         ray_spec[ray_blk_id],
         opt,
         lane_id,
@@ -499,173 +533,6 @@ __global__ void render_ray_backward_kernel(
                  grads.grad_basis_out);
 }
 
-__launch_bounds__(TRACE_RAY_FUSED_CUDA_THREADS, MIN_BLOCKS_PER_SM)
-__global__ void render_ray_fused_kernel(
-        PackedSparseGridSpec grid,
-        PackedRaysSpec rays,
-        RenderOptions opt,
-        const float* __restrict__ rgb_gt,
-        // Outputs
-        float* __restrict__ rgb_out,
-        PackedGridOutputGrads grads) {
-    CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
-    const int ray_id = tid >> 5;
-    const int ray_blk_id = threadIdx.x >> 5;
-    const int lane_id = threadIdx.x & 0x1F;
-
-    if (lane_id >= grid.sh_data_dim)
-        return;
-
-    __shared__ float sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][10];
-    __shared__ float grad_sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][10];
-    __shared__ float rgb_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
-    __shared__ float grad_out[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][3];
-    __shared__ SingleRaySpec ray_spec[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK];
-    __shared__ typename WarpReducef::TempStorage temp_storage[
-        TRACE_RAY_CUDA_RAYS_PER_BLOCK];
-    ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
-            rays.dirs[ray_id].data());
-    float vdir[3] = {ray_spec[ray_blk_id].dir[0],
-                     ray_spec[ray_blk_id].dir[1],
-                     ray_spec[ray_blk_id].dir[2] };
-    if (lane_id < grid.basis_dim) {
-        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
-    }
-    calc_sphfunc(grid, lane_id,
-                 ray_id, vdir, sphfunc_val[ray_blk_id]);
-    if (lane_id == 0) {
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
-    }
-    __syncwarp((1U << grid.sh_data_dim) - 1);
-
-    trace_ray_cuvol(
-        grid,
-        ray_spec[ray_blk_id],
-        opt,
-        lane_id,
-        sphfunc_val[ray_blk_id],
-        temp_storage[ray_blk_id],
-        rgb_val[ray_blk_id]);
-
-    __syncwarp((1U << grid.sh_data_dim) - 1);
-
-#pragma unroll 3
-    for (int i = 0; i < 3; ++i) {
-        const float resid = rgb_val[ray_blk_id][i] - rgb_gt[ray_id * 3 + i];
-        grad_out[ray_blk_id][i] = 2.f * resid / (3 * int(rays.origins.size(0)));
-    }
-    trace_ray_cuvol_backward(
-        grid,
-        grad_out[ray_blk_id],
-        rgb_val[ray_blk_id],
-        ray_spec[ray_blk_id],
-        opt,
-        lane_id,
-        sphfunc_val[ray_blk_id],
-        grad_sphfunc_val[ray_blk_id],
-        temp_storage[ray_blk_id],
-        grads);
-    if (lane_id < 3) {
-        rgb_out[ray_id * 3 + lane_id] = rgb_val[ray_blk_id][lane_id];
-    }
-
-    calc_sphfunc_backward(grid, lane_id,
-                 ray_id, vdir,
-                 sphfunc_val[ray_blk_id],
-                 grad_sphfunc_val[ray_blk_id],
-                 grads.grad_basis_out);
-}
-
-__launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
-__global__ void render_image_kernel(
-        PackedSparseGridSpec grid,
-        PackedCameraSpec cam,
-        RenderOptions opt,
-        torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out) {
-    CUDA_GET_THREAD_ID(tid, cam.width * cam.height * WARP_SIZE);
-    const int ray_id = tid >> 5;
-    const int ray_blk_id = threadIdx.x >> 5;
-    const int lane_id = threadIdx.x & 0x1F;
-
-    if (lane_id >= grid.sh_data_dim)
-        return;
-
-    int iy = ray_id / cam.width, ix = ray_id % cam.width;
-    float dir[3], origin[3];
-    cam2world_ray(ix, iy, dir, origin, cam);
-    __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][10];
-    __shared__ typename WarpReducef::TempStorage temp_storage[
-        TRACE_RAY_CUDA_RAYS_PER_BLOCK];
-    __shared__ SingleRaySpec ray_spec[TRACE_RAY_CUDA_RAYS_PER_BLOCK];
-    ray_spec[ray_blk_id].set(origin, dir);
-    calc_sphfunc(grid, lane_id, ray_id,
-                 dir, sphfunc_val[ray_blk_id]);
-    if (lane_id == 0) {
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
-    }
-    __syncwarp((1U << grid.sh_data_dim) - 1);
-    trace_ray_cuvol(
-        grid,
-        ray_spec[ray_blk_id],
-        opt,
-        lane_id,
-        sphfunc_val[ray_blk_id],
-        temp_storage[ray_blk_id],
-        &out[iy][ix][0]);
-}
-
-__launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
-__global__ void render_image_backward_kernel(
-        PackedSparseGridSpec grid,
-        const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
-            grad_output,
-        torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color_cache,
-        PackedCameraSpec cam,
-        RenderOptions opt,
-        PackedGridOutputGrads grads) {
-    CUDA_GET_THREAD_ID(tid, cam.width * cam.height * WARP_SIZE);
-    const int ray_id = tid >> 5;
-    const int ray_blk_id = threadIdx.x >> 5;
-    const int lane_id = threadIdx.x & 0x1F;
-
-    if (lane_id >= grid.sh_data_dim)
-        return;
-
-    int iy = ray_id / cam.width, ix = ray_id % cam.width;
-    float dir[3], origin[3];
-    cam2world_ray(ix, iy, dir, origin, cam);
-    __shared__ float sphfunc_val[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK][10];
-    __shared__ float grad_sphfunc_val[TRACE_RAY_FUSED_CUDA_RAYS_PER_BLOCK][10];
-    __shared__ SingleRaySpec ray_spec[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK];
-    __shared__ typename WarpReducef::TempStorage temp_storage[
-        TRACE_RAY_CUDA_RAYS_PER_BLOCK];
-    ray_spec[ray_blk_id].set(origin, dir);
-    if (lane_id < grid.basis_dim) {
-        grad_sphfunc_val[ray_blk_id][lane_id] = 0.f;
-    }
-    calc_sphfunc(grid, lane_id, ray_id,
-                 dir, sphfunc_val[ray_blk_id]);
-    if (lane_id == 0) {
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
-    }
-    __syncwarp((1U << grid.sh_data_dim) - 1);
-    trace_ray_cuvol_backward(
-        grid,
-        grad_output[iy][ix].data(),
-        color_cache[iy][ix].data(),
-        ray_spec[ray_blk_id],
-        opt,
-        lane_id,
-        sphfunc_val[ray_blk_id],
-        grad_sphfunc_val[ray_blk_id],
-        temp_storage[ray_blk_id],
-        grads);
-    calc_sphfunc_backward(grid, lane_id, ray_id,
-                 dir,
-                 sphfunc_val[ray_blk_id],
-                 grad_sphfunc_val[ray_blk_id],
-                 grads.grad_basis_out);
-}
 }  // namespace device
 }  // namespace
 
@@ -708,8 +575,8 @@ void volume_render_cuvol_backward(
     device::render_ray_backward_kernel<<<blocks,
            cuda_n_threads_render_backward>>>(
             grid,
-            grad_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-            color_cache.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+            grad_out.data_ptr<float>(),
+            color_cache.data_ptr<float>(),
             rays, opt,
             // Output
             grads);
@@ -733,66 +600,25 @@ void volume_render_cuvol_fused(
     grads.check();
     const auto Q = rays.origins.size(0);
 
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_FUSED_CUDA_THREADS);
+    {
+        const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_CUDA_THREADS);
+        device::render_ray_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+                grid, rays, opt,
+                // Output
+                rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+    }
 
-    device::render_ray_fused_kernel<<<blocks, TRACE_RAY_FUSED_CUDA_THREADS>>>(
-            grid,
-            rays,
-            opt,
-            rgb_gt.data_ptr<float>(),
-            // Output
-            rgb_out.data_ptr<float>(),
-            grads);
-    CUDA_CHECK_ERRORS;
-}
-
-torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, RenderOptions& opt) {
-    DEVICE_GUARD(grid.sh_data);
-    grid.check();
-    cam.check();
-
-    const size_t Q = size_t(cam.width) * cam.height;
-
-    const int cuda_n_threads = TRACE_RAY_CUDA_THREADS;
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads);
-    torch::Tensor result = torch::zeros({cam.height, cam.width, 3}, grid.sh_data.options());
-
-    device::render_image_kernel<<<blocks, cuda_n_threads>>>(
-            grid, cam, opt,
-            // Output
-            result.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
-    CUDA_CHECK_ERRORS;
-    return result;
-}
-
-void volume_render_cuvol_image_backward(
-        SparseGridSpec& grid,
-        CameraSpec& cam,
-        RenderOptions& opt,
-        torch::Tensor grad_out,
-        torch::Tensor color_cache,
-        GridOutputGrads& grads) {
-
-    DEVICE_GUARD(grid.sh_data);
-    grid.check();
-    cam.check();
-    grads.check();
-    const size_t Q = size_t(cam.width) * cam.height;
-
-    const int cuda_n_threads_render_backward = TRACE_RAY_BKWD_CUDA_THREADS;
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads_render_backward);
-
-    torch::Tensor result_density = torch::zeros_like(grid.density_data);
-    torch::Tensor result_sh = torch::zeros_like(grid.sh_data);
-    device::render_image_backward_kernel<<<blocks,
-           cuda_n_threads_render_backward>>>(
-            grid,
-            grad_out.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            color_cache.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            cam,
-            opt,
-            // Output
-            grads);
+    {
+        const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_BKWD_CUDA_THREADS);
+        device::render_ray_backward_kernel<<<blocks, TRACE_RAY_BKWD_CUDA_THREADS>>>(
+                grid,
+                rgb_gt.data_ptr<float>(),
+                rgb_out.data_ptr<float>(),
+                rays, opt,
+                // Output
+                grads,
+                true);
+    }
 
     CUDA_CHECK_ERRORS;
 }
