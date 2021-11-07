@@ -14,7 +14,6 @@ from util import config_util
 
 import imageio
 from tqdm import tqdm
-
 parser = argparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
 
@@ -39,9 +38,17 @@ parser.add_argument('--blackbg',
                     action='store_true',
                     default=False,
                     help="Force a black BG (behind BG model) color; useful for debugging 'clouds'")
+parser.add_argument('--no_lpips',
+                    action='store_true',
+                    default=False,
+                    help="Disable LPIPS")
 args = parser.parse_args()
 config_util.maybe_merge_config_file(args)
 device = 'cuda:0'
+
+if not args.no_lpips:
+    import lpips
+    lpips_vgg = lpips.LPIPS(net="vgg").eval().to(device)
 
 render_dir = path.join(path.dirname(args.ckpt),
             'train_renders' if args.train else 'test_renders')
@@ -85,6 +92,7 @@ with torch.no_grad():
     img_eval_interval = max(n_images // args.n_eval, 1)
     avg_psnr = 0.0
     avg_ssim = 0.0
+    avg_lpips = 0.0
     n_images_gen = 0
     cam = svox2.Camera(torch.tensor(0), dset.intrins.fx, dset.intrins.fy,
                        dset.intrins.cx, dset.intrins.cy,
@@ -100,10 +108,16 @@ with torch.no_grad():
             mse = (im - im_gt) ** 2
             mse_num : float = mse.mean().item()
             psnr = -10.0 * math.log10(mse_num)
-            ssim = compute_ssim(im_gt, im)
+            ssim = compute_ssim(im_gt, im).item()
             avg_psnr += psnr
             avg_ssim += ssim
-            print(img_id, 'PSNR', psnr, 'SSIM', ssim)
+            if not args.no_lpips:
+                lpips_i = lpips_vgg(im_gt.permute([2, 0, 1]).contiguous(),
+                        im.permute([2, 0, 1]).contiguous(), normalize=True).item()
+                avg_lpips += lpips_i
+                print(img_id, 'PSNR', psnr, 'SSIM', ssim, 'LPIPS', lpips_i)
+            else:
+                print(img_id, 'PSNR', psnr, 'SSIM', ssim)
         #  all_rgbs = []
         #  all_mses = []
         #  for batch_begin in range(0, im_size, args.eval_batch_size):
@@ -132,3 +146,8 @@ with torch.no_grad():
         f.write(str(avg_psnr))
     with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
         f.write(str(avg_ssim))
+    if not args.no_lpips:
+        avg_lpips /= n_images_gen
+        print('average LPIPS', avg_lpips)
+        with open(path.join(render_dir, 'lpips.txt'), 'w') as f:
+            f.write(str(avg_lpips))
