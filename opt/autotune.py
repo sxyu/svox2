@@ -57,28 +57,30 @@ def run_exp(env, eval_mode:bool, train_dir, data_dir, flags):
             opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
                     sys.stdout.encoding)
         except subprocess.CalledProcessError:
-            print('Error occurred while running OPT for exp', train_dir)
+            print('Error occurred while running OPT for exp', train_dir, 'on', env["CUDA_VISIBLE_DEVICES"])
             return
         with open(log_file_path, 'w') as f:
             f.write(opt_ret)
 
     if eval_mode:
-        eval_base_cmd = [
-            "python", "-u", "render_imgs.py",
-            ckpt_path,
-            data_dir
-        ]
-        eval_cmd = ' '.join(eval_base_cmd)
-        print('! RUN render_imgs.py', ckpt_path)
-        print(eval_cmd)
-        try:
-            eval_ret = subprocess.check_output(eval_cmd, shell=True, env=env).decode(
-                    sys.stdout.encoding)
-        except subprocess.CalledProcessError:
-            print('Error occurred while running EVAL for exp', train_dir)
-            return
-        #  test_stats = [{x.split(':')[0].strip().lower(): float(x.split(':')[1])
-        #                for x in eval_ret.strip().split('\n')[-3:] if ':' in x}]
+        psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
+        if not path.exists(psnr_file_path):
+            eval_base_cmd = [
+                "python", "-u", "render_imgs.py",
+                ckpt_path,
+                data_dir
+            ]
+            eval_cmd = ' '.join(eval_base_cmd)
+            print('! RUN render_imgs.py', ckpt_path)
+            print(eval_cmd)
+            try:
+                eval_ret = subprocess.check_output(eval_cmd, shell=True, env=env).decode(
+                        sys.stdout.encoding)
+            except subprocess.CalledProcessError:
+                print('Error occurred while running EVAL for exp', train_dir, 'on', env["CUDA_VISIBLE_DEVICES"])
+                return
+        else:
+            print('! SKIP eval because psnr.txt exists', psnr_file_path)
     else:
         test_stats = [eval(x.split('eval stats:')[-1].strip())
                       for x in opt_ret.split('\n') if
@@ -220,22 +222,32 @@ if __name__ == '__main__':
         print('Done')
         with open(leaderboard_path, 'w') as leaderboard_file:
             lines = [f'dir\tPSNR\tSSIM\tLPIPS\n']
+            all_tasks = sorted(all_tasks, key=lambda task:task['train_dir'])
             for task in all_tasks:
                 train_dir = task['train_dir']
                 psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
                 ssim_file_path = path.join(train_dir, 'test_renders', 'ssim.txt')
                 lpips_file_path = path.join(train_dir, 'test_renders', 'lpips.txt')
 
-                with open(psnr_file_path, 'r') as f:
-                    psnr = float(f.read())
-                with open(ssim_file_path, 'r') as f:
-                    ssim = float(f.read())
-                if path.exists(lpips_file_path):
+                if path.isfile(psnr_file_path):
+                    with open(psnr_file_path, 'r') as f:
+                        psnr = float(f.read())
+                    psnr_txt = f'{psnr:.10f}'
+                else:
+                    psnr_txt = 'ERR'
+                if path.isfile(ssim_file_path):
+                    with open(ssim_file_path, 'r') as f:
+                        ssim = float(f.read())
+                    ssim_txt = f'{psnr:.10f}'
+                else:
+                    ssim_txt = 'ERR'
+                if path.isfile(lpips_file_path):
                     with open(lpips_file_path, 'r') as f:
                         lpips = float(f.read())
+                    lpips_txt = f'{psnr:.10f}'
                 else:
-                    lpips = 1e9
-                line = f'{path.basename(train_dir.rstrip("/"))}\t{psnr:.10f}\t{ssim:.10f}\t{lpips:.10f}\n'
+                    lpips_txt = 'ERR'
+                line = f'{path.basename(train_dir.rstrip("/"))}\t{psnr_txt}\t{ssim_txt}\t{lpips_txt}\n'
                 lines.append(line)
             leaderboard_file.writelines(lines)
 
