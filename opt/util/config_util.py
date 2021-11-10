@@ -1,7 +1,7 @@
 import torch
 import argparse
 from util.dataset import datasets
-import yaml
+import json
 
 
 def define_common_args(parser : argparse.ArgumentParser):
@@ -62,10 +62,6 @@ def define_common_args(parser : argparse.ArgumentParser):
                          type=float,
                          default=1e-7,
                          help="Ray march stopping threshold")
-    group.add_argument('--train_stop_thresh',
-                         type=float,
-                         default=1e-7,
-                         help="Ray march stopping threshold (for training)")
     group.add_argument('--background_brightness',
                          type=float,
                          default=1.0,
@@ -74,6 +70,22 @@ def define_common_args(parser : argparse.ArgumentParser):
                          choices=['cuvol'],
                          default='cuvol',
                          help="Renderer backend")
+    group.add_argument('--random_sigma_std',
+                         type=float,
+                         default=1.0,
+                         help="Random Gaussian std to add to density values (only if enable_random)")
+    group.add_argument('--random_sigma_std_background',
+                         type=float,
+                         default=1.0,
+                         help="Random Gaussian std to add to density values for BG (only if enable_random)")
+    group.add_argument('--enable_random',
+                         action='store_true',
+                         defaullt=False,
+                         help="Random Gaussian std to add to density values")
+    group.add_argument('--last_sample_opaque',
+                         action='store_true',
+                         defaullt=False,
+                         help="Last sample has +1e9 density (used for LLFF)")
 
 
 def build_data_options(args):
@@ -91,12 +103,22 @@ def build_data_options(args):
 
 def maybe_merge_config_file(args):
     """
-    Load yaml config file if specified and merge the arguments
+    Load json config file if specified and merge the arguments
     """
     if args.config is not None:
         with open(args.config, "r") as config_file:
-            configs = yaml.load(config_file, Loader=yaml.FullLoader)
+            configs = json.load(config_file)
         invalid_args = list(set(configs.keys()) - set(dir(args)))
         if invalid_args:
             raise ValueError(f"Invalid args {invalid_args} in {args.config}.")
         args.__dict__.update(configs)
+
+def setup_render_opts(opt, args):
+    opt.step_size = args.step_size
+    opt.sigma_thresh = args.sigma_thresh
+    opt.stop_thresh = args.stop_thresh
+    opt.background_brightness = args.background_brightness
+    opt.backend = args.renderer_backend
+    opt.random_sigma_std = args.random_sigma_std
+    opt.random_sigma_std_background = args.random_sigma_std_background
+    opt.last_sample_opaque = args.last_sample_opaque

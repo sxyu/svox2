@@ -53,6 +53,10 @@ class RenderOptions:
 
     near_clip: float = 0.0
 
+    random_sigma_std: float = 1.0                   # Noise to add to sigma (only if randomize=True)
+    random_sigma_std_background: float = 1.0        # Noise to add to sigma
+                                                    # (for the BG model; only if randomize=True)
+
     def _to_cpp(self, randomize: bool = False):
         """
         Generate object to pass to C++
@@ -65,11 +69,17 @@ class RenderOptions:
         opt.near_clip = self.near_clip
 
         opt.last_sample_opaque = self.last_sample_opaque
-        #  opt.randomize = randomize
-        #  UINT32_MAX = 2**32-1
-        #  opt._m1 = np.random.randint(0, UINT32_MAX)
-        #  opt._m2 = np.random.randint(0, UINT32_MAX)
-        #  opt._m3 = np.random.randint(0, UINT32_MAX)
+        opt.randomize = randomize
+        opt.random_sigma_std = self.random_sigma_std
+        opt.random_sigma_std_background = self.random_sigma_std_background
+        if randomize:
+            # For our RNG
+            UINT32_MAX = 2**32-1
+            opt._m1 = np.random.randint(0, UINT32_MAX)
+            opt._m2 = np.random.randint(0, UINT32_MAX)
+            opt._m3 = np.random.randint(0, UINT32_MAX)
+            if opt._m2 == opt._m3:
+                opt._m3 += 1  # Prevent all equal case
         # Note that the backend option is handled in Python
         return opt
 
@@ -807,7 +817,7 @@ class SparseGrid(nn.Module):
 
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
-        :param randomize: bool, whether to use randomness (now ignored)
+        :param randomize: bool, whether to enable randomness
         :return: (N, 3), predicted RGB
         """
         assert self.opt.backend in ["cuvol"]  # , 'lerp', 'nn']
@@ -830,7 +840,9 @@ class SparseGrid(nn.Module):
             return self._volume_render_gradcheck_lerp(rays)
 
     def volume_render_fused(
-        self, rays: Rays, rgb_gt: torch.Tensor,
+        self,
+        rays: Rays,
+        rgb_gt: torch.Tensor,
         randomize: bool = False,
         beta_loss: float = 0.0,
         sparsity_loss: float = 0.0
@@ -845,7 +857,7 @@ class SparseGrid(nn.Module):
 
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param rgb_gt: (N, 3), GT pixel colors, each channel in [0, 1]
-        :param randomize: bool, whether to use randomness (now ignored)
+        :param randomize: bool, whether to enable randomness
         :param beta_loss: float, weighting for beta loss to add to the gradient.
                                  (fused into the backward pass).
                                  This is average voer the rays in the batch.
@@ -883,7 +895,7 @@ class SparseGrid(nn.Module):
         _C.volume_render_cuvol_fused(
             self._to_cpp(replace_basis_data=basis_data),
             rays._to_cpp(),
-            self.opt._to_cpp(),
+            self.opt._to_cpp(randomize=randomize),
             rgb_gt,
             beta_loss,
             sparsity_loss,
@@ -907,11 +919,10 @@ class SparseGrid(nn.Module):
 
         :param camera: Camera
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
-        :param randomize: bool, whether to use randomness (now ignored)
+        :param randomize: bool, whether to enable randomness
         :return: (H, W, 3), predicted RGB image
         """
         assert self.opt.backend in ["cuvol"]  # , 'lerp', 'nn']
-        assert camera.ndc_coeffs[0] < 0.0, "To be impl"
         # For now we're just generating the rays (due to MLP the _VolumeRenderImageFunction no longer always works)
 
         origins = camera.c2w[None, :3, 3].expand(camera.height * camera.width, -1).contiguous()
@@ -933,13 +944,14 @@ class SparseGrid(nn.Module):
             origins, dirs = utils.convert_to_ndc(
                     origins,
                     dirs,
-                    self.ndc_coeffs)
+                    camera.ndc_coeffs)
             dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 
         all_rgb_out = []
         for batch_start in range(0, camera.height * camera.width, batch_size):
             rays = Rays(origins[batch_start:batch_start+batch_size], dirs[batch_start:batch_start+batch_size])
-            rgb_out_part = self.volume_render(rays, use_kernel=use_kernel, randomize=randomize)
+            rgb_out_part = self.volume_render(rays, use_kernel=use_kernel,
+                                              randomize=randomize)
             all_rgb_out.append(rgb_out_part)
 
         all_rgb_out = torch.cat(all_rgb_out, dim=0)
@@ -1586,7 +1598,7 @@ class SparseGrid(nn.Module):
         scaling: float = 1.0,
     ):
         """
-        Add gradient of L2 regularization for color 
+        Add gradient of L2 regularization for color
         directly into the gradient tensor, multiplied by 'scaling'
         (no CUDA extension used)
 

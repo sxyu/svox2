@@ -3,6 +3,7 @@
 #include <torch/extension.h>
 #include "data_spec.hpp"
 #include "cuda_util.cuh"
+#include "random_util.cuh"
 
 namespace {
 namespace device {
@@ -116,6 +117,7 @@ struct SingleRaySpec {
 
     float pos[3];
     int32_t l[3];
+    RandomEngine32 rng;
 };
 
 }  // namespace device

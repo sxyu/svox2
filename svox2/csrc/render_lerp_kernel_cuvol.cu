@@ -1,7 +1,6 @@
 // Copyright 2021 Alex Yu
 #include <torch/extension.h>
 #include "cuda_util.cuh"
-#include "random_util.cuh"
 #include "data_spec_packed.cuh"
 #include "render_util.cuh"
 #include "cubemap_util.cuh"
@@ -89,6 +88,7 @@ __device__ __inline__ void trace_ray_cuvol(
             sigma += 1e9;
         }
         if (sigma > opt.sigma_thresh) {
+            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std;
             float lane_color = trilerp_cuvol_one(
                             grid.links,
                             grid.sh_data,
@@ -106,10 +106,6 @@ __device__ __inline__ void trace_ray_cuvol(
                                            lane_color, lane_colorgrp_id == 0);
             outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
             if (_EXP(log_transmit) < opt.stop_thresh) {
-                // const float renorm_val = 1.f / (1.f - _EXP(log_transmit));
-                // if (lane_colorgrp_id == 0) {
-                //     out[lane_colorgrp] *= renorm_val;
-                // }
                 log_transmit = -1e3f;
                 break;
             }
@@ -202,6 +198,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             sigma += 1e9;
         }
         if (sigma > opt.sigma_thresh) {
+            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std;
             float lane_color = trilerp_cuvol_one(
                             grid.links,
                             grid.sh_data,
@@ -331,7 +328,7 @@ __device__ __inline__ void render_background_forward(
         const CubemapBilerpQuery query = cubemap_build_query(coord,
                 grid.background_reso);
 
-        const float sigma = multi_cubemap_sample(
+        float sigma = multi_cubemap_sample(
                 cubemap_data,
                 cubemap_data + cubemap_step,
                 query,
@@ -347,6 +344,7 @@ __device__ __inline__ void render_background_forward(
         //         sigma,
         //         log_transmit);
         if (sigma > opt.sigma_thresh) {
+            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std_background;
             const float pcnt = (t - t_last) * ray.world_step * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
@@ -424,7 +422,7 @@ __device__ __inline__ void render_background_backward(
         const CubemapBilerpQuery query = cubemap_build_query(coord,
                 grid.background_reso);
 
-        const float sigma = multi_cubemap_sample(
+        float sigma = multi_cubemap_sample(
                 cubemap_data,
                 cubemap_data + cubemap_step * 4,
                 query,
@@ -433,6 +431,7 @@ __device__ __inline__ void render_background_backward(
                 /*n_channels*/ 4,
                 3);
         if (sigma > opt.sigma_thresh) {
+            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std_background;
             float total_color = 0.f;
             const float pcnt = ray.world_step * (t - t_last) * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
@@ -514,7 +513,7 @@ __global__ void render_ray_kernel(
                  ray_spec[ray_blk_id].dir,
                  sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     }
     __syncwarp((1U << grid.sh_data_dim) - 1);
 
@@ -568,7 +567,7 @@ __global__ void render_ray_backward_kernel(
                  ray_id,
                  vdir, sphfunc_val[ray_blk_id]);
     if (lane_id == 0) {
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt);
+        ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     }
 
     float grad_out[3];
@@ -623,7 +622,7 @@ __global__ void render_background_kernel(
     CUDA_GET_THREAD_ID(ray_id, int(rays.origins.size(0)));
     if (log_transmit[ray_id] < -25.f) return;
     SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
-    ray_find_bounds_bg(ray_spec, grid);
+    ray_find_bounds_bg(ray_spec, grid, opt, ray_id);
     render_background_forward(
         grid,
         ray_spec,
@@ -647,7 +646,7 @@ __global__ void render_background_backward_kernel(
     CUDA_GET_THREAD_ID(ray_id, int(rays.origins.size(0)));
     if (log_transmit[ray_id] < -25.f) return;
     SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
-    ray_find_bounds_bg(ray_spec, grid);
+    ray_find_bounds_bg(ray_spec, grid, opt, ray_id);
 
     float grad_out[3];
     if (grad_out_is_rgb) {

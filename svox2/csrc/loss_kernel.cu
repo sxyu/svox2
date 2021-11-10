@@ -28,24 +28,24 @@ void calculate_ray_scale(float ndc_coeffx,
                          // float maxy,
                          float maxz,
                          float* __restrict__ scale) {
-    if (ndc_coeffx > 0.f) {
-        // FF NDC
-
-        // Normalized to [-1, 1] (with 0.5 padding)
-        // const float x_norm = (x + 0.5) / maxx * 2 - 1;
-        // const float y_norm = (y + 0.5) / maxy * 2 - 1;
-        const float z_norm = (z + 0.5) / maxz * 2 - 1;
-
-        // NDC distances
-        const float disparity = (1 - z_norm) / 2.f; // in [0, 1]
-        scale[0] = (ndc_coeffx * disparity);//maxx * 0.5f;
-        scale[1] = (ndc_coeffy * disparity);//maxy * 0.5f;
-        scale[2] = -((z_norm - 1.f + 2.f / maxz) * disparity) / (maxz * 0.5f);
-    } else {
+    // if (ndc_coeffx > 0.f) {
+    //     // FF NDC
+    //
+    //     // Normalized to [-1, 1] (with 0.5 padding)
+    //     // const float x_norm = (x + 0.5) / maxx * 2 - 1;
+    //     // const float y_norm = (y + 0.5) / maxy * 2 - 1;
+    //     const float z_norm = (z + 0.5) / maxz * 2 - 1;
+    //
+    //     // NDC distances
+    //     const float disparity = (1 - z_norm) / 2.f; // in [0, 1]
+    //     scale[0] = (ndc_coeffx * disparity);//maxx * 0.5f;
+    //     scale[1] = (ndc_coeffy * disparity);//maxy * 0.5f;
+    //     scale[2] = -((z_norm - 1.f + 2.f / maxz) * disparity) / (maxz * 0.5f);
+    // } else {
         scale[0] = 1.f; //maxx * 0.5f;
         scale[1] = 1.f; //maxy * 0.5f;
         scale[2] = 1.f; //maxz * 0.5f;
-    }
+    // }
 }
 
 // __device__ __inline__

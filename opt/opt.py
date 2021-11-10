@@ -41,8 +41,6 @@ group.add_argument('--train_dir', '-t', type=str, default='ckpt',
 group.add_argument('--reso',
                         type=str,
                         default=
-                        #  "[[128, 128, 128], [256, 256, 256], [512, 512, 512], [768, 768, 768]]",
-                        #  "[[128, 128, 128], [256, 256, 256], [512, 512, 512]]",
                         "[[256, 256, 256], [512, 512, 512]]",
                        help='List of grid resolution (will be evaled as json);'
                             'resamples to the next one every upsamp_every iters, then ' +
@@ -161,12 +159,12 @@ group.add_argument('--tune_nosave', action='store_true', default=False,
 
 group = parser.add_argument_group("losses")
 # Foreground TV
-group.add_argument('--lambda_tv', type=float, default=1e-5)#1e-5)
+group.add_argument('--lambda_tv', type=float, default=1e-3)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-1)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_lumisphere', type=float, default=0.0)#1e-2)#1e-3)
@@ -254,7 +252,6 @@ grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         background_nlayers=args.background_nlayers,
                         background_reso=args.background_reso)
 
-grid.opt.last_sample_opaque = dset.last_sample_opaque
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
@@ -289,11 +286,7 @@ elif grid.basis_type == svox2.BASIS_TYPE_MLP:
 
 
 grid.requires_grad_(True)
-grid.opt.step_size = args.step_size
-grid.opt.sigma_thresh = args.sigma_thresh
-grid.opt.stop_thresh = args.stop_thresh
-grid.opt.background_brightness = args.background_brightness
-grid.opt.backend = args.renderer_backend
+config_util.setup_render_opts(grid.opt, args)
 
 gstep_id_base = 0
 
@@ -419,7 +412,6 @@ while True:
 
     def train_step():
         print('Train step')
-        grid.opt.stop_thresh = args.train_stop_thresh
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
@@ -549,6 +541,8 @@ while True:
         last_upsamp_step = gstep_id_base
         if reso_id < len(reso_list) - 1:
             print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
+            args.lambda_tv = 0.0
+            args.lambda_tv_sh = 0.0
             reso_id += 1
             use_sparsify = True
             z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]

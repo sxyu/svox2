@@ -176,15 +176,13 @@ class LLFFDataset(Dataset):
 
         print('z_bounds from LLFF:', self.z_bounds)
 
-        radx = 1.35 #1 + 2 * self.sfm.offset / self.gt.size(2)
-        rady = 1.75 #+ 2 * self.sfm.offset / self.gt.size(1)
+        radx = 1 + 2 * self.sfm.offset / self.gt.size(2)
+        rady = 1 + 2 * self.sfm.offset / self.gt.size(1)
 
         self.scene_center = [0.0, 0.0, 0.0]
         self.scene_radius = [radx, rady, 1.0]
         print('scene_radius', self.scene_radius)
         self.use_sphere_bound = False
-        self.last_sample_opaque = False
-
 
     def gen_rays(self, factor=1):
         print(" Generating rays, scaling factor", factor)

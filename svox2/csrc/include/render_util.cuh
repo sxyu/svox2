@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include "data_spec_packed.cuh"
+#include "random_util.cuh"
 
 namespace {
 namespace device {
@@ -438,28 +439,6 @@ __device__ __inline__ void cam2world_ray(
         world2ndc(cam, dir, origin);
 }
 
-__device__ __inline__ void ray_find_bounds(
-        SingleRaySpec& __restrict__ ray,
-        const PackedSparseGridSpec& __restrict__ grid,
-        const RenderOptions& __restrict__ opt) {
-    // Warning: modifies ray.origin
-    transform_coord(ray.origin, grid._scaling, grid._offset);
-    // Warning: modifies ray.dir
-    ray.world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
-
-    ray.tmin = opt.near_clip;
-    ray.tmax = 2e3f;
-    for (int i = 0; i < 3; ++i) {
-        const float invdir = 1.0 / ray.dir[i];
-        const float t1 = (-0.5f - ray.origin[i]) * invdir;
-        const float t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;
-        if (ray.dir[i] != 0.f) {
-            ray.tmin = max(ray.tmin, min(t1, t2));
-            ray.tmax = min(ray.tmax, max(t1, t2));
-        }
-    }
-}
-
 struct ConcentricSpheresIntersector {
     __device__
         ConcentricSpheresIntersector(
@@ -496,9 +475,41 @@ struct ConcentricSpheresIntersector {
     float q2a, qb, f;
 };
 
+__device__ __inline__ void ray_find_bounds(
+        SingleRaySpec& __restrict__ ray,
+        const PackedSparseGridSpec& __restrict__ grid,
+        const RenderOptions& __restrict__ opt,
+        uint32_t ray_id) {
+    // Warning: modifies ray.origin
+    transform_coord(ray.origin, grid._scaling, grid._offset);
+    // Warning: modifies ray.dir
+    ray.world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
+
+    ray.tmin = opt.near_clip;
+    ray.tmax = 2e3f;
+    for (int i = 0; i < 3; ++i) {
+        const float invdir = 1.0 / ray.dir[i];
+        const float t1 = (-0.5f - ray.origin[i]) * invdir;
+        const float t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;
+        if (ray.dir[i] != 0.f) {
+            ray.tmin = max(ray.tmin, min(t1, t2));
+            ray.tmax = min(ray.tmax, max(t1, t2));
+        }
+    }
+
+    if (opt.randomize && opt.random_sigma_std > 0.0) {
+        // Seed the RNG
+        ray.rng.x = opt._m1 ^ ray_id;
+        ray.rng.y = opt._m2 ^ ray_id;
+        ray.rng.z = opt._m3 ^ ray_id;
+    }
+}
+
 __device__ __inline__ void ray_find_bounds_bg(
         SingleRaySpec& __restrict__ ray,
-        const PackedSparseGridSpec& __restrict__ grid) {
+        const PackedSparseGridSpec& __restrict__ grid,
+        const RenderOptions& __restrict__ opt,
+        uint32_t ray_id) {
     // Warning: modifies ray.origin
     transform_coord(ray.origin, grid._scaling, grid._offset);
     // Warning: modifies ray.dir
@@ -533,6 +544,13 @@ __device__ __inline__ void ray_find_bounds_bg(
     // } else {
     //     ray.tmin = (-qb + sqrtf(det)) / q2a;
     // }
+
+    if (opt.randomize && opt.random_sigma_std_background > 0) {
+        // Seed the RNG (hacks)
+        ray.rng.x = opt._m2 ^ (ray_id - 1);
+        ray.rng.y = opt._m3 ^ (ray_id - 1);
+        ray.rng.z = opt._m1 ^ (ray_id - 1);
+    }
 }
 
 } // namespace device

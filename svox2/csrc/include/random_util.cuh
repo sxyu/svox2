@@ -4,6 +4,7 @@
 #include <cmath>
 
 // A custom xorshift random generator
+// Maybe replace with some CUDA internal stuff?
 struct RandomEngine32 {
     uint32_t x, y, z;
 
@@ -28,17 +29,17 @@ struct RandomEngine32 {
     }
 
     __host__ __device__
-	float rand() {
-		uint32_t z = (*this)();
-		return float(z) / (1LL << 32);
-	}
+    float rand() {
+        uint32_t z = (*this)();
+        return float(z) / (1LL << 32);
+    }
 
 
     __host__ __device__
     void randn2(float* out1, float* out2) {
         rand2(out1, out2);
         // Box-Muller transform
-        const float srlog = sqrtf(-2 * logf(*out1));
+        const float srlog = sqrtf(-2 * logf(*out1 + 1e-32f));
         *out2 *= 2 * M_PI;
         *out1 = srlog * cosf(*out2);
         *out2 = srlog * sinf(*out2);
@@ -49,7 +50,7 @@ struct RandomEngine32 {
         float x, y;
         rand2(&x, &y);
         // Box-Muller transform
-        return sqrtf(-2 * logf(x))* cosf(2 * M_PI * y);
+        return sqrtf(-2 * logf(x + 1e-32f))* cosf(2 * M_PI * y);
     }
 
     __host__ __device__

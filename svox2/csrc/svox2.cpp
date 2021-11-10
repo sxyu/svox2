@@ -111,16 +111,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(py::init<>())
       .def_readwrite("background_brightness",
                      &RenderOptions::background_brightness)
-      // .def_readwrite("step_epsilon", &RenderOptions::step_epsilon)
       .def_readwrite("step_size", &RenderOptions::step_size)
       .def_readwrite("sigma_thresh", &RenderOptions::sigma_thresh)
       .def_readwrite("stop_thresh", &RenderOptions::stop_thresh)
       .def_readwrite("near_clip", &RenderOptions::near_clip)
-      .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque);
-  // .def_readwrite("randomize", &RenderOptions::randomize)
-  // .def_readwrite("_m1", &RenderOptions::_m1)
-  // .def_readwrite("_m2", &RenderOptions::_m2)
-  // .def_readwrite("_m3", &RenderOptions::_m3);
+      .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque)
+      .def_readwrite("randomize", &RenderOptions::randomize)
+      .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
+      .def_readwrite("random_sigma_std_background",
+                     &RenderOptions::random_sigma_std_background)
+      .def_readwrite("_m1", &RenderOptions::_m1)
+      .def_readwrite("_m2", &RenderOptions::_m2)
+      .def_readwrite("_m3", &RenderOptions::_m3);
 
   py::class_<GridOutputGrads>(m, "GridOutputGrads")
       .def(py::init<>())
