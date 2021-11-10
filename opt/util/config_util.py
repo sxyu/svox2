@@ -80,11 +80,11 @@ def define_common_args(parser : argparse.ArgumentParser):
                          help="Random Gaussian std to add to density values for BG (only if enable_random)")
     group.add_argument('--enable_random',
                          action='store_true',
-                         defaullt=False,
+                         default=False,
                          help="Random Gaussian std to add to density values")
     group.add_argument('--last_sample_opaque',
                          action='store_true',
-                         defaullt=False,
+                         default=False,
                          help="Last sample has +1e9 density (used for LLFF)")
 
 
@@ -121,4 +121,4 @@ def setup_render_opts(opt, args):
     opt.backend = args.renderer_backend
     opt.random_sigma_std = args.random_sigma_std
     opt.random_sigma_std_background = args.random_sigma_std_background
-    opt.last_sample_opaque = args.last_sample_opaque
+    #  opt.last_sample_opaque = args.last_sample_opaque

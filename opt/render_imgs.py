@@ -60,7 +60,7 @@ dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.tra
                                     **config_util.build_data_options(args))
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
-grid.opt.last_sample_opaque = dset.last_sample_opaque
+config_util.setup_render_opts(grid.opt, args)
 
 if grid.use_background:
     if args.nobg:

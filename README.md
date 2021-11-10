@@ -11,7 +11,9 @@ in the root directory.
 
 See `opt/opt.py`
 
-`sh launch.sh <exp_name> <GPU_id> <data_dir>`
+`./launch.sh <exp_name> <GPU_id> <data_dir>`
+
+NOTE: can no longer use `sh`
 
 ## Evaluation
 

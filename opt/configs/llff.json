@@ -1,0 +1,14 @@
+{
+    "reso": "[[512, 512, 132], [1408, 1156, 132]]",
+    "upsamp_every": 38400,
+    "lr_sigma": 3e1,
+    "lr_sh": 1e-2,
+    "weight_thresh": 0.01,
+    "lambda_tv": 1e-3,
+    "lambda_tv_sh": 1e-2,
+    "last_sample_opaque": false,
+    "enable_random": true,
+    "random_sigma_std": 0.0,
+    "lambda_sparsity": 0.0,
+    "background_brightness": 1.0
+}

@@ -87,8 +87,8 @@ __device__ __inline__ void trace_ray_cuvol(
         if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
             sigma += 1e9;
         }
+        if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
         if (sigma > opt.sigma_thresh) {
-            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std;
             float lane_color = trilerp_cuvol_one(
                             grid.links,
                             grid.sh_data,
@@ -197,8 +197,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
             sigma += 1e9;
         }
+        if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
         if (sigma > opt.sigma_thresh) {
-            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std;
             float lane_color = trilerp_cuvol_one(
                             grid.links,
                             grid.sh_data,
@@ -343,8 +343,9 @@ __device__ __inline__ void render_background_forward(
         //         interp_wt,
         //         sigma,
         //         log_transmit);
+        if (opt.randomize && opt.random_sigma_std_background > 0.0)
+            sigma += ray.rng.randn() * opt.random_sigma_std_background;
         if (sigma > opt.sigma_thresh) {
-            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std_background;
             const float pcnt = (t - t_last) * ray.world_step * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
@@ -430,8 +431,9 @@ __device__ __inline__ void render_background_backward(
                 grid.background_reso,
                 /*n_channels*/ 4,
                 3);
+        if (opt.randomize && opt.random_sigma_std_background > 0.0)
+            sigma += ray.rng.randn() * opt.random_sigma_std_background;
         if (sigma > opt.sigma_thresh) {
-            if (opt.randomize) sigma += ray.rng.randn() * opt.random_sigma_std_background;
             float total_color = 0.f;
             const float pcnt = ray.world_step * (t - t_last) * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
@@ -512,9 +514,7 @@ __global__ void render_ray_kernel(
                  ray_id,
                  ray_spec[ray_blk_id].dir,
                  sphfunc_val[ray_blk_id]);
-    if (lane_id == 0) {
-        ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
-    }
+    ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     __syncwarp((1U << grid.sh_data_dim) - 1);
 
     trace_ray_cuvol(

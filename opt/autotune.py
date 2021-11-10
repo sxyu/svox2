@@ -68,9 +68,11 @@ def run_exp(env, eval_mode:bool, train_dir, data_dir, flags):
             ckpt_path,
             data_dir
         ]
-        print('! RUN ', eval_base_cmd)
+        eval_cmd = ' '.join(eval_base_cmd)
+        print('! RUN render_imgs.py', ckpt_path)
+        print(eval_cmd)
         try:
-            eval_ret = subprocess.check_output(eval_base_cmd, shell=True, env=env).decode(
+            eval_ret = subprocess.check_output(eval_cmd, shell=True, env=env).decode(
                     sys.stdout.encoding)
         except subprocess.CalledProcessError:
             print('Error occurred while running EVAL for exp', train_dir)
@@ -217,7 +219,7 @@ if __name__ == '__main__':
     if args.eval:
         print('Done')
         with open(leaderboard_path, 'w') as leaderboard_file:
-            lines = [f'train_dir, PSNR, SSIM, LPIPS']
+            lines = [f'dir\tPSNR\tSSIM\tLPIPS\n']
             for task in all_tasks:
                 train_dir = task['train_dir']
                 psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
@@ -233,10 +235,10 @@ if __name__ == '__main__':
                         lpips = float(f.read())
                 else:
                     lpips = 1e9
-                line = f'{train_dir}, {psnr:.10f}, {ssim:.10f}, {lpips:.10f}\n'
+                line = f'{path.basename(train_dir.rstrip("/"))}\t{psnr:.10f}\t{ssim:.10f}\t{lpips:.10f}\n'
                 lines.append(line)
             leaderboard_file.writelines(lines)
-            
+
     else:
         with open(leaderboard_path, 'w') as leaderboard_file:
             exps = []

@@ -393,8 +393,8 @@ __device__ __inline__ float _get_delta_scale(
 
 __device__ __inline__ static void _normalize(
                 float* dir) {
-    float norm = _norm(dir);
-    dir[0] /= norm; dir[1] /= norm; dir[2] /= norm;
+    const float rnorm = _rnorm(dir);
+    dir[0] *= rnorm; dir[1] *= rnorm; dir[2] *= rnorm;
 }
 
 __device__ __inline__ static void world2ndc(
@@ -406,9 +406,8 @@ __device__ __inline__ static void world2ndc(
     const float t = (near - cen[2]) / dir[2];
 #pragma unroll 3
     for (int i = 0; i < 3; ++i) {
-        cen[i] = cen[i] + t * dir[i];
+        cen[i] = fmaf(t, dir[i], cen[i]);
     }
-
     dir[0] = cam.ndc_coeffx * (dir[0] / dir[2] - cen[0] / cen[2]);
     dir[1] = cam.ndc_coeffy * (dir[1] / dir[2] - cen[1] / cen[2]);
     dir[2] = 2 * near / cen[2];

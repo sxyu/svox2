@@ -287,6 +287,7 @@ elif grid.basis_type == svox2.BASIS_TYPE_MLP:
 
 grid.requires_grad_(True)
 config_util.setup_render_opts(grid.opt, args)
+print('Render options', grid.opt)
 
 gstep_id_base = 0
 
@@ -314,6 +315,9 @@ lr_basis_factor = 1.0
 
 last_upsamp_step = args.init_iters
 
+if args.enable_random:
+    warn("Randomness is enabled for training (normal for LLFF & scenes with background)")
+
 epoch_id = -1
 while True:
     dset.shuffle_rays()
@@ -324,7 +328,6 @@ while True:
     def eval_step():
         # Put in a function to avoid memory leak
         print('Eval step')
-        grid.opt.stop_thresh = args.stop_thresh
         with torch.no_grad():
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
@@ -436,7 +439,8 @@ while True:
             #  with Timing("volrend_fused"):
             rgb_pred = grid.volume_render_fused(rays, rgb_gt,
                     beta_loss=args.lambda_beta,
-                    sparsity_loss=args.lambda_sparsity)
+                    sparsity_loss=args.lambda_sparsity,
+                    randomize=args.enable_random)
 
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
@@ -541,8 +545,8 @@ while True:
         last_upsamp_step = gstep_id_base
         if reso_id < len(reso_list) - 1:
             print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
-            args.lambda_tv = 0.0
-            args.lambda_tv_sh = 0.0
+            #  args.lambda_tv = 0.0
+            #  args.lambda_tv_sh = 0.0
             reso_id += 1
             use_sparsify = True
             z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]

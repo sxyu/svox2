@@ -249,7 +249,7 @@ __device__ __inline__ void grid_trace_ray(
             log_light_intensity = 0.f;
         }
 
-        if (sigma > 1e-4f) {
+        if (sigma > 1e-8f) {
             log_att = -world_step * sigma;
             const float weight = _EXP(log_light_intensity) * (1.f - _EXP(log_att));
             log_light_intensity += log_att;
