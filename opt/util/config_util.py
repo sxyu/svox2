@@ -66,8 +66,8 @@ def define_common_args(parser : argparse.ArgumentParser):
                          type=float,
                          default=1.0,
                          help="Brightness of the infinite background")
-    group.add_argument('--renderer_backend',
-                         choices=['cuvol'],
+    group.add_argument('--renderer_backend', '-B',
+                         choices=['cuvol', 'svox1'],
                          default='cuvol',
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',
@@ -101,7 +101,7 @@ def build_data_options(args):
         'permutation': args.perm
     }
 
-def maybe_merge_config_file(args):
+def maybe_merge_config_file(args, allow_invalid=False):
     """
     Load json config file if specified and merge the arguments
     """
@@ -109,7 +109,7 @@ def maybe_merge_config_file(args):
         with open(args.config, "r") as config_file:
             configs = json.load(config_file)
         invalid_args = list(set(configs.keys()) - set(dir(args)))
-        if invalid_args:
+        if invalid_args and not allow_invalid:
             raise ValueError(f"Invalid args {invalid_args} in {args.config}.")
         args.__dict__.update(configs)
 
@@ -121,4 +121,4 @@ def setup_render_opts(opt, args):
     opt.backend = args.renderer_backend
     opt.random_sigma_std = args.random_sigma_std
     opt.random_sigma_std_background = args.random_sigma_std_background
-    #  opt.last_sample_opaque = args.last_sample_opaque
+    opt.last_sample_opaque = args.last_sample_opaque

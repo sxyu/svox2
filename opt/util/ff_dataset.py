@@ -1,14 +1,9 @@
-# Adapted from NeX data loading code
+# Adapted from NeX data loading code (NOT using their hand picked bounds)
 # Entry point: LLFFDataset
 #
 # Original:
 # Copyright (c) 2021 VISTEC - Vidyasirimedhi Institute of Science and Technology
 # Distribute under MIT License
-# Authors:
-#  - Suttisak Wizadwongsa <suttisak.w_s19[-at-]vistec.ac.th>
-#  - Pakkapon Phongthawee <pakkapon.p_s19[-at-]vistec.ac.th>
-#  - Jiraphon Yenphraphai <jiraphony_pro[-at-]vistec.ac.th>
-#  - Supasorn Suwajanakorn <supasorn.s[-at-]vistec.ac.th>
 
 from torch.utils.data import Dataset
 from scipy.spatial.transform import Rotation
@@ -129,7 +124,7 @@ class LLFFDataset(Dataset):
             if 'path' in self.imgs[idx]:
                 img_path = self.imgs[idx]["path"]
                 img_path = os.path.join(self.dataset, img_path)
-                if not os.path.exists(img_path):
+                if not os.path.isfile(img_path):
                     path_noext = os.path.splitext(img_path)[0]
                     # Hack: also try png
                     if os.path.exists(path_noext + '.png'):
@@ -176,11 +171,24 @@ class LLFFDataset(Dataset):
 
         print('z_bounds from LLFF:', self.z_bounds)
 
+        # Auto bounds
+        #  [1.496031746031746, 1.6613756613756614, 1.0]
         radx = 1 + 2 * self.sfm.offset / self.gt.size(2)
         rady = 1 + 2 * self.sfm.offset / self.gt.size(1)
 
+        # Some hardcoded stuff
+        #  radx = 1.4 #1 + 2 * self.sfm.offset / self.gt.size(2)
+        #  rady = 1.75 #+ 2 * self.sfm.offset / self.gt.size(1)
+
+        #  MAX_MPI_LAYERS = 132
+        #  # Our convention is a bit weird so there is some 0.5 voxel
+        #  # empty space on each end, better to deal with this
+        #  radz = MAX_MPI_LAYERS / (MAX_MPI_LAYERS - 1)
+        radz = 1.0
+
+
         self.scene_center = [0.0, 0.0, 0.0]
-        self.scene_radius = [radx, rady, 1.0]
+        self.scene_radius = [radx, rady, radz]
         print('scene_radius', self.scene_radius)
         self.use_sphere_bound = False
 
@@ -233,6 +241,7 @@ class LLFFDataset(Dataset):
         Shuffle all rays
         """
         if self.split == "train":
+            del self.rays
             self.rays = select_or_shuffle_rays(self.rays_init, self.permutation, self.epoch_size, self.device)
 
 
@@ -396,9 +405,12 @@ class SfMData:
                 return x[2:]
             else:
                 return x
+        def keep_images(x):
+            exts = ['.png', '.jpg', '.jpeg', '.exr']
+            return [y for y in x if not y.startswith('.') and any((y.lower().endswith(ext) for ext in exts))] 
 
         # get all image of this dataset
-        images_path = [os.path.join(scaled_img_dir, f) for f in sorted(os.listdir(image_dir), key=nsvf_sort_key)]
+        images_path = [os.path.join(scaled_img_dir, f) for f in sorted(keep_images(os.listdir(image_dir)), key=nsvf_sort_key)]
 
         # LLFF dataset has only single camera in dataset
         if len(intrinsic) == 3:

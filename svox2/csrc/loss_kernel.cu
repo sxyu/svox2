@@ -24,48 +24,41 @@ __device__ __inline__
 void calculate_ray_scale(float ndc_coeffx,
                          float ndc_coeffy,
                          float z,
-                         // float maxx,
-                         // float maxy,
+                         float maxx,
+                         float maxy,
                          float maxz,
                          float* __restrict__ scale) {
     // if (ndc_coeffx > 0.f) {
     //     // FF NDC
-    //
-    //     // Normalized to [-1, 1] (with 0.5 padding)
-    //     // const float x_norm = (x + 0.5) / maxx * 2 - 1;
-    //     // const float y_norm = (y + 0.5) / maxy * 2 - 1;
-    //     const float z_norm = (z + 0.5) / maxz * 2 - 1;
-    //
-    //     // NDC distances
-    //     const float disparity = (1 - z_norm) / 2.f; // in [0, 1]
-    //     scale[0] = (ndc_coeffx * disparity);//maxx * 0.5f;
-    //     scale[1] = (ndc_coeffy * disparity);//maxy * 0.5f;
-    //     scale[2] = -((z_norm - 1.f + 2.f / maxz) * disparity) / (maxz * 0.5f);
+    //     scale[0] = maxx * (1.f / 256.f);
+    //     scale[1] = maxy * (1.f / 256.f);
+    //     scale[2] = maxz * (1.f / 256.f);
+
+        // The following shit does not work
+        // // Normalized to [-1, 1] (with 0.5 padding)
+        // // const float x_norm = (x + 0.5) / maxx * 2 - 1;
+        // // const float y_norm = (y + 0.5) / maxy * 2 - 1;
+        // const float z_norm = (z + 0.5) / maxz * 2 - 1;
+        //
+        // // NDC distances
+        // const float disparity = (1 - z_norm) / 2.f; // in [0, 1]
+        // scale[0] = (ndc_coeffx * disparity);
+        // scale[1] = (ndc_coeffy * disparity);
+        // scale[2] = -((z_norm - 1.f + 2.f / maxz) * disparity) / (maxz * 0.5f);
     // } else {
-        scale[0] = 1.f; //maxx * 0.5f;
-        scale[1] = 1.f; //maxy * 0.5f;
-        scale[2] = 1.f; //maxz * 0.5f;
+        scale[0] = maxx * (1.f / 256.f);
+        scale[1] = maxy * (1.f / 256.f);
+        scale[2] = maxz * (1.f / 256.f);
     // }
 }
 
-// __device__ __inline__
-// void approx_msi_scale(float msi_nlayers,
-//         float msi_layer_id) {
-//     // MSI (approximate)
-//     const float radius = msi_nlayers /
-//         (msi_nlayers - msi_layer_id - 0.5f);
-//     const float full_thickness = msi_nlayers /
-//         (msi_nlayers - msi_layer_id - 1.5f) - radius;
-//     scale[0] = 1.f / full_thickness;
-//     scale[1] = scale[0];
-//     scale[2] = scale[0];
-// }
 
-
-#define CALCULATE_RAY_SCALE(out_name, maxz) \
+#define CALCULATE_RAY_SCALE(out_name, maxx, maxy, maxz) \
     calculate_ray_scale( \
             ndc_coeffx, ndc_coeffy, \
             z, \
+            maxx, \
+            maxy, \
             maxz, \
             out_name)
 
@@ -93,7 +86,7 @@ __global__ void tv_kernel(
 
     if (ignore_edge && links[x][y][z] == 0) return;
     float scaling[3];
-    CALCULATE_RAY_SCALE(scaling, links.size(2));
+    CALCULATE_RAY_SCALE(scaling, links.size(0), links.size(1), links.size(2));
 
     const float val000 = (links[x][y][z] >= 0 ?
                           data[links[x][y][z]][idx] : 0.f);
@@ -138,7 +131,7 @@ __global__ void tv_grad_kernel(
     if (ignore_edge && links[x][y][z] == 0) return;
 
     float scaling[3];
-    CALCULATE_RAY_SCALE(scaling, links.size(2));
+    CALCULATE_RAY_SCALE(scaling, links.size(0), links.size(1), links.size(2));
 
     const float* dptr = data.data();
     const size_t ddim = data.size(1);
@@ -169,9 +162,9 @@ __global__ void tv_grad_kernel(
         gptr001 = grad_data + lnk;
     } else if (ignore_edge) v001 = v000;
 
-    float dx = (v100 - v000) * scaling[0];
-    float dy = (v010 - v000) * scaling[1];
-    float dz = (v001 - v000) * scaling[2];
+    float dx = (v100 - v000);
+    float dy = (v010 - v000);
+    float dz = (v001 - v000);
     const float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
     dx *= scaling[0];
     dy *= scaling[1];
@@ -208,7 +201,7 @@ __global__ void tv_grad_sparse_kernel(
     if (ignore_edge && *links_ptr == 0) return;
 
     float scaling[3];
-    CALCULATE_RAY_SCALE(scaling, links.size(2));
+    CALCULATE_RAY_SCALE(scaling, links.size(0), links.size(1), links.size(2));
 
     const int offx = links.stride(0), offy = links.stride(1);
 
@@ -218,9 +211,9 @@ __global__ void tv_grad_sparse_kernel(
                 v010 = links_ptr[offy] >= 0 ? data[links_ptr[offy]][idx] : null_val,
                 v100 = links_ptr[offx] >= 0 ? data[links_ptr[offx]][idx] : null_val;
 
-    float dx = (v100 - v000) * scaling[0];
-    float dy = (v010 - v000) * scaling[1];
-    float dz = (v001 - v000) * scaling[2];
+    float dx = (v100 - v000);
+    float dy = (v010 - v000);
+    float dz = (v001 - v000);
     const float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
 
     dx *= scaling[0];
@@ -525,7 +518,7 @@ __global__ void lumisphere_tv_grad_sparse_kernel(
     if (*links_ptr == 0) return;
 
     float scaling[3];
-    CALCULATE_RAY_SCALE(scaling, grid.size[2]);
+    CALCULATE_RAY_SCALE(scaling, grid.size[0], grid.size[1], grid.size[2]);
 
     const int offx = grid.stride_x, offy = grid.size[2];
 

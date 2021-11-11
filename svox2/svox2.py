@@ -19,25 +19,18 @@ class RenderOptions:
     """
     Rendering options, see comments
     available:
-    :param backend: str, one of lerp, cuvol, nn
+    :param backend: str, renderer backend
     :param background_brightness: float
-    :param step_size: float, step size for backend lerp or cuvol only
-                      (for estimating the integral; in nearest-neighbor case the integral is exactly computed)
+    :param step_size: float, step size for rendering
     :param sigma_thresh: float
     :param stop_thresh: float
     """
 
-    backend: str = "cuvol"  # One of lerp, cuvol, nn
-    # nn is nearest neighbor (very fast)
-    # cuvol is basic lerp version from cuvol
-    #   (fast for small batch when sparse)
-    # lerp is coalesced lerp (fast for larger batch)
+    backend: str = "cuvol"  # One of cuvol, svox1
 
     background_brightness: float = 1.0  # [0, 1], the background color black-white
 
-    step_size: float = (
-        0.5  # Step size, in normalized voxels; only used if backend = lerp or cuvol
-    )
+    step_size: float = 0.5  # Step size, in normalized voxels (not used for svox1)
     #  (i.e. 1 = 1 voxel width, different from svox where 1 = grid width!)
 
     sigma_thresh: float = 1e-10  # Voxels with sigmas < this are ignored, in [0, 1]
@@ -594,7 +587,7 @@ class SparseGrid(nn.Module):
     def forward(self, points: torch.Tensor, use_kernel: bool = True):
         return self.sample(points, use_kernel=use_kernel)
 
-    def _volume_render_gradcheck_lerp(self, rays: Rays):
+    def _volume_render_gradcheck_lerp(self, rays: Rays, return_raylen: bool=False):
         """
         trilerp gradcheck version
         """
@@ -628,7 +621,8 @@ class SparseGrid(nn.Module):
         tmax = torch.max(t1, t2)
         tmax[dirs == 0] = 1e9
         tmax = torch.min(tmax, dim=-1).values
-        print(t, tmax)
+        if return_raylen:
+            return tmax - t
 
         log_light_intensity = torch.zeros(B, device=origins.device)
         out_rgb = torch.zeros((B, 3), device=origins.device)
@@ -810,7 +804,8 @@ class SparseGrid(nn.Module):
         return out_rgb
 
     def volume_render(
-        self, rays: Rays, use_kernel: bool = True, randomize: bool = False
+        self, rays: Rays, use_kernel: bool = True, randomize: bool = False,
+        return_raylen: bool=False
     ):
         """
         Standard volume rendering. See grid.opt.* (RenderOptions) for configs.
@@ -818,10 +813,11 @@ class SparseGrid(nn.Module):
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
         :param randomize: bool, whether to enable randomness
+        :param return_raylen: bool, if true then only returns the length of the 
+                                    ray-cube intersection and quits
         :return: (N, 3), predicted RGB
         """
-        assert self.opt.backend in ["cuvol"]  # , 'lerp', 'nn']
-        if use_kernel and self.links.is_cuda and _C is not None:
+        if use_kernel and self.links.is_cuda and _C is not None and not return_raylen:
             assert rays.is_cuda
             basis_data = self._eval_basis_mlp(rays.dirs) if self.basis_type == BASIS_TYPE_MLP \
                                                          else None
@@ -837,7 +833,7 @@ class SparseGrid(nn.Module):
             )
         else:
             warn("Using slow volume rendering, should only be used for debugging")
-            return self._volume_render_gradcheck_lerp(rays)
+            return self._volume_render_gradcheck_lerp(rays, return_raylen=return_raylen)
 
     def volume_render_fused(
         self,
@@ -853,7 +849,6 @@ class SparseGrid(nn.Module):
         Parameter gradients will be updated (no need for backward()).
 
         See grid.opt.* (RenderOptions) for configs.
-        Requires CUDA. Always uses cuvol backend.
 
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param rgb_gt: (N, 3), GT pixel colors, each channel in [0, 1]
@@ -892,7 +887,8 @@ class SparseGrid(nn.Module):
                     dtype=torch.bool, device=self.background_cubemap.device)
             grad_holder.mask_background_out = self.sparse_background_indexer
 
-        _C.volume_render_cuvol_fused(
+        cu_fn = _C.__dict__[f"volume_render_{self.opt.backend}_fused"]
+        cu_fn(
             self._to_cpp(replace_basis_data=basis_data),
             rays._to_cpp(),
             self.opt._to_cpp(randomize=randomize),
@@ -912,6 +908,7 @@ class SparseGrid(nn.Module):
     def volume_render_image(
         self, camera: Camera, use_kernel: bool = True, randomize: bool = False,
         batch_size : int = 5000,
+        return_raylen: bool=False
     ):
         """
         Standard volume rendering (entire image version).
@@ -922,7 +919,6 @@ class SparseGrid(nn.Module):
         :param randomize: bool, whether to enable randomness
         :return: (H, W, 3), predicted RGB image
         """
-        assert self.opt.backend in ["cuvol"]  # , 'lerp', 'nn']
         # For now we're just generating the rays (due to MLP the _VolumeRenderImageFunction no longer always works)
 
         origins = camera.c2w[None, :3, 3].expand(camera.height * camera.width, -1).contiguous()
@@ -951,7 +947,8 @@ class SparseGrid(nn.Module):
         for batch_start in range(0, camera.height * camera.width, batch_size):
             rays = Rays(origins[batch_start:batch_start+batch_size], dirs[batch_start:batch_start+batch_size])
             rgb_out_part = self.volume_render(rays, use_kernel=use_kernel,
-                                              randomize=randomize)
+                                              randomize=randomize,
+                                              return_raylen=return_raylen)
             all_rgb_out.append(rgb_out_part)
 
         all_rgb_out = torch.cat(all_rgb_out, dim=0)
@@ -981,9 +978,10 @@ class SparseGrid(nn.Module):
         weight_thresh: float = 0.01,
         dilate: int = 2,
         cameras: Optional[List[Camera]] = None,
-        use_z_order=False,
-        accelerate=True,
-        weight_render_stop_thresh: float = 0.2 #0.05
+        use_z_order: bool=False,
+        accelerate: bool=True,
+        weight_render_stop_thresh: float = 0.2, # SHOOT, forgot to turn this off for main exps..
+        max_elements:int=0
     ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -1000,6 +998,8 @@ class SparseGrid(nn.Module):
                                                  0.0 = no thresholding, 1.0 = hides everything.
                                                  Useful for force-cutting off
                                                  junk that contributes very little at the end of a ray
+        :param max_elements: int, if nonzero, an upper bound on the number of elements in the
+                upsampled grid; we will adjust the threshold to match it
         """
         with torch.no_grad():
             device = self.links.device
@@ -1096,10 +1096,30 @@ class SparseGrid(nn.Module):
                     #  np.save(f"wmax_vol/wmax_view{i:05d}.npy", tmp_wt_grid.detach().cpu().numpy())
                 #  import sys
                 #  sys.exit(0)
-                sample_vals_mask = max_wt_grid > weight_thresh
+                sample_vals_mask = max_wt_grid >= weight_thresh
+                if max_elements > 0 and max_elements < max_wt_grid.numel() \
+                                    and max_elements < torch.count_nonzero(sample_vals_mask):
+                    # To bound the memory usage
+                    weight_thresh_bounded = torch.topk(max_wt_grid.view(-1),
+                                     k=max_elements, sorted=False).values.min().item()
+                    weight_thresh = max(weight_thresh, weight_thresh_bounded)
+                    print(' Readjusted weight thresh to fit to memory:', weight_thresh)
+                    sample_vals_mask = max_wt_grid >= weight_thresh
                 del max_wt_grid
             else:
-                sample_vals_mask = sample_vals_density > sigma_thresh
+                sample_vals_mask = sample_vals_density >= sigma_thresh
+                if max_elements > 0 and max_elements < sample_vals_density.numel() \
+                                    and max_elements < torch.count_nonzero(sample_vals_mask):
+                    # To bound the memory usage
+                    sigma_thresh_bounded = torch.topk(sample_vals_density.view(-1),
+                                     k=max_elements, sorted=False).values.min().item()
+                    sigma_thresh = max(sigma_thresh, sigma_thresh_bounded)
+                    print(' Readjusted sigma thresh to fit to memory:', sigma_thresh)
+                    sample_vals_mask = sample_vals_density >= sigma_thresh
+
+                if self.opt.last_sample_opaque:
+                    # Don't delete the last z layer
+                    sample_vals_mask[:, :, -1] = 1
 
             if dilate:
                 for i in range(int(dilate)):

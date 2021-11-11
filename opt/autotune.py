@@ -27,7 +27,7 @@ args = parser.parse_args()
 
 PSNR_FILE_NAME = 'test_psnr.txt'
 
-def run_exp(env, eval_mode:bool, train_dir, data_dir, flags):
+def run_exp(env, eval_mode:bool, train_dir, data_dir, config, flags):
     opt_base_cmd = [ "python", "-u", "opt.py", "--tune_mode" ]
 
     if not eval_mode:
@@ -36,6 +36,8 @@ def run_exp(env, eval_mode:bool, train_dir, data_dir, flags):
         "-t", train_dir,
         data_dir
     ]
+    if config != '':
+        opt_base_cmd += ['-c', config]
     log_file_path = path.join(train_dir, 'log')
     psnr_file_path = path.join(train_dir, PSNR_FILE_NAME)
     ckpt_path = path.join(train_dir, 'ckpt.npz')
@@ -70,6 +72,8 @@ def run_exp(env, eval_mode:bool, train_dir, data_dir, flags):
                 ckpt_path,
                 data_dir
             ]
+            if config != '':
+                eval_base_cmd += ['-c', config]
             eval_cmd = ' '.join(eval_base_cmd)
             print('! RUN render_imgs.py', ckpt_path)
             print(eval_cmd)
@@ -190,6 +194,7 @@ if __name__ == '__main__':
             task['train_dir'] = path.join(train_root, task['train_dir'])  # Required
             task['data_dir'] = path.join(data_root, task.get('data_dir', '')).rstrip('/')
             task['flags'] = task.get('flags', []) + base_flags
+            task['config'] = task.get('config', '')
             os.makedirs(task['train_dir'], exist_ok=True)
             # santity check
             assert path.exists(task['train_dir']), task['train_dir'] + ' does not exist'
@@ -197,7 +202,8 @@ if __name__ == '__main__':
             all_tasks.append(task)
     task = None
     # Shuffle the tasks
-    random.shuffle(all_tasks)
+    if not args.eval:
+        random.shuffle(all_tasks)
 
     for task in all_tasks:
         pqueue.put(task)

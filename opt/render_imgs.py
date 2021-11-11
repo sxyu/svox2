@@ -9,10 +9,11 @@ import numpy as np
 import os
 from os import path
 from util.dataset import datasets
-from util.util import Timing, compute_ssim
+from util.util import Timing, compute_ssim, viridis_cmap
 from util import config_util
 
 import imageio
+import cv2
 from tqdm import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
@@ -26,6 +27,34 @@ parser.add_argument('--render_path',
                     action='store_true',
                     default=False,
                     help="Render path instead of test images (no metrics will be given)")
+parser.add_argument('--no_lpips',
+                    action='store_true',
+                    default=False,
+                    help="Disable LPIPS (faster load)")
+parser.add_argument('--no_vid',
+                    action='store_true',
+                    default=False,
+                    help="Disable video generation")
+parser.add_argument('--fps',
+                    type=int,
+                    default=30,
+                    help="FPS of video")
+
+# Camera adjustment
+parser.add_argument('--xy_shrink',
+                    type=float,
+                    default=1.0,
+                    help="Multiply xy poses")
+parser.add_argument('--z_shift',
+                    type=float,
+                    default=0.0,
+                    help="Amount of z to add to poses")
+parser.add_argument('--near_clip',
+                    type=float,
+                    default=0.0,
+                    help="Near clip of poses (in voxels)")
+
+# Foreground/background only
 parser.add_argument('--nofg',
                     action='store_true',
                     default=False,
@@ -34,16 +63,19 @@ parser.add_argument('--nobg',
                     action='store_true',
                     default=False,
                     help="Do not render background (if using BG model)")
+
+# Random debugging features
 parser.add_argument('--blackbg',
                     action='store_true',
                     default=False,
                     help="Force a black BG (behind BG model) color; useful for debugging 'clouds'")
-parser.add_argument('--no_lpips',
+parser.add_argument('--ray_len',
                     action='store_true',
                     default=False,
-                    help="Disable LPIPS")
+                    help="Render the ray lengths")
+
 args = parser.parse_args()
-config_util.maybe_merge_config_file(args)
+config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 
 if not args.no_lpips:
@@ -52,15 +84,26 @@ if not args.no_lpips:
 
 render_dir = path.join(path.dirname(args.ckpt),
             'train_renders' if args.train else 'test_renders')
+want_metrics = True
 if args.render_path:
     assert not args.train
     render_dir += '_path'
+    want_metrics = False
+
+if args.z_shift != 0:
+    render_dir += f'_zshift{args.z_shift}'
+if args.near_clip != 0:
+    render_dir += f'_nclip{args.near_clip}'
+if args.xy_shrink != 1.0:
+    render_dir += f'_xy_shrink{args.xy_shrink}'
+if args.ray_len:
+    render_dir += f'_raylen'
+    want_metrics = False
 
 dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test",
                                     **config_util.build_data_options(args))
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
-config_util.setup_render_opts(grid.opt, args)
 
 if grid.use_background:
     if args.nobg:
@@ -71,15 +114,10 @@ if grid.use_background:
         grid.density_data.data[:] = 0.0
         render_dir += '_nofg'
 
-
-grid.opt.step_size = args.step_size
-grid.opt.sigma_thresh = args.sigma_thresh
-grid.opt.stop_thresh = args.stop_thresh
-grid.opt.background_brightness = 1.0
-grid.opt.backend = args.renderer_backend
+config_util.setup_render_opts(grid.opt, args)
 
 if args.blackbg:
-    print('Using black bg')
+    print('Forcing black bg')
     render_dir += '_blackbg'
     grid.opt.background_brightness = 0.0
 
@@ -99,10 +137,26 @@ with torch.no_grad():
                        dset.w, dset.h,
                        ndc_coeffs=dset.ndc_coeffs)
     c2ws = dset.render_c2w.to(device=device) if args.render_path else dset.c2w.to(device=device)
+    if args.z_shift != 0.0:
+        c2ws[:, 2, 3] += args.z_shift
+    if args.xy_shrink != 1.0:
+        c2ws[:, :2, 3] *= args.xy_shrink
+    if args.near_clip != 0.0:
+        grid.opt.near_clip = args.near_clip
+
+    frames = []
+
     for img_id in tqdm(range(0, n_images, img_eval_interval)):
         cam.c2w = c2ws[img_id]
-        im = grid.volume_render_image(cam, use_kernel=True)
+        im = grid.volume_render_image(cam, use_kernel=True, return_raylen=args.ray_len)
+        if args.ray_len:
+            minv, meanv, maxv = im.min().item(), im.mean().item(), im.max().item()
+            im = viridis_cmap(im.cpu().numpy())
+            cv2.putText(im, f"{minv=:.4f} {meanv=:.4f} {maxv=:.4f}", (10, 20),
+                        0, 0.5, [255, 0, 0])
+            im = torch.from_numpy(im).to(device=device)
         im.clamp_(0.0, 1.0)
+
         if not args.render_path:
             im_gt = dset.gt[img_id].to(device=device)
             mse = (im - im_gt) ** 2
@@ -136,20 +190,29 @@ with torch.no_grad():
         if not args.render_path:
             im_gt = dset.gt[img_id].numpy()
             im = np.concatenate([im_gt, im], axis=1)
-        imageio.imwrite(img_path, (im * 255).astype(np.uint8))
+        im = (im * 255).astype(np.uint8)
+        imageio.imwrite(img_path,im)
+        if not args.no_vid:
+            frames.append(im)
         im = None
         n_images_gen += 1
-    avg_psnr /= n_images_gen
-    avg_ssim /= n_images_gen
-    print('AVERAGES')
-    print('PSNR:', avg_psnr)
-    print('SSIM:', avg_ssim)
-    with open(path.join(render_dir, 'psnr.txt'), 'w') as f:
-        f.write(str(avg_psnr))
-    with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
-        f.write(str(avg_ssim))
-    if not args.no_lpips:
-        avg_lpips /= n_images_gen
-        print('LPIPS:', avg_lpips)
-        with open(path.join(render_dir, 'lpips.txt'), 'w') as f:
-            f.write(str(avg_lpips))
+    if want_metrics:
+        avg_psnr /= n_images_gen
+        avg_ssim /= n_images_gen
+        print('AVERAGES')
+        print('PSNR:', avg_psnr)
+        print('SSIM:', avg_ssim)
+        with open(path.join(render_dir, 'psnr.txt'), 'w') as f:
+            f.write(str(avg_psnr))
+        with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
+            f.write(str(avg_ssim))
+        if not args.no_lpips:
+            avg_lpips /= n_images_gen
+            print('LPIPS:', avg_lpips)
+            with open(path.join(render_dir, 'lpips.txt'), 'w') as f:
+                f.write(str(avg_lpips))
+    if not args.no_vid and len(frames):
+        vid_path = render_dir + '.mp4'
+        imageio.mimwrite(vid_path, frames, fps=args.fps)  # pip install imageio-ffmpeg
+
+

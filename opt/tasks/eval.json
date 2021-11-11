@@ -1,12 +1,13 @@
 {
     "eval": true,
     "data_root": "/home/sxyu/data/nerf_synthetic",
-    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/256_to_512_u3_10e",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/256_to_512_to_768_u2_10e",
     "variables": {
         "scene": ["lego", "mic", "ship", "chair", "ficus", "materials", "drums", "hotdog"]
     },
     "tasks": [{
-        "train_dir": "train_{scene}",
-        "data_dir": "{scene}"
+        "train_dir": "{scene}",
+        "data_dir": "{scene}",
+        "config": "configs/syn.json"
     }]
 }

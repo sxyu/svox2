@@ -47,11 +47,10 @@ group.add_argument('--reso',
                             'stays at the last one; ' +
                             'should be a list where each item is a list of 3 ints or an int')
 group.add_argument('--upsamp_every', type=int, default=
-                     #  2 * 12800,
                      3 * 12800,
                     help='upsample the grid every x iters')
 group.add_argument('--init_iters', type=int, default=
-                     0, #-12800,
+                     0,
                     help='do not upsample for first x iters')
 group.add_argument('--upsample_density_add', type=float, default=
                     0.0,
@@ -144,11 +143,23 @@ group.add_argument('--init_sigma', type=float,
 
 
 group = parser.add_argument_group("misc experiments")
+group.add_argument('--thresh_type',
+                    choices=["weight", "sigma"],
+                    default="weight",
+                   help='Upsample threshold type')
 group.add_argument('--weight_thresh', type=float,
                     #  default=0.0005,
                     #  default=0.005 * 256,
-                    default=0.0005 * 512,
+                    #  default=0.0005 * 512,
+                    default=0.025 * 512,
                    help='Upsample weight threshold; will be divided by resulting z-resolution')
+group.add_argument('--density_thresh', type=float,
+                    default=0.0005,
+                   help='Upsample sigma threshold')
+group.add_argument('--max_grid_elements', type=int,
+                    default=44_000_000,
+                   help='Max items to store after upsampling '
+                        '(the number here is given for 22GB memory)')
 
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
@@ -159,12 +170,12 @@ group.add_argument('--tune_nosave', action='store_true', default=False,
 
 group = parser.add_argument_group("losses")
 # Foreground TV
-group.add_argument('--lambda_tv', type=float, default=1e-3)
+group.add_argument('--lambda_tv', type=float, default=1e-5)
 group.add_argument('--tv_sparsity', type=float, default=0.01)
 group.add_argument('--tv_logalpha', action='store_true', default=False,
                    help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
-group.add_argument('--lambda_tv_sh', type=float, default=1e-1)
+group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
 group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
 group.add_argument('--lambda_tv_lumisphere', type=float, default=0.0)#1e-2)#1e-3)
@@ -176,13 +187,11 @@ group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
 
 group.add_argument('--lambda_sparsity', type=float, default=
                     0.0,
-                    #  1e-11,
                     help="Weight for sparsity loss as in SNeRG/PlenOctrees " +
                          "(but applied on the ray)")
 group.add_argument('--lambda_beta', type=float, default=
                     0.0,
-                    #  1e-5,
-            help="Weight for beta distribution sparsity loss as in neural volumes")
+                    help="Weight for beta distribution sparsity loss as in neural volumes")
 
 
 # Background TV
@@ -545,16 +554,17 @@ while True:
         last_upsamp_step = gstep_id_base
         if reso_id < len(reso_list) - 1:
             print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
-            #  args.lambda_tv = 0.0
-            #  args.lambda_tv_sh = 0.0
+            #  args.lambda_tv = 0
+            #  args.lambda_tv_sh = 0
             reso_id += 1
             use_sparsify = True
             z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
             grid.resample(reso=reso_list[reso_id],
-                    #  sigma_thresh=args.sigma_thresh if use_sparsify else 0.0,
+                    sigma_thresh=args.density_thresh,
                     weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
                     dilate=2, #use_sparsify,
-                    cameras=resample_cameras)
+                    cameras=resample_cameras if args.thresh_type == 'weight' else None,
+                    max_elements=args.max_grid_elements)
 
             if args.upsample_density_add:
                 grid.density_data.data[:] += args.upsample_density_add

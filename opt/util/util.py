@@ -108,7 +108,7 @@ def get_expon_lr_func(
 def viridis_cmap(gray: np.ndarray):
     """
     Visualize a single-channel image using matplotlib's viridis color map
-    yellow is low, blue is high
+    yellow is high value, blue is low
     :param gray: np.ndarray, (H, W) or (H, W, 1) unscaled
     :return: (H, W, 3) float32 in [0, 1]
     """

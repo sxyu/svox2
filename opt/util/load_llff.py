@@ -193,7 +193,7 @@ def render_path_axis(c2w, up, ax, rad, focal, N):
     return render_poses
 
 
-def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
+def render_path_spiral(c2w, up, rads, focal, zrate, rots, N):
     render_poses = []
     rads = np.array(list(rads) + [1.0])
     # hwf = c2w[:,4:5]
@@ -301,7 +301,7 @@ def load_llff_data(
     recenter=True,
     bd_factor=0.75,
     spherify=False,
-    path_zflat=False,
+    #  path_zflat=False,
     split_train_val=8,
     render_style="",
 ):
@@ -343,21 +343,21 @@ def load_llff_data(
 
         close_depth, inf_depth = -1, -1
         # Find a reasonable "focus depth" for this dataset
-        if os.path.exists(os.path.join(basedir, "planes_spiral.txt")):
-            with open(os.path.join(basedir, "planes_spiral.txt"), "r") as fi:
-                data = [float(x) for x in fi.readline().split(" ")]
-                dmin, dmax = data[:2]
-                close_depth = dmin * 0.9
-                inf_depth = dmax * 5.0
-        elif os.path.exists(os.path.join(basedir, "planes.txt")):
-            with open(os.path.join(basedir, "planes.txt"), "r") as fi:
-                data = [float(x) for x in fi.readline().split(" ")]
-                if len(data) == 3:
-                    dmin, dmax, invz = data
-                elif len(data) == 4:
-                    dmin, dmax, invz, _ = data
-                close_depth = dmin * 0.9
-                inf_depth = dmax * 5.0
+        #  if os.path.exists(os.path.join(basedir, "planes_spiral.txt")):
+        #      with open(os.path.join(basedir, "planes_spiral.txt"), "r") as fi:
+        #          data = [float(x) for x in fi.readline().split(" ")]
+        #          dmin, dmax = data[:2]
+        #          close_depth = dmin * 0.9
+        #          inf_depth = dmax * 5.0
+        #  elif os.path.exists(os.path.join(basedir, "planes.txt")):
+        #      with open(os.path.join(basedir, "planes.txt"), "r") as fi:
+        #          data = [float(x) for x in fi.readline().split(" ")]
+        #          if len(data) == 3:
+        #              dmin, dmax, invz = data
+        #          elif len(data) == 4:
+        #              dmin, dmax, invz, _ = data
+        #          close_depth = dmin * 0.9
+        #          inf_depth = dmax * 5.0
 
         prev_close, prev_inf = close_depth, inf_depth
         if close_depth < 0 or inf_depth < 0 or render_style == "llff":
@@ -375,23 +375,21 @@ def load_llff_data(
         focal = mean_dz
 
         # Get radii for spiral path
-        shrink_factor = 0.8
-        zdelta = close_depth * 0.2
         tt = poses[:, :3, 3]  # ptstocam(poses[:3,3,:].T, c2w).T
         rads = np.percentile(np.abs(tt), 90, 0)
         c2w_path = c2w
         N_views = 120
         N_rots = 2
-        if path_zflat:
-            #             zloc = np.percentile(tt, 10, 0)[2]
-            zloc = -close_depth * 0.1
-            c2w_path[:3, 3] = c2w_path[:3, 3] + zloc * c2w_path[:3, 2]
-            rads[2] = 0.0
-            N_rots = 1
-            N_views /= 2
+        #  if path_zflat:
+        #      #             zloc = np.percentile(tt, 10, 0)[2]
+        #      zloc = -close_depth * 0.1
+        #      c2w_path[:3, 3] = c2w_path[:3, 3] + zloc * c2w_path[:3, 2]
+        #      rads[2] = 0.0
+        #      N_rots = 1
+        #      N_views /= 2
 
         render_poses = render_path_spiral(
-            c2w_path, up, rads, focal, zdelta, zrate=0.5, rots=N_rots, N=N_views
+            c2w_path, up, rads, focal, zrate=0.5, rots=N_rots, N=N_views
         )
 
     render_poses = np.array(render_poses).astype(np.float32)
