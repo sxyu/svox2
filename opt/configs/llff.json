@@ -1,7 +1,6 @@
 {
     "reso": "[[256, 256, 128], [512, 512, 128], [1408, 1156, 128]]",
     "upsamp_every": 38400,
-    "n_iters": 153600,
     "lr_sigma": 3e1,
     "lr_sh": 1e-2,
     "lr_sigma_delay_steps": 15000,
