@@ -74,7 +74,7 @@ __device__ __inline__ void trace_ray(
         for (int i = 0; i < 3; ++i) {
             ray.origin[i] += 0.5f;  // Fix offset of nn vs lerp
             t1 = (0.0f - ray.origin[i]) * invdir[i];
-            t2 = (grid.size[i] - 1.f - 1e-3f - ray.origin[i]) * invdir[i];
+            t2 = (grid.size[i] - 1.f - ray.origin[i]) * invdir[i];
             t = fmaxf(t, fminf(t1, t2));
             tmax = fminf(tmax, fmaxf(t1, t2));
         }
@@ -103,7 +103,8 @@ __device__ __inline__ void trace_ray(
 #pragma unroll 3
             for (int j = 0; j < 3; ++j) {
                 pos[j] = ray.origin[j] + t * ray.dir[j];
-                l[j] = (int32_t) pos[j];
+                pos[j] = fminf(fmaxf(pos[j], 0.f), grid.size[j] - 1.f);
+                l[j] = min(static_cast<int32_t>(pos[j]), grid.size[j] - 1);
                 pos[j] -= l[j];
             }
 
@@ -111,11 +112,14 @@ __device__ __inline__ void trace_ray(
                 (l[0] * grid.size[1] +  l[1]) * grid.size[2] + l[2]
             ];
             if (link >= 0) {
-                const float delta_t = _intersect_aabb_unit(pos, invdir) + 1e-3f;
+                const float delta_t = _intersect_aabb_unit(pos, invdir) + 1e-2f;
                 t += delta_t;
                 float sigma = grid.density_data[link];
+                if (opt.last_sample_opaque && t + opt.step_size > tmax) {
+                    sigma += 1e9;
+                }
                 if (sigma > opt.sigma_thresh) {
-                    const float* __restrict__ sample_val = &grid.sh_data[link * grid.sh_data_dim];
+                    const float* __restrict__ sample_val = &grid.sh_data[size_t(link) * grid.sh_data_dim];
                     const float log_transmit = -delta_t * delta_scale * sigma;
                     const float transmittance = expf(log_transmittance);
                     const float weight = transmittance * (1.f - expf(log_transmit));
@@ -140,11 +144,11 @@ __device__ __inline__ void trace_ray(
                     }
                 }
             } else {
-                float skip = compute_skip_dist_nn(ray,
+                float skip = fmaxf(compute_skip_dist_nn(ray,
                        invdir,
                        pos,
-                       l, link);
-                t += skip + 1e-3f;
+                       l, link), 0.f);
+                t += skip + 1e-2f;
             }
         }
 #pragma unroll 3
@@ -172,6 +176,9 @@ __device__ __inline__ void trace_ray_backward(
 #pragma unroll
     for (int i = 0; i < 3; ++i) {
         invdir[i] = 1.0 / ray.dir[i];
+        if (ray.dir[i] == 0.0f) {
+            invdir[i] = 1e9f;
+        }
     }
     {
         float t1, t2;
@@ -181,7 +188,7 @@ __device__ __inline__ void trace_ray_backward(
         for (int i = 0; i < 3; ++i) {
             ray.origin[i] += 0.5f;  // Fix offset of nn vs lerp
             t1 = (0.0f - ray.origin[i]) * invdir[i];
-            t2 = (grid.size[i] - 1.f - 1e-3f - ray.origin[i]) * invdir[i];
+            t2 = (grid.size[i] - 1.f - ray.origin[i]) * invdir[i];
             if (ray.dir[i] != 0.0f) {
                 t = fmaxf(t, fminf(t1, t2));
                 tmax = fminf(tmax, fmaxf(t1, t2));
@@ -206,18 +213,23 @@ __device__ __inline__ void trace_ray_backward(
 #pragma unroll 3
             for (int j = 0; j < 3; ++j) {
                 pos[j] = ray.origin[j] + t * ray.dir[j];
-                l[j] = (int32_t) pos[j];
+                pos[j] = fminf(fmaxf(pos[j], 0.f), grid.size[j] - 1.f);
+                l[j] = min(static_cast<int32_t>(pos[j]), grid.size[j] - 1);
                 pos[j] -= l[j];
             }
             const int32_t link = grid.links[
                 (l[0] * grid.size[1] +  l[1]) * grid.size[2] + l[2]
             ];
             if (link >= 0) {
-                float delta_t = _intersect_aabb_unit(pos, invdir) + 1e-3f;
+                float delta_t = _intersect_aabb_unit(pos, invdir) + 1e-2f;
                 t += delta_t;
                 float sigma = grid.density_data[link];
+                if (opt.last_sample_opaque && t + opt.step_size > tmax) {
+                    sigma += 1e9;
+                }
                 if (sigma > opt.sigma_thresh) {
-                    const float* __restrict__ sample_val = &grid.sh_data[link * grid.sh_data_dim];
+                    const float* __restrict__ sample_val = &grid.sh_data[size_t(link) * grid.sh_data_dim];
+                    float* __restrict__ grad_sample_val = &grads.grad_sh_out[size_t(link) * grid.sh_data_dim];
                     delta_t *= delta_scale;
                     const float log_transmit = -delta_t * sigma;
                     const float weight = expf(log_transmittance) * (1.f - expf(log_transmit));
@@ -235,7 +247,7 @@ __device__ __inline__ void trace_ray_backward(
                             total_color += tmp * grad_output[k];
                             tmp = weight * grad_output[k];
                             for (int i = 0; i < grid.basis_dim; ++i) {
-                                atomicAdd(&grads.grad_sh_out[link * grid.sh_data_dim + off + i],
+                                atomicAdd(&grad_sample_val[off + i],
                                         basis_fn[i] * tmp);
                             }
                         }
@@ -253,10 +265,10 @@ __device__ __inline__ void trace_ray_backward(
                     }
                 }
             } else {
-                t += compute_skip_dist_nn(ray,
+                t += fmaxf(compute_skip_dist_nn(ray,
                        invdir,
                        pos,
-                       l, link) + 1e-3f;
+                       l, link), 0.f) + 1e-2f;
             }
         }
     }
