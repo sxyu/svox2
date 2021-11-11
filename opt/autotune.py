@@ -23,11 +23,13 @@ parser.add_argument("--gpus", "-g", type=str, required=True,
                                  "not considering CUDA_VISIBLE_DEVICES)")
 parser.add_argument('--eval', action='store_true', default=False,
                    help='evaluation mode (run the render_imgs script)')
+parser.add_argument('--render', action='store_true', default=False,
+                   help='also run render_imgs.py with --render_path to render a rotating trajectory (forward-facing case)')
 args = parser.parse_args()
 
 PSNR_FILE_NAME = 'test_psnr.txt'
 
-def run_exp(env, eval_mode:bool, train_dir, data_dir, config, flags):
+def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config, flags):
     opt_base_cmd = [ "python", "-u", "opt.py", "--tune_mode" ]
 
     if not eval_mode:
@@ -65,15 +67,15 @@ def run_exp(env, eval_mode:bool, train_dir, data_dir, config, flags):
             f.write(opt_ret)
 
     if eval_mode:
+        eval_base_cmd = [
+            "python", "-u", "render_imgs.py",
+            ckpt_path,
+            data_dir
+        ]
+        if config != '':
+            eval_base_cmd += ['-c', config]
         psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
         if not path.exists(psnr_file_path):
-            eval_base_cmd = [
-                "python", "-u", "render_imgs.py",
-                ckpt_path,
-                data_dir
-            ]
-            if config != '':
-                eval_base_cmd += ['-c', config]
             eval_cmd = ' '.join(eval_base_cmd)
             print('! RUN render_imgs.py', ckpt_path)
             print(eval_cmd)
@@ -85,6 +87,16 @@ def run_exp(env, eval_mode:bool, train_dir, data_dir, config, flags):
                 return
         else:
             print('! SKIP eval because psnr.txt exists', psnr_file_path)
+
+        if enable_render:
+            eval_base_cmd += ['--render_path']
+            render_cmd = ' '.join(eval_base_cmd)
+            try:
+                render_ret = subprocess.check_output(render_cmd, shell=True, env=env).decode(
+                        sys.stdout.encoding)
+            except subprocess.CalledProcessError:
+                print('Error occurred while running RENDER for exp', train_dir, 'on', env["CUDA_VISIBLE_DEVICES"])
+                return
     else:
         test_stats = [eval(x.split('eval stats:')[-1].strip())
                       for x in opt_ret.split('\n') if
@@ -99,7 +111,7 @@ def run_exp(env, eval_mode:bool, train_dir, data_dir, config, flags):
         with open(psnr_file_path, 'w') as f:
             f.write(str(final_test_psnr))
 
-def process_main(device, eval_mode:bool, queue):
+def process_main(device, eval_mode:bool, enable_render:bool, queue):
     # Set CUDA_VISIBLE_DEVICES programmatically
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(device)
@@ -107,7 +119,7 @@ def process_main(device, eval_mode:bool, queue):
         task = queue.get()
         if len(task) == 0:
             break
-        run_exp(env, eval_mode, **task)
+        run_exp(env, eval_mode, enable_render, **task)
 
 # Variable value list generation helpers
 def lin(start, stop, num):
@@ -176,6 +188,9 @@ if __name__ == '__main__':
     if 'eval' in tasks_file:
         args.eval = tasks_file['eval']
         print('Eval mode?', args.eval)
+    if 'render' in tasks_file:
+        args.render = tasks_file['render']
+        print('Render traj?', args.render)
     pqueue = Queue()
 
     leaderboard_path = path.join(train_root, 'results.txt' if args.eval else 'leaderboard.txt')
@@ -216,7 +231,7 @@ if __name__ == '__main__':
 
     all_procs = []
     for i, gpu in enumerate(args.gpus):
-        process = Process(target=process_main, args=(gpu, args.eval, pqueue))
+        process = Process(target=process_main, args=(gpu, args.eval, args.render, pqueue))
         process.daemon = True
         process.start()
         all_procs.append(process)
