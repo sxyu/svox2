@@ -244,13 +244,13 @@ if __name__ == '__main__':
                 if path.isfile(ssim_file_path):
                     with open(ssim_file_path, 'r') as f:
                         ssim = float(f.read())
-                    ssim_txt = f'{psnr:.10f}'
+                    ssim_txt = f'{ssim:.10f}'
                 else:
                     ssim_txt = 'ERR'
                 if path.isfile(lpips_file_path):
                     with open(lpips_file_path, 'r') as f:
                         lpips = float(f.read())
-                    lpips_txt = f'{psnr:.10f}'
+                    lpips_txt = f'{lpips:.10f}'
                 else:
                     lpips_txt = 'ERR'
                 line = f'{path.basename(train_dir.rstrip("/"))}\t{psnr_txt}\t{ssim_txt}\t{lpips_txt}\n'
