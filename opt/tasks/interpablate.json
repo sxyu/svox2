@@ -1,0 +1,18 @@
+{
+    "eval": true,
+    "data_root": "/home/sxyu/data/nerf_synthetic",
+    "train_root": "/home/sfk/svox2/opt/ckpt_auto/nearestneighbor",
+    "variables": {
+        "scene": ["lego", "mic", "ship", "chair", "ficus", "materials", "drums", "hotdog"], 
+        "reso": ["[[256,256,256]]", "[[128,128,128]]"]
+    },
+    "tasks": [{
+        "train_dir": "{reso}_3e0_{scene}",
+        "data_dir": "{scene}",
+        "flags": [
+            "-B", "svox1",
+            "--lr_sigma", "3e0",
+            "--reso", "{reso}"
+        ]
+    }]
+}

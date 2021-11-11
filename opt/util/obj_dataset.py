@@ -35,6 +35,7 @@ class NeRFDataset:
         scale : Optional[float] = None,
         permutation: bool = True,
         white_bkgd: bool = True,
+        n_images = None,
         **kwargs
     ):
         assert path.isdir(root), f"'{root}' is not a directory"
@@ -88,6 +89,15 @@ class NeRFDataset:
                 self.gt = self.gt[..., :3]
 
         self.n_images, self.h_full, self.w_full, _ = self.gt.shape
+        # Choose a subset of training images
+        if n_images is not None:
+            if n_images > self.n_images:
+                print(f'using {self.n_images} available training views instead of the requested {n_images}.')
+                n_images = self.n_images
+            self.n_images = n_images
+            self.gt = self.gt[0:n_images,...]
+            self.c2w = self.c2w[0:n_images,...]
+
         self.intrins_full : Intrin = Intrin(focal, focal,
                                             self.w_full * 0.5,
                                             self.h_full * 0.5)

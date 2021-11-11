@@ -183,6 +183,7 @@ group.add_argument('--tv_lumisphere_sparsity', type=float, default=0.01)
 group.add_argument('--tv_lumisphere_dir_factor', type=float, default=0.0)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
+group.add_argument('--tv_early_only', type=int, default=1) # Turn off TV regularization after the first split/prune
 # End Foreground TV
 
 group.add_argument('--lambda_sparsity', type=float, default=
@@ -211,6 +212,7 @@ group.add_argument('--weight_decay_sh', type=float, default=1.0)
 
 group.add_argument('--lr_decay', action='store_true', default=True)
 
+group.add_argument('--n_train', type=int, default=None, help='Number of training images. Defaults to use all avaiable.')
 args = parser.parse_args()
 config_util.maybe_merge_config_file(args)
 
@@ -239,6 +241,7 @@ dset = datasets[args.dataset_type](
                split="train",
                device=device,
                factor=factor,
+               n_images=args.n_train,
                **config_util.build_data_options(args))
 
 if args.background_nlayers > 0 and not dset.should_use_background:
@@ -554,8 +557,10 @@ while True:
         last_upsamp_step = gstep_id_base
         if reso_id < len(reso_list) - 1:
             print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
-            #  args.lambda_tv = 0
-            #  args.lambda_tv_sh = 0
+            if args.tv_early_only > 0:
+                print('turning off TV regularization')
+                args.lambda_tv = 0.0
+                args.lambda_tv_sh = 0.0
             reso_id += 1
             use_sparsify = True
             z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
