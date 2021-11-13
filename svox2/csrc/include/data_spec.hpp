@@ -22,7 +22,8 @@ struct SparseGridSpec {
   Tensor _offset;
   Tensor _scaling;
 
-  Tensor background_cubemap;
+  Tensor background_links;
+  Tensor background_data;
 
   int basis_dim;
   uint8_t basis_type;
@@ -32,20 +33,21 @@ struct SparseGridSpec {
     CHECK_INPUT(density_data);
     CHECK_INPUT(sh_data);
     CHECK_INPUT(links);
-    CHECK_INPUT(background_cubemap);
-    CHECK_INPUT(basis_data);
+    if (background_links.defined()) {
+      CHECK_INPUT(background_links);
+      CHECK_INPUT(background_data);
+      TORCH_CHECK(background_links.ndimension() ==
+                  2);                                 // (H, W) -> [N] \cup {-1}
+      TORCH_CHECK(background_data.ndimension() == 3); // (N, D, C) -> R
+    }
+    if (basis_data.defined()) {
+      CHECK_INPUT(basis_data);
+    }
     CHECK_CPU_INPUT(_offset);
     CHECK_CPU_INPUT(_scaling);
-    TORCH_CHECK(density_data.is_floating_point());
-    TORCH_CHECK(sh_data.is_floating_point());
-    TORCH_CHECK(!links.is_floating_point());
-    TORCH_CHECK(basis_data.is_floating_point());
-    TORCH_CHECK(_offset.is_floating_point());
-    TORCH_CHECK(_scaling.is_floating_point());
     TORCH_CHECK(density_data.ndimension() == 2);
     TORCH_CHECK(sh_data.ndimension() == 2);
     TORCH_CHECK(links.ndimension() == 3);
-    TORCH_CHECK(background_cubemap.ndimension() == 5);
   }
 };
 
@@ -125,4 +127,7 @@ struct RenderOptions {
   float random_sigma_std_background;
   // 32-bit RNG state masks
   uint32_t _m1, _m2, _m3;
+
+  // int msi_start_layer = 0;
+  // int msi_end_layer = 66;
 };

@@ -28,9 +28,9 @@ grid.sh_data.data[..., 1:].normal_(std=0.01)
 grid.density_data.data[:] = 0.1
 
 if grid.use_background:
-	grid.background_cubemap.data[..., -1] = 0.5
-	grid.background_cubemap.data[..., :-1] = torch.randn_like(
-            grid.background_cubemap.data[..., :-1]) * 0.01
+	grid.background_data.data[..., -1] = 0.5
+	grid.background_data.data[..., :-1] = torch.randn_like(
+            grid.background_data.data[..., :-1]) * 0.01
 
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
     grid.basis_data.data.normal_()
@@ -46,10 +46,11 @@ dirs = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
 #  dirs = torch.tensor([[0.6418760418891907, -0.37417781352996826, 0.6693176627159119]], device=device, dtype=dtype)
 dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 
-#  start = 978
-#  end = 979
-#  origins = origins[start:end]
-#  dirs = dirs[start:end]
+start = 50
+end = 100
+origins = origins[start:end]
+dirs = dirs[start:end]
+
 #  breakpoint()
 rays = svox2.Rays(origins, dirs)
 
@@ -76,8 +77,8 @@ if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
     grid_basis_grad_s = grid.basis_data.grad.clone().cpu()
     grid.basis_data.grad = None
 if grid.use_background:
-    grid_bg_grad_s = grid.background_cubemap.grad.clone().cpu()
-    grid.background_cubemap.grad = None
+    grid_bg_grad_s = grid.background_data.grad.clone().cpu()
+    grid.background_data.grad = None
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
@@ -90,7 +91,7 @@ if ENABLE_TORCH_CHECK:
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         grid_basis_grad_t = grid.basis_data.grad.clone().cpu()
     if grid.use_background:
-        grid_bg_grad_t = grid.background_cubemap.grad.clone().cpu() if grid.background_cubemap.grad is not None else torch.zeros_like(grid_bg_grad_s)
+        grid_bg_grad_t = grid.background_data.grad.clone().cpu() if grid.background_data.grad is not None else torch.zeros_like(grid_bg_grad_s)
 
     E = torch.abs(grid_sh_grad_s-grid_sh_grad_t)
     Ed = torch.abs(grid_density_grad_s-grid_density_grad_t)

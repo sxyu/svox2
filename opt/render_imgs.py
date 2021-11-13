@@ -108,13 +108,16 @@ grid = svox2.SparseGrid.load(args.ckpt, device=device)
 if grid.use_background:
     if args.nobg:
         #  grid.background_cubemap.data = grid.background_cubemap.data.cuda()
-        grid.background_cubemap.data[..., -1] = 0.0
+        grid.background_data.data[..., -1] = 0.0
         render_dir += '_nobg'
     if args.nofg:
         grid.density_data.data[:] = 0.0
         render_dir += '_nofg'
 
 config_util.setup_render_opts(grid.opt, args)
+
+grid.opt.msi_start_layer = 30
+grid.opt.msi_end_layer = 31 #grid.opt.msi_start_layer + 1
 
 if args.blackbg:
     print('Forcing black bg')

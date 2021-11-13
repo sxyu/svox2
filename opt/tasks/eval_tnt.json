@@ -1,0 +1,31 @@
+{
+    "eval": true,
+    "data_root": "/home/sxyu/data/TanksAndTempleBG",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/tnt",
+    "config": "configs/tnt.json",
+    "tasks": [{
+        "train_dir": "Train",
+        "data_dir": "Train",
+        "flags": [
+            "--scene_scale", "2.0"
+        ]
+    }, {
+        "train_dir": "M60",
+        "data_dir": "M60",
+        "flags": [
+            "--scene_scale", "2.0"
+        ]
+    }, {
+        "train_dir": "Truck",
+        "data_dir": "Truck",
+        "flags": [
+            "--scene_scale", "1.6"
+        ]
+    }, {
+        "train_dir": "Playground",
+        "data_dir": "Playground",
+        "flags": [
+            "--scene_scale", "1.7"
+        ]
+    }]
+}

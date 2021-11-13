@@ -3,14 +3,11 @@
     "upsamp_every": 38400,
     "lr_sigma": 3e1,
     "lr_sh": 1e-2,
-    "lr_sigma_delay_steps": 15000,
     "thresh_type": "sigma",
     "density_thresh": 5,
-    "lambda_tv": 2e-4,
-    "lambda_tv_sh": 2e-3,
-    "enable_random": false,
-    "random_sigma_std": 0.0,
+    "lambda_tv": 5e-4,
+    "lambda_tv_sh": 5e-3,
     "lambda_sparsity": 1e-12,
-    "lambda_beta": 0.0,
-    "background_brightness": 0.5
+    "background_brightness": 0.5,
+    "tv_early_only": 0
 }

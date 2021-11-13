@@ -148,6 +148,8 @@ def create_prodvars(variables, noise_stds={}):
     def auto_list(x):
         if isinstance(x, list):
             return x
+        elif isinstance(x, dict) or isinstance(x, set):
+            return [x]
         elif isinstance(x, str):
             return eval(x)
         else:
@@ -184,6 +186,7 @@ if __name__ == '__main__':
     data_root = path.expanduser(tasks_file['data_root'])  # Required
     train_root = path.expanduser(tasks_file['train_root'])  # Required
     base_flags = tasks_file.get('base_flags', [])
+    default_config = tasks_file.get('config', '')
 
     if 'eval' in tasks_file:
         args.eval = tasks_file['eval']
@@ -209,7 +212,7 @@ if __name__ == '__main__':
             task['train_dir'] = path.join(train_root, task['train_dir'])  # Required
             task['data_dir'] = path.join(data_root, task.get('data_dir', '')).rstrip('/')
             task['flags'] = task.get('flags', []) + base_flags
-            task['config'] = task.get('config', '')
+            task['config'] = task.get('config', default_config)
             os.makedirs(task['train_dir'], exist_ok=True)
             # santity check
             assert path.exists(task['train_dir']), task['train_dir'] + ' does not exist'

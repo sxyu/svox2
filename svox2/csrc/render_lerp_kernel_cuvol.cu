@@ -3,7 +3,6 @@
 #include "cuda_util.cuh"
 #include "data_spec_packed.cuh"
 #include "render_util.cuh"
-#include "cubemap_util.cuh"
 
 #include <iostream>
 #include <cstdint>
@@ -298,16 +297,9 @@ __device__ __inline__ void render_background_forward(
 
     csi.intersect(inner_radius, &t_last);
 
-    // printf("RAY o[%f,%f,%f] d[%f,%f,%f] rad=%f, t_last=%f ws=%f\n",
-    //         ray.origin[0], ray.origin[1], ray.origin[2],
-    //         ray.dir[0], ray.dir[1], ray.dir[2],
-    //         inner_radius,
-    //         t_last, ray.world_step);
-
     float outv[3] = {0.f, 0.f, 0.f};
-    const int cubemap_step = 6 * grid.background_reso * grid.background_reso * /*n_channels*/ 4;
-    const float layer_scale = (float(grid.background_nlayers - 1) / (n_steps + 1));
     for (int i = 0; i < n_steps; ++i) {
+        // Between 1 and infty
         float r = n_steps / (n_steps - i - 0.5);
         if (r < inner_radius || !csi.intersect(r, &t)) continue;
         const float t_mid = (t + t_last) * 0.5f;
@@ -316,58 +308,60 @@ __device__ __inline__ void render_background_forward(
         for (int j = 0; j < 3; ++j) {
             ray.pos[j] = fmaf(t_mid, ray.dir[j], ray.origin[j]);
         }
-        const float normalized_inv_radius = fminf((i + 1.f) * layer_scale,
-                                                  grid.background_nlayers - 1);
-        int layerid = min((int)floorf(normalized_inv_radius), grid.background_nlayers - 2);
-        const float interp_wt = normalized_inv_radius - layerid;
-        const float* __restrict__ cubemap_data = grid.background_cubemap + cubemap_step * layerid;
+        const float invr_mid = _rnorm(ray.pos);
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.pos[j] *= invr_mid;
+        }
+        // NOTE: reusing ray.pos (ok if you check _unitvec2equirect)
+        _unitvec2equirect(ray.pos, grid.background_reso, ray.pos);
+        ray.pos[2] = fminf(fmaxf((1.f - invr_mid) * grid.background_nlayers - 0.5f, 0.f),
+                       grid.background_nlayers - 1);
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.l[j] = (int) ray.pos[j];
+        }
+        ray.l[0] = min(ray.l[0], grid.background_reso * 2 - 1);
+        ray.l[1] = min(ray.l[1], grid.background_reso - 1);
+        ray.l[2] = min(ray.l[2], grid.background_nlayers - 2);
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.pos[j] -= ray.l[j];
+        }
 
-        const CubemapCoord coord = dir_to_cubemap_coord(ray.pos,
-                grid.background_reso,
-                /* EAC */ true);
-        const CubemapBilerpQuery query = cubemap_build_query(coord,
-                grid.background_reso);
 
-        float sigma = multi_cubemap_sample(
-                cubemap_data,
-                cubemap_data + cubemap_step,
-                query,
-                interp_wt,
+        float sigma = trilerp_bg_one(
+                grid.background_links,
+                grid.background_data,
                 grid.background_reso,
-                /*n_channels*/ 4,
+                grid.background_nlayers,
+                4,
+                ray.l,
+                ray.pos,
                 3);
-        // printf("SAMP p[%f,%f,%f] invr=%f layerid=%d interp_wt=%f sigma=%f log_li=%f\n",
-        //         ray.pos[0], ray.pos[1], ray.pos[2],
-        //         normalized_inv_radius,
-        //         layerid,
-        //         interp_wt,
-        //         sigma,
-        //         log_transmit);
         if (opt.randomize && opt.random_sigma_std_background > 0.0)
             sigma += ray.rng.randn() * opt.random_sigma_std_background;
-        if (sigma > opt.sigma_thresh) {
+        if (sigma > 0.f) {
             const float pcnt = (t - t_last) * ray.world_step * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
 #pragma unroll 3
             for (int i = 0; i < 3; ++i) {
-                const float color = multi_cubemap_sample(
-                        cubemap_data,
-                        cubemap_data + cubemap_step,
-                        query,
-                        interp_wt,
+                const float color = trilerp_bg_one(
+                        grid.background_links,
+                        grid.background_data,
                         grid.background_reso,
-                        /*n_channels*/ 4,
-                        i) * C0;
-                // printf("%f %d: %f %f\n", r, i, sigma, fmaxf(color + 0.5f, 0.f));
+                        grid.background_nlayers,
+                        4,
+                        ray.l,
+                        ray.pos,
+                        i) * C0;  // Scale by SH DC factor to help normalize lrs
                 outv[i] += weight * fmaxf(color + 0.5f, 0.f);  // Clamp to [+0, infty)
             }
             if (_EXP(log_transmit) < opt.stop_thresh) {
                 break;
             }
         }
-        if (cubemap_data != nullptr)
-            cubemap_data += cubemap_step;
         t_last = t;
     }
 #pragma unroll 3
@@ -391,12 +385,9 @@ __device__ __inline__ void render_background_backward(
 
     float t, t_last;
     const int n_steps = int(grid.background_nlayers / opt.step_size) + 2;
-    const int cubemap_step = 6 * grid.background_reso * grid.background_reso;
 
     const float inner_radius = fmaxf(_dist_ray_to_origin(ray.origin, ray.dir) + 1e-3f, 1.f);
     csi.intersect(inner_radius, &t_last);
-    const float layer_scale = (float(grid.background_nlayers - 1) / (n_steps + 1));
-
     for (int i = 0; i < n_steps; ++i) {
         float r = n_steps / (n_steps - i - 0.5);
 
@@ -408,56 +399,68 @@ __device__ __inline__ void render_background_backward(
             ray.pos[j] = fmaf(t_mid, ray.dir[j], ray.origin[j]);
         }
 
-        const float normalized_inv_radius = fminf((i + 1.f) * layer_scale,
-                                                  grid.background_nlayers - 1);
-        int layerid = min((int)floorf(normalized_inv_radius), grid.background_nlayers - 2);
-        const float interp_wt = normalized_inv_radius - layerid;
-        const float* __restrict__ cubemap_data = grid.background_cubemap + cubemap_step * 4 * layerid;
-        float* __restrict__ grad_cubemap_data = grads.grad_background_out == nullptr ? nullptr :
-                                   (grads.grad_background_out + cubemap_step * 4 * layerid);
-        bool* __restrict__ mask_cubemap_ptr = grads.mask_background_out == nullptr ?  nullptr :
-                                   (grads.mask_background_out + cubemap_step * layerid);
+        const float invr_mid = _rnorm(ray.pos);
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.pos[j] *= invr_mid;
+        }
+        // NOTE: reusing ray.pos (ok if you check _unitvec2equirect)
+        _unitvec2equirect(ray.pos, grid.background_reso, ray.pos);
+        ray.pos[2] = fminf(fmaxf((1.f - invr_mid) * grid.background_nlayers - 0.5f, 0.f),
+                       grid.background_nlayers - 1);
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.l[j] = (int) ray.pos[j];
+        }
+        ray.l[0] = min(ray.l[0], grid.background_reso * 2 - 1);
+        ray.l[1] = min(ray.l[1], grid.background_reso - 1);
+        ray.l[2] = min(ray.l[2], grid.background_nlayers - 2);
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.pos[j] -= ray.l[j];
+        }
 
-        const CubemapCoord coord = dir_to_cubemap_coord(ray.pos,
-                grid.background_reso, /* EAC */ true);
-        const CubemapBilerpQuery query = cubemap_build_query(coord,
-                grid.background_reso);
 
-        float sigma = multi_cubemap_sample(
-                cubemap_data,
-                cubemap_data + cubemap_step * 4,
-                query,
-                interp_wt,
+        float sigma = trilerp_bg_one(
+                grid.background_links,
+                grid.background_data,
                 grid.background_reso,
-                /*n_channels*/ 4,
+                grid.background_nlayers,
+                4,
+                ray.l,
+                ray.pos,
                 3);
         if (opt.randomize && opt.random_sigma_std_background > 0.0)
             sigma += ray.rng.randn() * opt.random_sigma_std_background;
-        if (sigma > opt.sigma_thresh) {
+        if (sigma > 0.f) {
             float total_color = 0.f;
             const float pcnt = ray.world_step * (t - t_last) * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
 
             for (int i = 0; i < 3; ++i) {
-                const float color = multi_cubemap_sample(
-                        cubemap_data,
-                        cubemap_data + cubemap_step * 4,
-                        query,
-                        interp_wt,
+                const float color = trilerp_bg_one(
+                        grid.background_links,
+                        grid.background_data,
                         grid.background_reso,
-                        /*n_channels*/ 4,
-                        i) * C0 + 0.5f;
+                        grid.background_nlayers,
+                        4,
+                        ray.l,
+                        ray.pos,
+                        i) * C0 + 0.5f;  // Scale by SH DC factor to help normalize lrs
+
                 total_color += fmaxf(color, 0.f) * grad_output[i];
                 if (color > 0.f) {
                     const float curr_grad_color = C0 * weight * grad_output[i];
-                    multi_cubemap_sample_backward(
-                            grad_cubemap_data,
-                            grad_cubemap_data + cubemap_step * 4,
-                            query,
-                            interp_wt,
+                    trilerp_backward_bg_one(
+                            grid.background_links,
+                            grads.grad_background_out,
+                            nullptr,
                             grid.background_reso,
+                            grid.background_nlayers,
                             4,
+                            ray.l,
+                            ray.pos,
                             curr_grad_color,
                             i);
                 }
@@ -467,17 +470,17 @@ __device__ __inline__ void render_background_backward(
             float curr_grad_sigma = ray.world_step * (t - t_last) * (
                     total_color * _EXP(log_transmit) - accum);
 
-            multi_cubemap_sample_backward(
-                    grad_cubemap_data,
-                    grad_cubemap_data + cubemap_step * 4,
-                    query,
-                    interp_wt,
+            trilerp_backward_bg_one(
+                    grid.background_links,
+                    grads.grad_background_out,
+                    grads.mask_background_out,
                     grid.background_reso,
+                    grid.background_nlayers,
                     4,
+                    ray.l,
+                    ray.pos,
                     curr_grad_sigma,
-                    3,
-                    mask_cubemap_ptr,
-                    mask_cubemap_ptr + cubemap_step);
+                    3);
 
             if (_EXP(log_transmit) < opt.stop_thresh) {
                 break;
@@ -697,7 +700,8 @@ torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOp
 
     torch::Tensor results = torch::empty_like(rays.origins);
 
-    bool use_background = grid.background_cubemap.size(0) > 0;
+    bool use_background = grid.background_links.defined() &&
+                          grid.background_links.size(0) > 0;
     torch::Tensor log_transmit;
     if (use_background) {
         log_transmit = _get_empty_1d(rays.origins);
@@ -742,7 +746,8 @@ void volume_render_cuvol_backward(
     grads.check();
     const auto Q = rays.origins.size(0);
 
-    bool use_background = grid.background_cubemap.size(0) > 0;
+    bool use_background = grid.background_links.defined() &&
+                          grid.background_links.size(0) > 0;
     torch::Tensor log_transmit, accum;
     if (use_background) {
         log_transmit = _get_empty_1d(rays.origins);
@@ -804,7 +809,8 @@ void volume_render_cuvol_fused(
     grads.check();
     const auto Q = rays.origins.size(0);
 
-    bool use_background = grid.background_cubemap.size(0) > 0;
+    bool use_background = grid.background_links.defined() &&
+                          grid.background_links.size(0) > 0;
     bool need_log_transmit = use_background || beta_loss > 0.f;
     torch::Tensor log_transmit, accum;
     if (need_log_transmit) {

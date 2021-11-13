@@ -27,7 +27,7 @@ __global__ void sample_grid_sh_kernel(
         point[i] -= l[i];
     }
 
-    const int offy = grid.size[2], offx = grid.stride_x;
+    const int offy = grid.size[2], offx = grid.size[1] * grid.size[2];
     const int32_t* __restrict__ link_ptr = &grid.links[l[0] * offx + l[1] * offy + l[2]];
 
 #define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? grid.sh_data[ \
@@ -62,7 +62,7 @@ __global__ void sample_grid_density_kernel(
         point[i] -= l[i];
     }
 
-    const int offy = grid.size[2], offx = grid.stride_x;
+    const int offy = grid.size[2], offx = grid.size[1] * grid.size[2];
     const int32_t* __restrict__ link_ptr = &grid.links[l[0] * offx + l[1] * offy + l[2]];
 
 #define MAYBE_READ_LINK_D(u) ((link_ptr[u] >= 0) ? grid.density_data[link_ptr[u]] : 0.f)
@@ -99,7 +99,7 @@ __global__ void sample_grid_sh_backward_kernel(
         point[i] -= l[i];
     }
 
-    const int offy = grid.size[2], offx = grid.stride_x;
+    const int offy = grid.size[2], offx = grid.size[1] * grid.size[2];
     const int32_t* __restrict__ link_ptr = &grid.links[l[0] * offx + l[1] * offy + l[2]];
 
     const float go = grad_out[pid][idx];
@@ -147,7 +147,7 @@ __global__ void sample_grid_density_backward_kernel(
         point[i] -= l[i];
     }
 
-    const int offy = grid.size[2], offx = grid.stride_x;
+    const int offy = grid.size[2], offx = grid.size[1] * grid.size[2];
     const int32_t* __restrict__ link_ptr = &grid.links[l[0] * offx + l[1] * offy + l[2]];
 
     const float go = grad_out[tid][0];

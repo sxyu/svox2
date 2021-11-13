@@ -33,90 +33,6 @@ __device__ __inline__ float trilerp_one(
     return lerp(ix0, ix1, pos[0]);
 }
 
-__device__ __inline__ float compute_skip_dist(
-        SingleRaySpec& __restrict__ ray,
-        const int32_t* __restrict__ links,
-        int offx, int offy,
-        int pos_offset = 0) {
-    const int32_t link_val = links[offx * (ray.l[0] + pos_offset) + offy * (ray.l[1] + pos_offset) +
-                                (ray.l[2] + pos_offset)];
-    if (link_val >= -1) return 0.f; // Not worth
-
-    const uint32_t dist = -link_val;
-    const uint32_t cell_ul_shift = (dist - 1);
-    const uint32_t cell_side_len = (1 << cell_ul_shift) - 1.f;
-
-    // AABB intersection
-    // Consider caching the invdir for the ray
-    float tmin = 0.f;
-    float tmax = 1e9f;
-#pragma unroll
-    for (int i = 0; i < 3; ++i) {
-        int ul = (((ray.l[i] + pos_offset) >> cell_ul_shift) << cell_ul_shift);
-        ul -= ray.l[i] + pos_offset;
-
-        const float invdir = 1.0 / ray.dir[i];
-        const float t1 = (ul - ray.pos[i] + pos_offset) * invdir;
-        const float t2 = (ul + cell_side_len - ray.pos[i] + pos_offset) * invdir;
-        if (ray.dir[i] != 0.f) {
-            tmin = max(tmin, min(t1, t2));
-            tmax = min(tmax, max(t1, t2));
-        }
-    }
-
-//     const uint32_t cell_ul_shift = 1 - dist;
-//     const uint32_t cell_br_shift = -cell_ul_shift;
-//
-//     // AABB intersection
-//     // Consider caching the invdir for the ray
-//     float tmin = 0.f;
-//     float tmax = 1e9f;
-// #pragma unroll
-//     for (int i = 0; i < 3; ++i) {
-//         const float invdir = 1.0 / ray.dir[i];
-//         const float t1 = (cell_ul_shift - ray.pos[i] + pos_offset) * invdir;
-//         const float t2 = (cell_br_shift - ray.pos[i] + pos_offset) * invdir;
-//         if (ray.dir[i] != 0.f) {
-//             tmin = max(tmin, min(t1, t2));
-//             tmax = min(tmax, max(t1, t2));
-//         }
-//     }
-
-    if (tmin > 0.f) {
-        // Somehow the origin is not in the cube
-        // Should not happen for distance transform
-
-        // If using geometric distances:
-        // will happen near the lowest vertex of a cell,
-        // since l is always the lowest neighbor
-        return 0.f;
-    }
-    return tmax;
-}
-
-// trilerp with links
-template<class data_type_t, class voxel_index_t>
-__device__ __inline__ float trilerp_cuvol_one(
-        const int32_t* __restrict__ links,
-        const data_type_t* __restrict__ data,
-        int offx, int offy, size_t stride,
-        const voxel_index_t* __restrict__ l,
-        const float* __restrict__ pos,
-        const int idx) {
-    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
-
-#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u] * stride + idx] : 0.f)
-    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);
-    const float ix0y1 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), pos[2]);
-    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
-    const float ix1y0 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), pos[2]);
-    const float ix1y1 = lerp(MAYBE_READ_LINK(offy + offx),
-                             MAYBE_READ_LINK(offy + offx + 1), pos[2]);
-    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
-    return lerp(ix0, ix1, pos[0]);
-#undef MAYBE_READ_LINK
-}
-
 template<class data_type_t, class voxel_index_t>
 __device__ __inline__ void trilerp_backward_one(
         data_type_t* __restrict__ grad_data,
@@ -148,6 +64,30 @@ __device__ __inline__ void trilerp_backward_one(
     ADD_WT(offx + offy, pos[1] * az * xo);
     ADD_WT(offx + offy + offz, pos[1] * pos[2] * xo);
 #undef ADD_WT
+}
+
+
+// trilerp with links
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ float trilerp_cuvol_one(
+        const int32_t* __restrict__ links,
+        const data_type_t* __restrict__ data,
+        int offx, int offy, size_t stride,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        const int idx) {
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+
+#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u] * stride + idx] : 0.f)
+    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);
+    const float ix0y1 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), pos[2]);
+    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+    const float ix1y0 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), pos[2]);
+    const float ix1y1 = lerp(MAYBE_READ_LINK(offy + offx),
+                             MAYBE_READ_LINK(offy + offx + 1), pos[2]);
+    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+    return lerp(ix0, ix1, pos[0]);
+#undef MAYBE_READ_LINK
 }
 
 template<class data_type_t, class voxel_index_t>
@@ -210,6 +150,148 @@ __device__ __inline__ void trilerp_backward_cuvol_one_density(
     MAYBE_ADD_LINK_DEN(offx + offy, pos[1] * az * xo);
     MAYBE_ADD_LINK_DEN(offx + offy + 1, pos[1] * pos[2] * xo);
 #undef MAYBE_ADD_LINK_DEN
+}
+
+// Trilerp with xy links & wrapping (background)
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ float trilerp_bg_one(
+        const int32_t* __restrict__ links,
+        const data_type_t* __restrict__ data,
+        int reso,
+        int nlayers,
+        int nchannels,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        const int idx) {
+#define MAYBE_READ_LINK2(varname, u) \
+    float varname; \
+    { \
+        int link = links[u]; \
+        if (link >= 0) { \
+            const float* __restrict__ dptr = &data[(link * nlayers + l[2]) * nchannels + idx]; \
+            varname = lerp(dptr[0], dptr[nchannels], pos[2]); \
+        } else { \
+            varname = 0.f; \
+        } \
+    }
+    const int ny = l[1] < (reso - 1) ? (l[1] + 1) : 0;
+    MAYBE_READ_LINK2(ix0y0, reso * l[0] + l[1]);
+    MAYBE_READ_LINK2(ix0y1, reso * l[0] + ny);
+    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+
+    const int nx = l[0] < (2 * reso - 1) ? (l[0] + 1) : 0;
+    MAYBE_READ_LINK2(ix1y0, reso * nx + l[1]);
+    MAYBE_READ_LINK2(ix1y1, reso * nx + ny);
+    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+    return lerp(ix0, ix1, pos[0]);
+#undef MAYBE_READ_LINK2
+}
+
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ void trilerp_backward_bg_one(
+        const int32_t* __restrict__ links,
+        data_type_t* __restrict__ grad_data_out,
+        bool* __restrict__ mask_out,
+        int reso,
+        int nlayers,
+        int nchannels,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        float grad_out,
+        const int idx) {
+    const float ay = 1.f - pos[1], az = 1.f - pos[2];
+
+#define MAYBE_ADD_LINK2(u, valexpr) \
+        { \
+            int link = links[u]; \
+            if (link >= 0) { \
+                link *= nlayers; \
+                float* __restrict__ gdptr = &grad_data_out[(link + l[2]) \
+                                                             * nchannels + idx]; \
+                const float val = (valexpr); \
+                atomicAdd(gdptr, val * az); \
+                atomicAdd(gdptr + nchannels, val * pos[2]); \
+                if (mask_out != nullptr) { \
+                    bool* __restrict__ mptr = &mask_out[link + l[2]]; \
+                    mptr[0] = mptr[1] = true; \
+                } \
+            } \
+        }
+
+    const int ny = l[1] < (reso - 1) ? (l[1] + 1) : 0;
+    float xo = (1.0f - pos[0]) * grad_out;
+    MAYBE_ADD_LINK2(reso * l[0] + l[1], ay * xo);
+    MAYBE_ADD_LINK2(reso * l[0] + ny, pos[1] * xo);
+
+    xo = pos[0] * grad_out;
+    const int nx = l[0] < (2 * reso - 1) ? (l[0] + 1) : 0;
+    MAYBE_ADD_LINK2(reso * nx + l[1], ay * xo);
+    MAYBE_ADD_LINK2(reso * nx + ny, pos[1] * xo);
+
+#undef MAYBE_READ_LINK2
+}
+
+// Compute the amount to skip for negative link values
+__device__ __inline__ float compute_skip_dist(
+        SingleRaySpec& __restrict__ ray,
+        const int32_t* __restrict__ links,
+        int offx, int offy,
+        int pos_offset = 0) {
+    const int32_t link_val = links[offx * (ray.l[0] + pos_offset) +
+                                   offy * (ray.l[1] + pos_offset) +
+                                   (ray.l[2] + pos_offset)];
+    if (link_val >= -1) return 0.f; // Not worth
+
+    const uint32_t dist = -link_val;
+    const uint32_t cell_ul_shift = (dist - 1);
+    const uint32_t cell_side_len = (1 << cell_ul_shift) - 1.f;
+
+    // AABB intersection
+    // Consider caching the invdir for the ray
+    float tmin = 0.f;
+    float tmax = 1e9f;
+#pragma unroll
+    for (int i = 0; i < 3; ++i) {
+        int ul = (((ray.l[i] + pos_offset) >> cell_ul_shift) << cell_ul_shift);
+        ul -= ray.l[i] + pos_offset;
+
+        const float invdir = 1.0 / ray.dir[i];
+        const float t1 = (ul - ray.pos[i] + pos_offset) * invdir;
+        const float t2 = (ul + cell_side_len - ray.pos[i] + pos_offset) * invdir;
+        if (ray.dir[i] != 0.f) {
+            tmin = max(tmin, min(t1, t2));
+            tmax = min(tmax, max(t1, t2));
+        }
+    }
+
+//     const uint32_t cell_ul_shift = 1 - dist;
+//     const uint32_t cell_br_shift = -cell_ul_shift;
+//
+//     // AABB intersection
+//     // Consider caching the invdir for the ray
+//     float tmin = 0.f;
+//     float tmax = 1e9f;
+// #pragma unroll
+//     for (int i = 0; i < 3; ++i) {
+//         const float invdir = 1.0 / ray.dir[i];
+//         const float t1 = (cell_ul_shift - ray.pos[i] + pos_offset) * invdir;
+//         const float t2 = (cell_br_shift - ray.pos[i] + pos_offset) * invdir;
+//         if (ray.dir[i] != 0.f) {
+//             tmin = max(tmin, min(t1, t2));
+//             tmax = min(tmax, max(t1, t2));
+//         }
+//     }
+
+    if (tmin > 0.f) {
+        // Somehow the origin is not in the cube
+        // Should not happen for distance transform
+
+        // If using geometric distances:
+        // will happen near the lowest vertex of a cell,
+        // since l is always the lowest neighbor
+        return 0.f;
+    }
+    return tmax;
 }
 
 // Spherical functions
@@ -392,9 +474,31 @@ __device__ __inline__ float _get_delta_scale(
 }
 
 __device__ __inline__ static void _normalize(
-                float* dir) {
+                float* __restrict__ dir) {
     const float rnorm = _rnorm(dir);
     dir[0] *= rnorm; dir[1] *= rnorm; dir[2] *= rnorm;
+}
+
+__device__ __inline__ static void _unitvec2equirect(
+        const float* __restrict__ unit_dir,
+        int reso,
+        float* __restrict__ xy) {
+    const float lat = asinf(unit_dir[1]);
+    const float lon = atan2f(unit_dir[0], unit_dir[2]);
+    xy[0] = reso * 2 * (0.5 + lon * 0.5 * M_1_PI);
+    xy[1] = reso * (0.5 - lat * M_1_PI);
+}
+
+__device__ __inline__ static void _equirect2unitvec(
+        float x, float y,
+        int reso,
+        float* __restrict__ unit_dir) {
+    const float lon = (x * (1.0 / (reso * 2)) - 0.5) * (2 * M_PI);
+    const float lat = -(y * (1.0 / reso) - 0.5) * M_PI;
+    const float coslat = cosf(lat);
+    unit_dir[0] = coslat * sinf(lon);
+    unit_dir[1] = sinf(lat);
+    unit_dir[2] = coslat * cosf(lon);
 }
 
 __device__ __inline__ static void world2ndc(

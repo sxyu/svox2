@@ -123,27 +123,39 @@ def save_img(img: np.ndarray, path: str):
     cv2.imwrite(path, img)
 
 
-def equirect2xyz(uv):
+def equirect2xyz(uv, rows, cols):
     """
     Convert equirectangular coordinate to unit vector,
     inverse of xyz2equirect
+    Taken from Vickie Ye
     Args:
         uv: np.ndarray [..., 2] x, y coordinates in image space in [-1.0, 1.0]
     Returns:
         xyz: np.ndarray [..., 3] unit vectors
     """
-    lon = uv[..., 0] * np.pi
-    lat = uv[..., 1] * (np.pi * 0.5)
+    lon = (uv[..., 0] * (1.0 / cols) - 0.5) * (2 * np.pi)
+    lat = -(uv[..., 1] * (1.0 / rows) - 0.5) * np.pi
     coslat = np.cos(lat)
     return np.stack(
         [
             coslat * np.sin(lon),
-            coslat * np.cos(lon),
             np.sin(lat),
+            coslat * np.cos(lon),
         ],
         axis=-1,
     )
 
+def xyz2equirect(bearings, rows, cols):
+    """
+    Convert ray direction vectors into equirectangular pixel coordinates.
+    Inverse of equirect2xyz.
+    Taken from Vickie Ye
+    """
+    lat = np.arcsin(bearings[..., 1])
+    lon = np.arctan2(bearings[..., 0], bearings[..., 2])
+    x = cols * (0.5 + lon / 2 / np.pi)
+    y = rows * (0.5 - lat / np.pi)
+    return np.stack([x, y], axis=-1)
 
 def generate_dirs_equirect(w, h):
     x, y = np.meshgrid(  # pylint: disable=unbalanced-tuple-unpacking

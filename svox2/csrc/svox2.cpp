@@ -37,7 +37,7 @@ Tensor dilate(Tensor);
 void accel_dist_prop(Tensor);
 void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
                         Tensor, Tensor);
-void sample_cubemap(Tensor, Tensor, bool, Tensor);
+// void sample_cubemap(Tensor, Tensor, bool, Tensor);
 
 // Loss
 Tensor tv(Tensor, Tensor, int, int, bool, float, bool, float, float);
@@ -45,7 +45,7 @@ void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, float, float,
              Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, float, float, Tensor);
-void msi_tv_grad_sparse(Tensor, Tensor, Tensor, float, float, Tensor);
+void msi_tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
 void lumisphere_tv_grad_sparse(SparseGridSpec &, Tensor, Tensor, Tensor, float,
                                float, float, float, GridOutputGrads &);
 
@@ -80,7 +80,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(dilate);
   _REG_FUNC(accel_dist_prop);
   _REG_FUNC(grid_weight_render);
-  _REG_FUNC(sample_cubemap);
+  // _REG_FUNC(sample_cubemap);
 
   // Optimizer
   _REG_FUNC(rmsprop_step);
@@ -97,7 +97,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("basis_dim", &SparseGridSpec::basis_dim)
       .def_readwrite("basis_type", &SparseGridSpec::basis_type)
       .def_readwrite("basis_data", &SparseGridSpec::basis_data)
-      .def_readwrite("background_cubemap", &SparseGridSpec::background_cubemap);
+      .def_readwrite("background_links", &SparseGridSpec::background_links)
+      .def_readwrite("background_data", &SparseGridSpec::background_data);
 
   py::class_<CameraSpec>(m, "CameraSpec")
       .def(py::init<>())

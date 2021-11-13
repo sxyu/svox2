@@ -15,17 +15,26 @@ struct PackedSparseGridSpec {
           sh_data(spec.sh_data.data_ptr<float>()),
           links(spec.links.data_ptr<int32_t>()),
           basis_type(spec.basis_type),
-          basis_data(spec.basis_data.data_ptr<float>()),
-          background_cubemap(spec.background_cubemap.data_ptr<float>()),
+          basis_data(spec.basis_data.defined() ? spec.basis_data.data_ptr<float>() : nullptr),
+          background_links(spec.background_links.defined() ?
+                           spec.background_links.data_ptr<int32_t>() :
+                           nullptr),
+          background_data(spec.background_data.defined() ?
+                          spec.background_data.data_ptr<float>() :
+                          nullptr),
           size{(int)spec.links.size(0),
                (int)spec.links.size(1),
                (int)spec.links.size(2)},
           stride_x{(int)spec.links.stride(0)},
-          background_reso{(int)spec.background_cubemap.size(2)},
-          background_nlayers{(int)spec.background_cubemap.size(0)},
+          background_reso{
+              spec.background_links.defined() ? (int)spec.background_links.size(1) : 0,
+          },
+          background_nlayers{
+              spec.background_data.defined() ? (int)spec.background_data.size(1) : 0
+          },
           basis_dim(spec.basis_dim),
           sh_data_dim((int)spec.sh_data.size(1)),
-          basis_reso(spec.basis_data.size(0)),
+          basis_reso(spec.basis_data.defined() ? spec.basis_data.size(0) : 0),
           _offset{spec._offset.data_ptr<float>()[0],
                   spec._offset.data_ptr<float>()[1],
                   spec._offset.data_ptr<float>()[2]},
@@ -41,7 +50,8 @@ struct PackedSparseGridSpec {
     const uint8_t basis_type;
     float* __restrict__ basis_data;
 
-    float* __restrict__ background_cubemap;
+    const int32_t* __restrict__ background_links;
+    float* __restrict__ background_data;
 
     const int size[3], stride_x;
     const int background_reso, background_nlayers;

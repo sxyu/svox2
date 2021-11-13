@@ -76,9 +76,9 @@ print('PSNR:', avg_psnr)
 print('SSIM:', avg_ssim)
 print('LPIPS:', avg_lpips)
 postfix = '_cropped' if args.crop != 1.0 else ''
-with open(path.join(args.render_dir, f'psnr{postfix}.txt'), 'w') as f:
-    f.write(str(avg_psnr))
-with open(path.join(args.render_dir, f'ssim{postfix}.txt'), 'w') as f:
-    f.write(str(avg_ssim))
-with open(path.join(args.render_dir, f'lpips{postfix}.txt'), 'w') as f:
-    f.write(str(avg_lpips))
+#  with open(path.join(args.render_dir, f'psnr{postfix}.txt'), 'w') as f:
+#      f.write(str(avg_psnr))
+#  with open(path.join(args.render_dir, f'ssim{postfix}.txt'), 'w') as f:
+#      f.write(str(avg_ssim))
+#  with open(path.join(args.render_dir, f'lpips{postfix}.txt'), 'w') as f:
+#      f.write(str(avg_lpips))

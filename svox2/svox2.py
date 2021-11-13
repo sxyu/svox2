@@ -50,6 +50,9 @@ class RenderOptions:
     random_sigma_std_background: float = 1.0        # Noise to add to sigma
                                                     # (for the BG model; only if randomize=True)
 
+    #  msi_start_layer: int = 0
+    #  msi_end_layer: int = 66
+
     def _to_cpp(self, randomize: bool = False):
         """
         Generate object to pass to C++
@@ -65,6 +68,10 @@ class RenderOptions:
         opt.randomize = randomize
         opt.random_sigma_std = self.random_sigma_std
         opt.random_sigma_std_background = self.random_sigma_std_background
+
+        #  opt.msi_start_layer = self.msi_start_layer
+        #  opt.msi_end_layer = self.msi_end_layer
+
         if randomize:
             # For our RNG
             UINT32_MAX = 2**32-1
@@ -204,9 +211,9 @@ class _VolumeRenderFunction(autograd.Function):
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
         if ctx.grid.basis_type == BASIS_TYPE_MLP:
             grad_basis = torch.zeros_like(ctx.basis_data)
-        else:
+        elif ctx.grid.basis_type == BASIS_TYPE_3D_TEXTURE:
             grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
-        grad_background = torch.zeros_like(ctx.grid.background_cubemap.data)
+        grad_background = torch.zeros_like(ctx.grid.background_data.data)
         grad_holder = _C.GridOutputGrads()
         grad_holder.grad_density_out = grad_density_grid
         grad_holder.grad_sh_out = grad_sh_grid
@@ -406,12 +413,6 @@ class SparseGrid(nn.Module):
             )
         )
 
-        self.basis_data = nn.Parameter(
-            torch.zeros(
-                (0, 0, 0, 0), dtype=torch.float32, device=device
-            ),
-            requires_grad=False
-        )
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             # Unit sphere embedded in a cube
             self.basis_data = nn.Parameter(
@@ -435,21 +436,36 @@ class SparseGrid(nn.Module):
             )
             self.basis_mlp = self.basis_mlp.to(device=self.sh_data.device)
             self.basis_mlp.apply(utils.init_weights)
-
-        if self.use_background:
-            self.background_cubemap = nn.Parameter(
-                torch.zeros(
-                    self.background_nlayers,
-                    6, self.background_reso, self.background_reso,
-                    4, dtype=torch.float32, device=device
-                )
-            )
-        else:
-            self.background_cubemap = nn.Parameter(
+            self.basis_data = nn.Parameter(
                 torch.empty(
-                    (0, 0, 0, 0, 0), dtype=torch.float32, device=device
+                    0, 0, 0, 0, dtype=torch.float32, device=device
                 ),
                 requires_grad=False
+            )
+        else:
+            self.basis_data = nn.Parameter(
+                torch.empty(
+                    0, 0, 0, 0, dtype=torch.float32, device=device
+                ),
+                requires_grad=False
+            )
+
+        self.background_links: Optional[torch.Tensor]
+        self.background_data: Optional[torch.Tensor]
+        if self.use_background:
+            background_capacity = (self.background_reso ** 2) * 2
+            background_links = torch.arange(
+                background_capacity,
+                dtype=torch.int32, device=device
+            ).reshape(self.background_reso * 2, self.background_reso)
+            self.register_buffer('background_links', background_links)
+            self.background_data = nn.Parameter(
+                torch.zeros(
+                    background_capacity,
+                    self.background_nlayers,
+                    4,
+                    dtype=torch.float32, device=device
+                )
             )
 
         self.register_buffer("links", init_links.view(reso))
@@ -735,9 +751,17 @@ class SparseGrid(nn.Module):
             inner_radius = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1) + 1e-3
             inner_radius = inner_radius.clamp_min(1.0)
             _, t_last = csi.intersect(inner_radius)
-            #  print('py', csi.origins, csi.dirs, inner_radius.tolist(), t_last, 'wsc', csi.world_step_scale)
             n_steps = int(self.background_nlayers / self.opt.step_size) + 2
             layer_scale = (self.background_nlayers - 1) / (n_steps + 1)
+
+            def fetch_bg_link(lx, ly, lz):
+                results = torch.zeros([lx.shape[0], self.background_data.size(-1)],
+                                        device=lx.device)
+                lnk = self.background_links[lx, ly]
+                mask = lnk >= 0
+                results[mask] = self.background_data[lnk[mask].long(), lz[mask]]
+                return results
+
             for i in range(n_steps):
                 r : float = n_steps / (n_steps - i - 0.5)
                 normalized_inv_radius = min((i + 1) * layer_scale, self.background_nlayers - 1)
@@ -752,24 +776,41 @@ class SparseGrid(nn.Module):
                 t_mid_sub = (t_sub + t_last[active_mask]) * 0.5
                 sphpos = csi.origins[active_mask] + \
                          t_mid_sub.unsqueeze(-1) * csi.dirs[active_mask]
-                coord = utils.dir_to_cubemap_coord(sphpos, self.background_reso, eac=True)
-                #  print('pos', sphpos)
-                query = utils.cubemap_build_query(coord, self.background_reso)
+                invr_mid = 1.0 / torch.norm(sphpos, dim=-1)
+                sphpos *= invr_mid.unsqueeze(-1)
 
+                xy = utils.xyz2equirect(sphpos, self.background_links.size(1))
+                z = torch.clamp((1.0 - invr_mid) * self.background_nlayers - 0.5, 0.0,
+                               self.background_nlayers - 1);
+                points = torch.cat([xy, z.unsqueeze(-1)], dim=-1)
+                l = points.to(torch.long)
+                l[..., 0].clamp_max_(self.background_links.size(0) - 1)
+                l[..., 1].clamp_max_(self.background_links.size(1) - 1)
+                l[..., 2].clamp_max_(self.background_nlayers - 2)
 
-                rgba1 = utils.cubemap_sample(self.background_cubemap[layerid], query)
-                rgba2 = utils.cubemap_sample(self.background_cubemap[layerid + 1], query)
-                rgba = rgba1 * (1.0 - interp_wt) + rgba2 * interp_wt
+                wb = points - l
+                wa = 1.0 - wb
+                lx, ly, lz = l.unbind(-1)
+                lnx = (lx + 1) % self.background_links.size(0)
+                lny = (ly + 1) % self.background_links.size(1)
+                lnz = lz + 1
 
-                #  print("py SAMP r", r, "p", sphpos.cpu().numpy(), " invr=",
-                #          normalized_inv_radius,
-                #          " layerid=", layerid,
-                #          " interp_wt=", interp_wt,
-                #          " sigma=",
-                #          rgba[..., -1],
-                #          " log_li=",
-                #          log_light_intensity,
-                #          "\n")
+                v000 = fetch_bg_link(lx, ly, lz)
+                v001 = fetch_bg_link(lx, ly, lnz)
+                v010 = fetch_bg_link(lx, lny, lz)
+                v011 = fetch_bg_link(lx, lny, lnz)
+                v100 = fetch_bg_link(lnx, ly, lz)
+                v101 = fetch_bg_link(lnx, ly, lnz)
+                v110 = fetch_bg_link(lnx, lny, lz)
+                v111 = fetch_bg_link(lnx, lny, lnz)
+
+                c00 = v000 * wa[:, 2:] + v001 * wb[:, 2:]
+                c01 = v010 * wa[:, 2:] + v011 * wb[:, 2:]
+                c10 = v100 * wa[:, 2:] + v101 * wb[:, 2:]
+                c11 = v110 * wa[:, 2:] + v111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                rgba = c0 * wa[:, :1] + c1 * wb[:, :1]
 
                 log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * (
                             t_sub - t_last[active_mask]
@@ -778,19 +819,6 @@ class SparseGrid(nn.Module):
                     1.0 - torch.exp(log_att)
                 )
                 rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
-                #  print('py L',
-                #          layerid,
-                #          'iwt',
-                #          interp_wt,
-                #          'face',
-                #          (coord.ax * 2) +
-                #          coord.ori,
-                #          'uv',
-                #          coord.u,
-                #          coord.v,
-                #          query.du,
-                #          query.dv
-                #          )
                 out_rgb[active_mask] += rgb * weight[:, None]
                 log_light_intensity[active_mask] += log_att
                 t_last[active_mask] = t[active_mask]
@@ -813,7 +841,7 @@ class SparseGrid(nn.Module):
         :param rays: Rays, (origins (N, 3), dirs (N, 3))
         :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
         :param randomize: bool, whether to enable randomness
-        :param return_raylen: bool, if true then only returns the length of the 
+        :param return_raylen: bool, if true then only returns the length of the
                                     ray-cube intersection and quits
         :return: (N, 3), predicted RGB
         """
@@ -825,7 +853,7 @@ class SparseGrid(nn.Module):
                 self.density_data,
                 self.sh_data,
                 basis_data,
-                self.background_cubemap,
+                self.background_data,
                 self._to_cpp(replace_basis_data=basis_data),
                 rays._to_cpp(),
                 self.opt._to_cpp(randomize=randomize),
@@ -883,8 +911,8 @@ class SparseGrid(nn.Module):
         grad_holder.mask_out = self.sparse_grad_indexer
         if self.use_background:
             grad_holder.grad_background_out = grad_bg
-            self.sparse_background_indexer = torch.zeros(list(self.background_cubemap.shape[:-1]),
-                    dtype=torch.bool, device=self.background_cubemap.device)
+            self.sparse_background_indexer = torch.zeros(list(self.background_data.shape[:-1]),
+                    dtype=torch.bool, device=self.background_data.device)
             grad_holder.mask_background_out = self.sparse_background_indexer
 
         cu_fn = _C.__dict__[f"volume_render_{self.opt.backend}_fused"]
@@ -960,7 +988,7 @@ class SparseGrid(nn.Module):
         #          self.density_data,
         #          self.sh_data,
         #          self.basis_data,
-        #          self.background_cubemap,
+        #          self.background_data,
         #          self._to_cpp(replace_basis_data=basis_data),
         #          camera._to_cpp(),
         #          self.opt._to_cpp(randomize=randomize),
@@ -1173,6 +1201,31 @@ class SparseGrid(nn.Module):
             if accelerate and self.links.is_cuda:
                 self.accelerate()
 
+    def sparsify_background(
+        self,
+        sigma_thresh: float = 1.0,
+        dilate: int = 1,  # BEFORE resampling!
+    ):
+        device = self.background_links.device
+        sigma_mask = torch.zeros(list(self.background_links.shape) + [self.background_nlayers],
+                dtype=torch.bool, device=device).view(-1, self.background_nlayers)
+        nonempty_mask = self.background_links.view(-1) >= 0
+        data_mask = self.background_data[..., -1] >= sigma_thresh
+        sigma_mask[nonempty_mask] = data_mask
+        sigma_mask = sigma_mask.view(list(self.background_links.shape) + [self.background_nlayers])
+        for _ in range(int(dilate)):
+            sigma_mask = _C.dilate(sigma_mask)
+
+        sigma_mask = sigma_mask.any(-1) & nonempty_mask.view(self.background_links.shape)
+        self.background_links[~sigma_mask] = -1
+        retain_vals = self.background_links[sigma_mask]
+        self.background_links[sigma_mask] = torch.arange(retain_vals.size(0),
+                dtype=torch.int32, device=device)
+        self.background_data = nn.Parameter(
+                    self.background_data.data[retain_vals.long()]
+                )
+
+
     def resize(self, basis_dim: int):
         """
         Modify the size of the data stored in the voxels. Called expand/shrink in svox 1.
@@ -1268,7 +1321,8 @@ class SparseGrid(nn.Module):
             data['mlp_width'] = np.int32(self.mlp_width)
 
         if self.use_background:
-            data['background_cubemap'] = self.background_cubemap.data.cpu().numpy()
+            data['background_links'] = self.background_links.cpu().numpy()
+            data['background_data'] = self.background_data.data.cpu().numpy()
         data['basis_type'] = self.basis_type
 
         save_fn(
@@ -1291,10 +1345,11 @@ class SparseGrid(nn.Module):
             sh_data = z.f.sh_data
             density_data = z.f.density_data
 
-        if 'background_cubemap' in z:
-            background_cubemap = z['background_cubemap']
+        if 'background_data' in z:
+            background_data = z['background_data']
+            background_links = z['background_links']
         else:
-            background_cubemap = None
+            background_data = None
 
         links = z.f.links
         basis_dim = (sh_data.shape[1]) // 3
@@ -1337,13 +1392,14 @@ class SparseGrid(nn.Module):
         else:
             grid.basis_data = nn.Parameter(grid.basis_data.data.to(device=device))
 
-        if background_cubemap is not None:
-            background_cubemap = torch.from_numpy(background_cubemap).to(device=device)
-            grid.background_nlayers = background_cubemap.size(0)
-            grid.background_reso = background_cubemap.size(2)
-            grid.background_cubemap = nn.Parameter(background_cubemap)
+        if background_data is not None:
+            background_data = torch.from_numpy(background_data).to(device=device)
+            grid.background_nlayers = background_data.shape[1]
+            grid.background_reso = background_links.shape[1]
+            grid.background_data = nn.Parameter(background_data)
+            grid.background_links = torch.from_numpy(background_links).to(device=device)
         else:
-            grid.background_cubemap.data = grid.background_cubemap.data.to(device=device)
+            grid.background_data.data = grid.background_data.data.to(device=device)
 
         if grid.links.is_cuda:
             grid.accelerate()
@@ -1663,7 +1719,8 @@ class SparseGrid(nn.Module):
         if scaling_density is None:
             scaling_density = scaling
         _C.msi_tv_grad_sparse(
-                          self.background_cubemap,
+                          self.background_links,
+                          self.background_data,
                           rand_cells_bg,
                           indexer,
                           scaling,
@@ -1767,18 +1824,18 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for optimizers"
 
         indexer = self._maybe_convert_sparse_grad_indexer(bg=True)
-        n_chnl = self.background_cubemap.size(-1)
+        n_chnl = self.background_data.size(-1)
         if optim == 'rmsprop':
             if (
                 self.background_rms is None
-                or self.background_rms.shape != self.background_cubemap.shape
+                or self.background_rms.shape != self.background_data.shape
             ):
                 del self.background_rms
-                self.background_rms = torch.zeros_like(self.background_cubemap.data) # FIXME init?
+                self.background_rms = torch.zeros_like(self.background_data.data) # FIXME init?
             _C.rmsprop_step(
-                self.background_cubemap.data.view(-1, n_chnl),
+                self.background_data.data.view(-1, n_chnl),
                 self.background_rms.view(-1, n_chnl),
-                self.background_cubemap.grad.view(-1, n_chnl),
+                self.background_data.grad.view(-1, n_chnl),
                 indexer,
                 beta,
                 lr_color,
@@ -1788,8 +1845,8 @@ class SparseGrid(nn.Module):
             )
         elif optim == 'sgd':
             _C.sgd_step(
-                self.background_cubemap.data.view(-1, n_chnl),
-                self.background_cubemap.grad.view(-1, n_chnl),
+                self.background_data.data.view(-1, n_chnl),
+                self.background_data.grad.view(-1, n_chnl),
                 indexer,
                 lr_color,
                 lr_sigma
@@ -1864,9 +1921,14 @@ class SparseGrid(nn.Module):
 
         gspec.basis_dim = self.basis_dim
         gspec.basis_type = self.basis_type
-        gspec.basis_data = replace_basis_data if replace_basis_data is not None else self.basis_data
+        if replace_basis_data:
+            gspec.basis_data = replace_basis_data
+        elif self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            gspec.basis_data = self.basis_data
 
-        gspec.background_cubemap = self.background_cubemap
+        if self.use_background:
+            gspec.background_links = self.background_links
+            gspec.background_data = self.background_data
         return gspec
 
     def _grid_size(self):
@@ -1874,7 +1936,7 @@ class SparseGrid(nn.Module):
 
     def _get_data_grads(self):
         ret = []
-        for subitem in ["density_data", "sh_data", "basis_data", "background_cubemap"]:
+        for subitem in ["density_data", "sh_data", "basis_data", "background_data"]:
             param = self.__getattr__(subitem)
             if not param.requires_grad:
                 ret.append(torch.zeros_like(param.data))
@@ -1944,12 +2006,9 @@ class SparseGrid(nn.Module):
         assert self.use_background, "Can only use sparse background loss if using background"
         assert self.sparse_background_indexer is None or self.sparse_background_indexer.dtype == torch.bool, \
                "please call sparse loss after rendering and before gradient updates"
-        assert self.background_cubemap.size(2) == self.background_cubemap.size(3), \
-                "Incorrect cubemap size"
-        grid_size = (self.background_cubemap.size(0) - 1) * \
-                     self.background_cubemap.size(1) * \
-                    (self.background_cubemap.size(2) - 1) * \
-                    (self.background_cubemap.size(3) - 1)
+        grid_size = self.background_links.size(0) \
+                    * self.background_links.size(1) \
+                    * (self.background_data.size(1) - 1)
         sparse_num = max(int(sparse_frac * grid_size), 1)
         return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
                                         self.links.device)

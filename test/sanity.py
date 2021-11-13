@@ -3,7 +3,7 @@ import svox2
 
 device = 'cuda:0'
 
-torch.random.manual_seed(199)
+torch.random.manual_seed(300)
 g = svox2.SparseGrid(center=[0.0, 0.0, 0.0],
                      radius=[1.0, 1.0, 1.0],
                      device=device,
@@ -20,10 +20,10 @@ g.sh_data.data[..., 0] = 0.5
 g.sh_data.data[..., 1:] = torch.randn_like(g.sh_data.data[..., 1:]) * 0.01
 
 if g.use_background:
-    g.background_cubemap.data[..., -1] = 1.0
-    g.background_cubemap.data[..., :-1] = torch.randn_like(
-            g.background_cubemap.data[..., :-1]) * 0.01
-    g.background_cubemap.data[..., :-1] = 0.5
+    g.background_data.data[..., -1] = 1.0
+    g.background_data.data[..., :-1] = torch.randn_like(
+            g.background_data.data[..., :-1]) * 0.01
+    #  g.background_data.data[..., :-1] = 0.5
 
 g.basis_data.data.normal_()
 g.basis_data.data *= 10.0

@@ -272,32 +272,32 @@ __device__ __inline__ void grid_trace_ray(
     }
 }
 
-__global__ void sample_cubemap_kernel(
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits>
-        cubemap,
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
-        dirs,
-    int Q,
-    bool eac,
-    // Output
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
-        result) {
-    CUDA_GET_THREAD_ID(tid, Q);
-
-    const int chnl_id = tid % cubemap.size(3);
-    const int ray_id = tid / cubemap.size(3);
-
-    const int face_reso = cubemap.size(1);
-
-    CubemapCoord coord = dir_to_cubemap_coord(dirs[ray_id].data(), face_reso, eac);
-    CubemapBilerpQuery query = cubemap_build_query(coord, face_reso);
-    result[ray_id][chnl_id] = cubemap_sample(
-            cubemap.data(),
-            query,
-            face_reso,
-            cubemap.size(3),
-            chnl_id);
-}
+// __global__ void sample_cubemap_kernel(
+//     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits>
+//         cubemap,
+//     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
+//         dirs,
+//     int Q,
+//     bool eac,
+//     // Output
+//     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
+//         result) {
+//     CUDA_GET_THREAD_ID(tid, Q);
+//
+//     const int chnl_id = tid % cubemap.size(3);
+//     const int ray_id = tid / cubemap.size(3);
+//
+//     const int face_reso = cubemap.size(1);
+//
+//     CubemapCoord coord = dir_to_cubemap_coord(dirs[ray_id].data(), face_reso, eac);
+//     CubemapBilerpQuery query = cubemap_build_query(coord, face_reso);
+//     result[ray_id][chnl_id] = cubemap_sample(
+//             cubemap.data(),
+//             query,
+//             face_reso,
+//             cubemap.size(3),
+//             chnl_id);
+// }
 
 __global__ void grid_weight_render_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
@@ -441,29 +441,29 @@ void grid_weight_render(
 }
 
 // For debugging
-void sample_cubemap(torch::Tensor cubemap, // (6, R, R, C)
-                    torch::Tensor dirs,
-                    bool eac,
-                    // Output
-                    torch::Tensor result) {
-    DEVICE_GUARD(cubemap);
-    CHECK_INPUT(cubemap);
-    CHECK_INPUT(dirs);
-    CHECK_INPUT(result);
-    TORCH_CHECK(cubemap.ndimension() == 4);
-    TORCH_CHECK(cubemap.size(0) == 6);
-    TORCH_CHECK(cubemap.size(1) == cubemap.size(2));
-
-    const size_t Q = size_t(dirs.size(0)) * cubemap.size(3);
-    const int cuda_n_threads = 512;
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
-
-    device::sample_cubemap_kernel<<<blocks, cuda_n_threads>>>(
-        cubemap.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        dirs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        Q,
-        eac,
-        // Output
-        result.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
-    CUDA_CHECK_ERRORS;
-}
+// void sample_cubemap(torch::Tensor cubemap, // (6, R, R, C)
+//                     torch::Tensor dirs,
+//                     bool eac,
+//                     // Output
+//                     torch::Tensor result) {
+//     DEVICE_GUARD(cubemap);
+//     CHECK_INPUT(cubemap);
+//     CHECK_INPUT(dirs);
+//     CHECK_INPUT(result);
+//     TORCH_CHECK(cubemap.ndimension() == 4);
+//     TORCH_CHECK(cubemap.size(0) == 6);
+//     TORCH_CHECK(cubemap.size(1) == cubemap.size(2));
+//
+//     const size_t Q = size_t(dirs.size(0)) * cubemap.size(3);
+//     const int cuda_n_threads = 512;
+//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+//
+//     device::sample_cubemap_kernel<<<blocks, cuda_n_threads>>>(
+//         cubemap.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+//         dirs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+//         Q,
+//         eac,
+//         // Output
+//         result.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+//     CUDA_CHECK_ERRORS;
+// }

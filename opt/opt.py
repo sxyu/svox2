@@ -85,9 +85,7 @@ group.add_argument('--batch_size', type=int, default=
 
 # TODO: make the lr higher near the end
 group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
-group.add_argument('--lr_sigma', type=float, default=
-                        3e1,
-        help='SGD/rmsprop lr for sigma')
+group.add_argument('--lr_sigma', type=float, default=3e1, help='SGD/rmsprop lr for sigma')
 group.add_argument('--lr_sigma_final', type=float, default=5e-2)
 group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
@@ -106,13 +104,25 @@ group.add_argument('--lr_sh_final', type=float,
 group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
-group.add_argument('--lr_sh_upscale_factor', type=float, default=1.0)
 
-group.add_argument('--bg_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
-group.add_argument('--lr_sigma_bg', type=float, default=3e-1,#3e-2,
+# BG LRs
+group.add_argument('--bg_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Background optimizer")
+group.add_argument('--lr_sigma_bg', type=float, default=3e0,
                     help='SGD/rmsprop lr for background')
-group.add_argument('--lr_color_bg', type=float, default=1e-2, #1e-2,
+group.add_argument('--lr_sigma_bg_final', type=float, default=3e-3,
                     help='SGD/rmsprop lr for background')
+group.add_argument('--lr_sigma_bg_decay_steps', type=int, default=250000)
+group.add_argument('--lr_sigma_bg_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_sigma_bg_delay_mult', type=float, default=1e-2)
+
+group.add_argument('--lr_color_bg', type=float, default=1e-1,
+                    help='SGD/rmsprop lr for background')
+group.add_argument('--lr_color_bg_final', type=float, default=5e-6,#1e-4,
+                    help='SGD/rmsprop lr for background')
+group.add_argument('--lr_color_bg_decay_steps', type=int, default=250000)
+group.add_argument('--lr_color_bg_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_color_bg_delay_mult', type=float, default=1e-2)
+# END BG LRs
 
 group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
 group.add_argument('--lr_basis', type=float, default=#2e6,
@@ -131,7 +141,7 @@ group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
 group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--save_every', type=int, default=2, #5,
+group.add_argument('--save_every', type=int, default=5,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
@@ -148,14 +158,15 @@ group.add_argument('--thresh_type',
                     default="weight",
                    help='Upsample threshold type')
 group.add_argument('--weight_thresh', type=float,
-                    #  default=0.0005,
-                    #  default=0.005 * 256,
                     #  default=0.0005 * 512,
                     default=0.025 * 512,
                    help='Upsample weight threshold; will be divided by resulting z-resolution')
 group.add_argument('--density_thresh', type=float,
-                    default=0.0005,
+                    default=5.0,
                    help='Upsample sigma threshold')
+group.add_argument('--background_density_thresh', type=float,
+                    default=1.0,
+                   help='Background sigma threshold for sparsification')
 group.add_argument('--max_grid_elements', type=int,
                     default=44_000_000,
                    help='Max items to store after upsampling '
@@ -196,8 +207,8 @@ group.add_argument('--lambda_beta', type=float, default=
 
 
 # Background TV
-group.add_argument('--lambda_tv_background_sigma', type=float, default=1e-5)
-group.add_argument('--lambda_tv_background_color', type=float, default=1e-4)
+group.add_argument('--lambda_tv_background_sigma', type=float, default=1e-2)
+group.add_argument('--lambda_tv_background_color', type=float, default=1e-2)
 
 group.add_argument('--tv_background_sparsity', type=float, default=0.01)
 # End Background TV
@@ -270,8 +281,8 @@ grid.sh_data.data[:] = 0.0
 grid.density_data.data[:] = args.init_sigma
 
 if grid.use_background:
-    grid.background_cubemap.data[..., -1] = args.init_sigma
-    grid.background_cubemap.data[..., :-1] = 0.0 / svox2.utils.SH_C0
+    grid.background_data.data[..., -1] = args.init_sigma
+    grid.background_data.data[..., :-1] = 0.0 / svox2.utils.SH_C0
 
 #  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
@@ -321,6 +332,10 @@ lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_st
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_basis_func = get_expon_lr_func(args.lr_basis, args.lr_basis_final, args.lr_basis_delay_steps,
                                args.lr_basis_delay_mult, args.lr_basis_decay_steps)
+lr_sigma_bg_func = get_expon_lr_func(args.lr_sigma_bg, args.lr_sigma_bg_final, args.lr_sigma_bg_delay_steps,
+                               args.lr_sigma_bg_delay_mult, args.lr_sigma_bg_decay_steps)
+lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, args.lr_color_bg_delay_steps,
+                               args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
 lr_sigma_factor = 1.0
 lr_sh_factor = 1.0
 lr_basis_factor = 1.0
@@ -434,6 +449,8 @@ while True:
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             lr_basis = lr_basis_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
+            lr_sigma_bg = lr_sigma_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
+            lr_color_bg = lr_color_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             if not args.lr_decay:
                 lr_sigma = args.lr_sigma * lr_sigma_factor
                 lr_sh = args.lr_sh * lr_sh_factor
@@ -484,7 +501,11 @@ while True:
                 #  summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
-                summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
+                if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
+                    summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
+                if grid.use_background:
+                    summary_writer.add_scalar("lr_sigma_bg", lr_sigma_bg, global_step=gstep_id)
+                    summary_writer.add_scalar("lr_color_bg", lr_color_bg, global_step=gstep_id)
 
                 if args.weight_decay_sh < 1.0:
                     grid.sh_data.data *= args.weight_decay_sigma
@@ -519,7 +540,7 @@ while True:
                 grid.inplace_l2_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_l2_sh)
             if grid.use_background and (args.lambda_tv_background_sigma > 0.0 or args.lambda_tv_background_color > 0.0):
-                grid.inplace_tv_background_grad(grid.background_cubemap.grad,
+                grid.inplace_tv_background_grad(grid.background_data.grad,
                         scaling=args.lambda_tv_background_color,
                         scaling_density=args.lambda_tv_background_sigma,
                         sparse_frac=args.tv_background_sparsity)
@@ -534,7 +555,7 @@ while True:
             grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
             grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
-                grid.optim_background_step(args.lr_sigma_bg, args.lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
+                grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
             if gstep_id >= args.lr_basis_begin_step:
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)
@@ -571,11 +592,11 @@ while True:
                     cameras=resample_cameras if args.thresh_type == 'weight' else None,
                     max_elements=args.max_grid_elements)
 
+            if grid.use_background and reso_id <= 1:
+                grid.sparsify_background(args.background_density_thresh)
+
             if args.upsample_density_add:
                 grid.density_data.data[:] += args.upsample_density_add
-            if args.lr_sh_upscale_factor > 1:
-                lr_sh_factor *= args.lr_sh_upscale_factor
-                print('Increased lr to (sigma:)', args.lr_sigma, '(sh:)', args.lr_sh)
 
         if factor > 1 and reso_id < len(reso_list) - 1:
             print('* Using higher resolution images due to large grid; new factor', factor)

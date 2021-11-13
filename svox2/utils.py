@@ -595,3 +595,15 @@ def convert_to_ndc(origins, directions, ndc_coeffs, near: float = 1.0):
     directions = torch.stack([d0, d1, d2], -1)
     return origins, directions
 
+
+def xyz2equirect(bearings, reso):
+    """
+    Convert ray direction vectors into equirectangular pixel coordinates.
+    Inverse of equirect2xyz.
+    Taken from Vickie Ye
+    """
+    lat = torch.asin(bearings[..., 1])
+    lon = torch.atan2(bearings[..., 0], bearings[..., 2])
+    x = reso * 2 * (0.5 + lon / 2 / np.pi)
+    y = reso * (0.5 - lat / np.pi)
+    return torch.stack([x, y], dim=-1)
