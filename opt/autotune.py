@@ -29,7 +29,7 @@ args = parser.parse_args()
 
 PSNR_FILE_NAME = 'test_psnr.txt'
 
-def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config, flags):
+def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config, flags, eval_flags, common_flags):
     opt_base_cmd = [ "python", "-u", "opt.py", "--tune_mode" ]
 
     if not eval_mode:
@@ -55,7 +55,7 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
         opt_ret = ""  # Silence
     else:
         print('! RUN opt.py -t', train_dir)
-        opt_cmd = ' '.join(opt_base_cmd + flags)
+        opt_cmd = ' '.join(opt_base_cmd + flags + common_flags)
         print(opt_cmd)
         try:
             opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
@@ -76,7 +76,7 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
             eval_base_cmd += ['-c', config]
         psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
         if not path.exists(psnr_file_path):
-            eval_cmd = ' '.join(eval_base_cmd)
+            eval_cmd = ' '.join(eval_base_cmd + eval_flags + common_flags)
             print('! RUN render_imgs.py', ckpt_path)
             print(eval_cmd)
             try:
@@ -90,7 +90,7 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
 
         if enable_render:
             eval_base_cmd += ['--render_path']
-            render_cmd = ' '.join(eval_base_cmd)
+            render_cmd = ' '.join(eval_base_cmd + eval_flags + common_flags)
             try:
                 render_ret = subprocess.check_output(render_cmd, shell=True, env=env).decode(
                         sys.stdout.encoding)
@@ -186,6 +186,8 @@ if __name__ == '__main__':
     data_root = path.expanduser(tasks_file['data_root'])  # Required
     train_root = path.expanduser(tasks_file['train_root'])  # Required
     base_flags = tasks_file.get('base_flags', [])
+    base_eval_flags = tasks_file.get('base_eval_flags', [])
+    base_common_flags = tasks_file.get('base_common_flags', [])
     default_config = tasks_file.get('config', '')
 
     if 'eval' in tasks_file:
@@ -212,6 +214,8 @@ if __name__ == '__main__':
             task['train_dir'] = path.join(train_root, task['train_dir'])  # Required
             task['data_dir'] = path.join(data_root, task.get('data_dir', '')).rstrip('/')
             task['flags'] = task.get('flags', []) + base_flags
+            task['eval_flags'] = task.get('eval_flags', []) + base_eval_flags
+            task['common_flags'] = task.get('common_flags', []) + base_common_flags
             task['config'] = task.get('config', default_config)
             os.makedirs(task['train_dir'], exist_ok=True)
             # santity check

@@ -1,5 +1,6 @@
 // Copyright 2021 Alex Yu
 // nearest-neighbor baseline
+// Background is NOT supported
 #include <torch/extension.h>
 #include <cstdint>
 #include "cuda_util.cuh"
@@ -381,8 +382,8 @@ void volume_render_svox1_fused(
         RaysSpec& rays,
         RenderOptions& opt,
         torch::Tensor rgb_gt,
-        float beta_loss,  // not supported
-        float sparsity_loss, // not supported
+        float _,  // not supported
+        float _2, // not supported
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
 

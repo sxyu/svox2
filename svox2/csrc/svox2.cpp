@@ -19,6 +19,12 @@ void volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
 void volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                Tensor, float, float, Tensor, GridOutputGrads &);
 
+Tensor volume_render_nvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
+void volume_render_nvol_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
+                                 Tensor, Tensor, GridOutputGrads &);
+void volume_render_nvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
+                              Tensor, float, float, Tensor, GridOutputGrads &);
+
 Tensor volume_render_svox1(SparseGridSpec &, RaysSpec &, RenderOptions &);
 void volume_render_svox1_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
@@ -61,6 +67,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(volume_render_cuvol);
   _REG_FUNC(volume_render_cuvol_backward);
   _REG_FUNC(volume_render_cuvol_fused);
+
+  _REG_FUNC(volume_render_nvol);
+  _REG_FUNC(volume_render_nvol_backward);
+  _REG_FUNC(volume_render_nvol_fused);
 
   _REG_FUNC(volume_render_svox1);
   _REG_FUNC(volume_render_svox1_backward);

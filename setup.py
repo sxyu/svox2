@@ -39,6 +39,7 @@ try:
             'svox2/csrc/svox2.cpp',
             'svox2/csrc/svox2_kernel.cu',
             'svox2/csrc/render_lerp_kernel_cuvol.cu',
+            'svox2/csrc/render_lerp_kernel_nvol.cu',
             'svox2/csrc/render_svox1_kernel.cu',
             'svox2/csrc/misc_kernel.cu',
             'svox2/csrc/loss_kernel.cu',

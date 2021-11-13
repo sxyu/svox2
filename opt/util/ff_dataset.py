@@ -147,7 +147,6 @@ class LLFFDataset(Dataset):
         self.c2w = torch.stack(all_c2w)
         #  bds_scale = 1.0 / (self.sfm.dmin * 0.75) # 0.9
         bds_scale = 1.0
-        print('scene rescale', bds_scale)
         self.z_bounds = [self.sfm.dmin * bds_scale, self.sfm.dmax * bds_scale]
         if bds_scale != 1.0:
             self.c2w[:, :3, 3] *= bds_scale
@@ -169,24 +168,12 @@ class LLFFDataset(Dataset):
         width = self.sfm.ref_cam['width']
         height = self.sfm.ref_cam['height']
 
-        print('z_bounds from LLFF:', self.z_bounds)
+        print('z_bounds from LLFF:', self.z_bounds, '(not used)')
 
-        # Auto bounds
-        #  [1.496031746031746, 1.6613756613756614, 1.0]
+        # Padded bounds
         radx = 1 + 2 * self.sfm.offset / self.gt.size(2)
         rady = 1 + 2 * self.sfm.offset / self.gt.size(1)
-
-        # Some hardcoded stuff
-        #  radx = 1.4 #1 + 2 * self.sfm.offset / self.gt.size(2)
-        #  rady = 1.75 #+ 2 * self.sfm.offset / self.gt.size(1)
-
-        #  MAX_MPI_LAYERS = 132
-        #  # Our convention is a bit weird so there is some 0.5 voxel
-        #  # empty space on each end, better to deal with this
-        #  radz = MAX_MPI_LAYERS / (MAX_MPI_LAYERS - 1)
         radz = 1.0
-
-
         self.scene_center = [0.0, 0.0, 0.0]
         self.scene_radius = [radx, rady, radz]
         print('scene_radius', self.scene_radius)

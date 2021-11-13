@@ -26,7 +26,7 @@ class RenderOptions:
     :param stop_thresh: float
     """
 
-    backend: str = "cuvol"  # One of cuvol, svox1
+    backend: str = "cuvol"  # One of cuvol, svox1, nvol
 
     background_brightness: float = 1.0  # [0, 1], the background color black-white
 

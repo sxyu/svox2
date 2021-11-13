@@ -67,16 +67,16 @@ def define_common_args(parser : argparse.ArgumentParser):
                          default=1.0,
                          help="Brightness of the infinite background")
     group.add_argument('--renderer_backend', '-B',
-                         choices=['cuvol', 'svox1'],
+                         choices=['cuvol', 'svox1', 'nvol'],
                          default='cuvol',
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',
                          type=float,
-                         default=1.0,
+                         default=0.0,
                          help="Random Gaussian std to add to density values (only if enable_random)")
     group.add_argument('--random_sigma_std_background',
                          type=float,
-                         default=1.0,
+                         default=0.0,
                          help="Random Gaussian std to add to density values for BG (only if enable_random)")
     group.add_argument('--enable_random',
                          action='store_true',
