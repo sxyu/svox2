@@ -467,6 +467,14 @@ class SparseGrid(nn.Module):
                     dtype=torch.float32, device=device
                 )
             )
+        else:
+            self.background_data = nn.Parameter(
+                torch.empty(
+                    0, 0, 0,
+                    dtype=torch.float32, device=device
+                ),
+                requires_grad=False
+            )
 
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
@@ -853,7 +861,7 @@ class SparseGrid(nn.Module):
                 self.density_data,
                 self.sh_data,
                 basis_data,
-                self.background_data,
+                self.background_data if self.use_background else None,
                 self._to_cpp(replace_basis_data=basis_data),
                 rays._to_cpp(),
                 self.opt._to_cpp(randomize=randomize),
