@@ -313,7 +313,7 @@ __global__ void grid_weight_render_kernel(
     CUDA_GET_THREAD_ID(tid, cam.width * cam.height);
     int iy = tid / cam.width, ix = tid % cam.width;
     float dir[3], origin[3];
-    cam2world_ray(ix, iy, dir, origin, cam);
+    cam2world_ray(ix, iy, cam, dir, origin);
     grid_trace_ray(
         data,
         SingleRaySpec(origin, dir),

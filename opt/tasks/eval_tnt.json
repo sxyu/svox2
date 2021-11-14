@@ -1,7 +1,7 @@
 {
     "eval": true,
     "data_root": "/home/sxyu/data/TanksAndTempleBG",
-    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/tnt_spars_hdbg_var",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/tnt_spars_fasttv",
     "config": "configs/tnt.json",
     "tasks": [{
         "train_dir": "Train",

@@ -194,7 +194,10 @@ group.add_argument('--tv_lumisphere_sparsity', type=float, default=0.01)
 group.add_argument('--tv_lumisphere_dir_factor', type=float, default=0.0)
 
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
-group.add_argument('--tv_early_only', type=int, default=1) # Turn off TV regularization after the first split/prune
+group.add_argument('--tv_early_only', type=int, default=1, help="Turn off TV regularization after the first split/prune")
+
+group.add_argument('--tv_contiguous', type=int, default=1,
+                        help="Apply TV only on contiguous link chunks, which is faster")
 # End Foreground TV
 
 group.add_argument('--lambda_sparsity', type=float, default=
@@ -359,7 +362,7 @@ while True:
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
             # Standard set
-            N_IMGS_TO_SAVE = min(5, dset_test.n_images)
+            N_IMGS_TO_SAVE = min(5, dset_test.n_images) if not args.tune_mode else 1
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
@@ -511,7 +514,6 @@ while True:
                     grid.sh_data.data *= args.weight_decay_sigma
                 if args.weight_decay_sigma < 1.0:
                     grid.density_data.data *= args.weight_decay_sh
-            #  torch.cuda.synchronize()  # FIXME remove
 
             # Apply TV/Sparsity regularizers
             if args.lambda_tv > 0.0:
@@ -520,22 +522,21 @@ while True:
                         scaling=args.lambda_tv,
                         sparse_frac=args.tv_sparsity,
                         logalpha=args.tv_logalpha,
-                        ndc_coeffs=dset.ndc_coeffs)
-                #  torch.cuda.synchronize()  # FIXME remove
+                        ndc_coeffs=dset.ndc_coeffs,
+                        contiguous=args.tv_contiguous)
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):
                 grid.inplace_tv_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_tv_sh,
                         sparse_frac=args.tv_sh_sparsity,
-                        ndc_coeffs=dset.ndc_coeffs)
-                #  torch.cuda.synchronize()  # FIXME remove
+                        ndc_coeffs=dset.ndc_coeffs,
+                        contiguous=args.tv_contiguous)
             if args.lambda_tv_lumisphere > 0.0:
                 grid.inplace_tv_lumisphere_grad(grid.sh_data.grad,
                         scaling=args.lambda_tv_lumisphere,
                         dir_factor=args.tv_lumisphere_dir_factor,
                         sparse_frac=args.tv_lumisphere_sparsity,
                         ndc_coeffs=dset.ndc_coeffs)
-                #  torch.cuda.synchronize()  # FIXME remove
             if args.lambda_l2_sh > 0.0:
                 grid.inplace_l2_color_grad(grid.sh_data.grad,
                         scaling=args.lambda_l2_sh)
@@ -543,7 +544,8 @@ while True:
                 grid.inplace_tv_background_grad(grid.background_data.grad,
                         scaling=args.lambda_tv_background_color,
                         scaling_density=args.lambda_tv_background_sigma,
-                        sparse_frac=args.tv_background_sparsity)
+                        sparse_frac=args.tv_background_sparsity,
+                        contiguous=args.tv_contiguous)
             if args.lambda_tv_basis > 0.0:
                 tv_basis = grid.tv_basis()
                 loss_tv_basis = tv_basis * args.lambda_tv_basis

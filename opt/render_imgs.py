@@ -20,13 +20,17 @@ parser.add_argument('ckpt', type=str)
 
 config_util.define_common_args(parser)
 
-#  parser.add_argument('--eval_batch_size', type=int, default=200000, help='evaluation batch size')
-parser.add_argument('--n_eval', '-n', type=int, default=200, help='images to evaluate (equal interval), at most evals every image')
+parser.add_argument('--n_eval', '-n', type=int, default=100000, help='images to evaluate (equal interval), at most evals every image')
 parser.add_argument('--train', action='store_true', default=False, help='render train set')
 parser.add_argument('--render_path',
                     action='store_true',
                     default=False,
                     help="Render path instead of test images (no metrics will be given)")
+parser.add_argument('--timing',
+                    action='store_true',
+                    default=False,
+                    help="Run only for timing (do not save images or use LPIPS/SSIM; "
+                    "still computes PSNR to make sure images are being generated)")
 parser.add_argument('--no_lpips',
                     action='store_true',
                     default=False,
@@ -78,6 +82,11 @@ args = parser.parse_args()
 config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 
+if args.timing:
+    args.no_lpips = True
+    args.no_vid = True
+    args.ray_len = False
+
 if not args.no_lpips:
     import lpips
     lpips_vgg = lpips.LPIPS(net="vgg").eval().to(device)
@@ -116,9 +125,6 @@ if grid.use_background:
 
 config_util.setup_render_opts(grid.opt, args)
 
-grid.opt.msi_start_layer = 30
-grid.opt.msi_end_layer = 31 #grid.opt.msi_start_layer + 1
-
 if args.blackbg:
     print('Forcing black bg')
     render_dir += '_blackbg'
@@ -127,6 +133,8 @@ if args.blackbg:
 print('Writing to', render_dir)
 os.makedirs(render_dir, exist_ok=True)
 
+# NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
+# other backends will manually generate rays per frame (slow)
 with torch.no_grad():
     im_size = dset.h * dset.w
     n_images = dset.render_c2w.size(0) if args.render_path else dset.n_images
@@ -148,6 +156,7 @@ with torch.no_grad():
         grid.opt.near_clip = args.near_clip
 
     frames = []
+    im_gt_all = dset.gt.to(device=device)
 
     for img_id in tqdm(range(0, n_images, img_eval_interval)):
         cam.c2w = c2ws[img_id]
@@ -161,59 +170,50 @@ with torch.no_grad():
         im.clamp_(0.0, 1.0)
 
         if not args.render_path:
-            im_gt = dset.gt[img_id].to(device=device)
+            im_gt = im_gt_all[img_id]
             mse = (im - im_gt) ** 2
             mse_num : float = mse.mean().item()
             psnr = -10.0 * math.log10(mse_num)
-            ssim = compute_ssim(im_gt, im).item()
             avg_psnr += psnr
-            avg_ssim += ssim
-            if not args.no_lpips:
-                lpips_i = lpips_vgg(im_gt.permute([2, 0, 1]).contiguous(),
-                        im.permute([2, 0, 1]).contiguous(), normalize=True).item()
-                avg_lpips += lpips_i
-                print(img_id, 'PSNR', psnr, 'SSIM', ssim, 'LPIPS', lpips_i)
-            else:
-                print(img_id, 'PSNR', psnr, 'SSIM', ssim)
-        #  all_rgbs = []
-        #  all_mses = []
-        #  for batch_begin in range(0, im_size, args.eval_batch_size):
-        #      batch_end = min(batch_begin + args.eval_batch_size, im_size)
-        #      batch_origins = dset.rays.origins[img_id][batch_begin: batch_end].to(device=device)
-        #      batch_dirs = dset.rays.dirs[img_id][batch_begin: batch_end].to(device=device)
-        #      rgb_gt_test = dset.rays.gt[img_id][batch_begin: batch_end].to(device=device)
-        #
-        #      rays = svox2.Rays(batch_origins, batch_dirs)
-        #      rgb_pred_test = grid.volume_render(rays, use_kernel=True, randomize=True)
-        #      rgb_pred_test.clamp_(0.0, 1.0)
-        #      all_rgbs.append(rgb_pred_test.cpu())
-        #      all_mses.append(((rgb_gt_test - rgb_pred_test) ** 2).cpu())
+            if not args.timing:
+                ssim = compute_ssim(im_gt, im).item()
+                avg_ssim += ssim
+                if not args.no_lpips:
+                    lpips_i = lpips_vgg(im_gt.permute([2, 0, 1]).contiguous(),
+                            im.permute([2, 0, 1]).contiguous(), normalize=True).item()
+                    avg_lpips += lpips_i
+                    print(img_id, 'PSNR', psnr, 'SSIM', ssim, 'LPIPS', lpips_i)
+                else:
+                    print(img_id, 'PSNR', psnr, 'SSIM', ssim)
         img_path = path.join(render_dir, f'{img_id:04d}.png');
         im = im.cpu().numpy()
         if not args.render_path:
             im_gt = dset.gt[img_id].numpy()
             im = np.concatenate([im_gt, im], axis=1)
-        im = (im * 255).astype(np.uint8)
-        imageio.imwrite(img_path,im)
-        if not args.no_vid:
-            frames.append(im)
+        if not args.timing:
+            im = (im * 255).astype(np.uint8)
+            imageio.imwrite(img_path,im)
+            if not args.no_vid:
+                frames.append(im)
         im = None
         n_images_gen += 1
     if want_metrics:
-        avg_psnr /= n_images_gen
-        avg_ssim /= n_images_gen
         print('AVERAGES')
-        print('PSNR:', avg_psnr)
-        print('SSIM:', avg_ssim)
+
+        avg_psnr /= n_images_gen
         with open(path.join(render_dir, 'psnr.txt'), 'w') as f:
             f.write(str(avg_psnr))
-        with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
-            f.write(str(avg_ssim))
-        if not args.no_lpips:
-            avg_lpips /= n_images_gen
-            print('LPIPS:', avg_lpips)
-            with open(path.join(render_dir, 'lpips.txt'), 'w') as f:
-                f.write(str(avg_lpips))
+        print('PSNR:', avg_psnr)
+        if not args.timing:
+            avg_ssim /= n_images_gen
+            print('SSIM:', avg_ssim)
+            with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
+                f.write(str(avg_ssim))
+            if not args.no_lpips:
+                avg_lpips /= n_images_gen
+                print('LPIPS:', avg_lpips)
+                with open(path.join(render_dir, 'lpips.txt'), 'w') as f:
+                    f.write(str(avg_lpips))
     if not args.no_vid and len(frames):
         vid_path = render_dir + '.mp4'
         imageio.mimwrite(vid_path, frames, fps=args.fps)  # pip install imageio-ffmpeg

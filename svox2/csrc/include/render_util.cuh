@@ -525,9 +525,10 @@ __device__ __inline__ static void world2ndc(
 
 __device__ __inline__ void cam2world_ray(
     int ix, int iy,
-    float* dir,
-    float* origin,
-    const PackedCameraSpec& __restrict__ cam) {
+    const PackedCameraSpec& __restrict__ cam,
+    // Outputs
+    float* __restrict__ dir,
+    float* __restrict__ origin) {
     // OpenCV convention (contrary to svox 1, which uses OpenGL)
     float x = (ix + 0.5f - cam.cx) / cam.fx;
     float y = (iy + 0.5f - cam.cy) / cam.fy;
@@ -600,12 +601,12 @@ __device__ __inline__ void ray_find_bounds(
         }
     }
 
-    if (opt.randomize && opt.random_sigma_std > 0.0) {
-        // Seed the RNG
-        ray.rng.x = opt._m1 ^ ray_id;
-        ray.rng.y = opt._m2 ^ ray_id;
-        ray.rng.z = opt._m3 ^ ray_id;
-    }
+    // if (opt.randomize && opt.random_sigma_std > 0.0) {
+    //     // Seed the RNG
+    //     ray.rng.x = opt._m1 ^ ray_id;
+    //     ray.rng.y = opt._m2 ^ ray_id;
+    //     ray.rng.z = opt._m3 ^ ray_id;
+    // }
 }
 
 __device__ __inline__ void ray_find_bounds_bg(
@@ -648,12 +649,12 @@ __device__ __inline__ void ray_find_bounds_bg(
     //     ray.tmin = (-qb + sqrtf(det)) / q2a;
     // }
 
-    if (opt.randomize && opt.random_sigma_std_background > 0) {
-        // Seed the RNG (hacks)
-        ray.rng.x = opt._m2 ^ (ray_id - 1);
-        ray.rng.y = opt._m3 ^ (ray_id - 1);
-        ray.rng.z = opt._m1 ^ (ray_id - 1);
-    }
+    // if (opt.randomize && opt.random_sigma_std_background > 0) {
+    //     // Seed the RNG (hacks)
+    //     ray.rng.x = opt._m2 ^ (ray_id - 1);
+    //     ray.rng.y = opt._m3 ^ (ray_id - 1);
+    //     ray.rng.z = opt._m1 ^ (ray_id - 1);
+    // }
 }
 
 } // namespace device

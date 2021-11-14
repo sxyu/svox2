@@ -2,7 +2,7 @@
     "eval": true,
     "render": true,
     "data_root": "/home/sxyu/data/nerf_llff_data",
-    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/llff_c2f_10e",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/llff_c2f_fasttv_10e",
     "variables": {
         "scene": ["fern", "room", "horns", "trex", "flower", "leaves", "orchids", "fortress"]
     },

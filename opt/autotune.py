@@ -14,6 +14,7 @@ import sys
 from typing import List, Dict
 import itertools
 from warnings import warn
+from datetime import datetime
 import numpy as np
 
 parser = argparse.ArgumentParser()
@@ -30,7 +31,7 @@ args = parser.parse_args()
 PSNR_FILE_NAME = 'test_psnr.txt'
 
 def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config, flags, eval_flags, common_flags):
-    opt_base_cmd = [ "python", "-u", "opt.py", "--tune_mode" ]
+    opt_base_cmd = [ "python", "opt.py", "--tune_mode" ]
 
     if not eval_mode:
         opt_base_cmd += ["--tune_nosave"]
@@ -57,18 +58,23 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
         print('! RUN opt.py -t', train_dir)
         opt_cmd = ' '.join(opt_base_cmd + flags + common_flags)
         print(opt_cmd)
+        start_time = datetime.now()
         try:
             opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
                     sys.stdout.encoding)
         except subprocess.CalledProcessError:
             print('Error occurred while running OPT for exp', train_dir, 'on', env["CUDA_VISIBLE_DEVICES"])
             return
+        end_time = datetime.now()
         with open(log_file_path, 'w') as f:
             f.write(opt_ret)
+        secs = (end_time - start_time).total_seconds()
+        timings_file = open(os.path.join(train_dir, 'timings.txt'), 'a')
+        timings_file.write(f"{secs} s = {secs / 60} m = {secs / (60 * 60)} h\n")
 
     if eval_mode:
         eval_base_cmd = [
-            "python", "-u", "render_imgs.py",
+            "python", "render_imgs.py",
             ckpt_path,
             data_dir
         ]

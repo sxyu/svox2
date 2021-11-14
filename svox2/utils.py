@@ -607,3 +607,26 @@ def xyz2equirect(bearings, reso):
     x = reso * 2 * (0.5 + lon / 2 / np.pi)
     y = reso * (0.5 - lat / np.pi)
     return torch.stack([x, y], dim=-1)
+
+class Timing:
+    """
+    Timing environment
+    usage:
+    with Timing("message"):
+        your commands here
+    will print CUDA runtime in ms
+    """
+
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.start = torch.cuda.Event(enable_timing=True)
+        self.end = torch.cuda.Event(enable_timing=True)
+        self.start.record()
+
+    def __exit__(self, type, value, traceback):
+        self.end.record()
+        torch.cuda.synchronize()
+        print(self.name, "elapsed", self.start.elapsed_time(self.end), "ms")
+
