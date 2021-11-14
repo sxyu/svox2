@@ -37,7 +37,7 @@ class NSVFDataset:
         scale : Optional[float] = 1.0,                    # Image scaling (on load)
         permutation: bool = True,
         white_bkgd: bool = True,
-        normalize_by_bbox: bool = True,
+        normalize_by_bbox: bool = False,
         data_bbox_scale : float = 1.1,
         **kwargs
     ):
@@ -126,6 +126,7 @@ class NSVFDataset:
         self.c2w_f64 = torch.stack(all_c2w)
 
         if normalize_by_bbox:
+            # Not used, but could be helpful
             bbox_path = path.join(root, "bbox.txt")
             if path.exists(bbox_path):
                 bbox_data = np.loadtxt(bbox_path)

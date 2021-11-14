@@ -158,8 +158,8 @@ group.add_argument('--thresh_type',
                     default="weight",
                    help='Upsample threshold type')
 group.add_argument('--weight_thresh', type=float,
-                    #  default=0.0005 * 512,
-                    default=0.025 * 512,
+                    default=0.0005 * 512,
+                    #  default=0.025 * 512,
                    help='Upsample weight threshold; will be divided by resulting z-resolution')
 group.add_argument('--density_thresh', type=float,
                     default=5.0,

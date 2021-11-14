@@ -5,6 +5,8 @@ from typing import NamedTuple, Optional, Union
 from dataclasses import dataclass
 import numpy as np
 import cv2
+from scipy.spatial.transform import Rotation
+from scipy.interpolate import CubicSpline
 from matplotlib import pyplot as plt
 from warnings import warn
 
@@ -308,3 +310,41 @@ def generate_rays(w, h, focal, camtoworlds, equirect=False):
         origins=origins, directions=directions, viewdirs=viewdirs
     )
     return rays
+
+
+def jiggle_and_interp_poses(poses : torch.Tensor,
+                            n_inter: int,
+                            noise_std : float=0.0):
+    """
+    For generating a novel trajectory close to known trajectory
+
+    :param poses: torch.Tensor (B, 4, 4)
+    :param n_inter: int, number of views to interpolate in total
+    :param noise_std: float, default 0
+    """
+    n_views_in = poses.size(0)
+    poses_np = poses.cpu().numpy().copy()
+    rot = Rotation.from_matrix(poses_np[:, :3, :3])
+    trans = poses_np[:, :3, 3]
+    trans += np.random.randn(*trans.shape) * noise_std
+    pose_quat = rot.as_quat()
+
+    t_in = np.arange(n_views_in, dtype=np.float32)
+    t_out = np.linspace(t_in[0], t_in[-1], n_inter, dtype=np.float32)
+
+    q_new = CubicSpline(t_in, pose_quat)
+    q_new : np.ndarray = q_new(t_out)
+    q_new = q_new / np.linalg.norm(q_new, axis=-1)[..., None]
+
+    t_new = CubicSpline(t_in, trans)
+    t_new = t_new(t_out)
+
+    rot_new = Rotation.from_quat(q_new)
+    R_new = rot_new.as_matrix()
+
+    Rt_new = np.concatenate([R_new, t_new[..., None]], axis=-1)
+    bottom = np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
+    bottom = bottom[None].repeat(Rt_new.shape[0], 0)
+    Rt_new = np.concatenate([Rt_new, bottom], axis=-2)
+    Rt_new = torch.from_numpy(Rt_new).to(device=poses.device, dtype=poses.dtype)
+    return Rt_new

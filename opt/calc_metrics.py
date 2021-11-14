@@ -60,7 +60,8 @@ for i, im_path in enumerate(im_files):
     psnr = -10.0 * math.log10(mse_num)
     ssim = compute_ssim(im_gt, im).item()
     lpips_i = lpips_vgg(im_gt.permute([2, 0, 1]).cuda().contiguous(),
-            im.permute([2, 0, 1]).cuda().contiguous(), normalize=True).item()
+            im.permute([2, 0, 1]).cuda().contiguous(),
+            normalize=True).item()
 
     print(i, 'of', len(im_files), '; PSNR', psnr, 'SSIM', ssim, 'LPIPS', lpips_i)
     avg_psnr += psnr

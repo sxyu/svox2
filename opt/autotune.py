@@ -251,6 +251,9 @@ if __name__ == '__main__':
         with open(leaderboard_path, 'w') as leaderboard_file:
             lines = [f'dir\tPSNR\tSSIM\tLPIPS\n']
             all_tasks = sorted(all_tasks, key=lambda task:task['train_dir'])
+            all_psnr = []
+            all_ssim = []
+            all_lpips = []
             for task in all_tasks:
                 train_dir = task['train_dir']
                 psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
@@ -260,23 +263,33 @@ if __name__ == '__main__':
                 if path.isfile(psnr_file_path):
                     with open(psnr_file_path, 'r') as f:
                         psnr = float(f.read())
+                    all_psnr.append(psnr)
                     psnr_txt = f'{psnr:.10f}'
                 else:
                     psnr_txt = 'ERR'
                 if path.isfile(ssim_file_path):
                     with open(ssim_file_path, 'r') as f:
                         ssim = float(f.read())
+                    all_ssim.append(ssim)
                     ssim_txt = f'{ssim:.10f}'
                 else:
                     ssim_txt = 'ERR'
                 if path.isfile(lpips_file_path):
                     with open(lpips_file_path, 'r') as f:
                         lpips = float(f.read())
+                    all_lpips.append(lpips)
                     lpips_txt = f'{lpips:.10f}'
                 else:
                     lpips_txt = 'ERR'
                 line = f'{path.basename(train_dir.rstrip("/"))}\t{psnr_txt}\t{ssim_txt}\t{lpips_txt}\n'
                 lines.append(line)
+            lines.append('---------\n')
+            if len(all_psnr):
+                lines.append('Average PSNR: ' + str(sum(all_psnr) / len(all_psnr)) + '\n')
+            if len(all_ssim):
+                lines.append('Average SSIM: ' + str(sum(all_ssim) / len(all_ssim)) + '\n')
+            if len(all_lpips):
+                lines.append('Average LPIPS: ' + str(sum(all_lpips) / len(all_lpips)) + '\n')
             leaderboard_file.writelines(lines)
 
     else:
