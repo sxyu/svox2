@@ -229,13 +229,14 @@ class _VolumeRenderFunction(autograd.Function):
             grad_basis = torch.zeros_like(ctx.basis_data)
         elif ctx.grid.basis_type == BASIS_TYPE_3D_TEXTURE:
             grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
-        grad_background = torch.zeros_like(ctx.grid.background_data.data)
+        if ctx.grid.background_data is not None:
+            grad_background = torch.zeros_like(ctx.grid.background_data.data)
         grad_holder = _C.GridOutputGrads()
         grad_holder.grad_density_out = grad_density_grid
         grad_holder.grad_sh_out = grad_sh_grid
         if ctx.needs_input_grad[2]:
             grad_holder.grad_basis_out = grad_basis
-        if ctx.needs_input_grad[3]:
+        if ctx.grid.background_data is not None and ctx.needs_input_grad[3]:
             grad_holder.grad_background_out = grad_background
         cu_fn(
             ctx.grid,
@@ -917,7 +918,6 @@ class SparseGrid(nn.Module):
             pos[:, 0] = torch.clamp_max(pos[:, 0], gsz[0] - 1)
             pos[:, 1] = torch.clamp_max(pos[:, 1], gsz[1] - 1)
             pos[:, 2] = torch.clamp_max(pos[:, 2], gsz[2] - 1)
-            #  print('pym', pos, log_light_intensity)
 
             l = pos.to(torch.long)
             l.clamp_min_(0)
@@ -974,8 +974,9 @@ class SparseGrid(nn.Module):
             #      1.0 - torch.exp(log_att)
             #  )
             delta_alpha = 1.0 - torch.exp(log_att)
-            new_total_alpha = torch.clamp_max(total_alpha[good_indices] + delta_alpha, 1.0)
-            weight = new_total_alpha - total_alpha[good_indices]
+            total_alpha_sub = total_alpha[good_indices]
+            new_total_alpha = torch.clamp_max(total_alpha_sub + delta_alpha, 1.0)
+            weight = new_total_alpha - total_alpha_sub
             total_alpha[good_indices] = new_total_alpha
 
             # [B', 3, n_sh_coeffs]
@@ -1000,7 +1001,7 @@ class SparseGrid(nn.Module):
         # Add background color
         if self.opt.background_brightness:
             out_rgb += (
-               (1.0 - total_alpha) 
+               (1.0 - total_alpha).unsqueeze(-1)
                 * self.opt.background_brightness
             )
         return out_rgb

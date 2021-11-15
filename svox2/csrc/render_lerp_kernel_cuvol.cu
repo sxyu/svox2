@@ -288,21 +288,20 @@ __device__ __inline__ void render_background_forward(
     ConcentricSpheresIntersector csi(ray.origin, ray.dir);
 
     const float inner_radius = fmaxf(_dist_ray_to_origin(ray.origin, ray.dir) + 1e-3f, 1.f);
-    float t, t_last;
+    float t, invr_last = 1.f / inner_radius;
     const int n_steps = int(grid.background_nlayers / opt.step_size) + 2;
 
-    csi.intersect(inner_radius, &t_last);
+    // csi.intersect(inner_radius, &t_last);
 
     float outv[3] = {0.f, 0.f, 0.f};
     for (int i = 0; i < n_steps; ++i) {
         // Between 1 and infty
         float r = n_steps / (n_steps - i - 0.5);
         if (r < inner_radius || !csi.intersect(r, &t)) continue;
-        const float t_mid = (t + t_last) * 0.5f;
 
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            ray.pos[j] = fmaf(t_mid, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
         }
         const float invr_mid = _rnorm(ray.pos);
 #pragma unroll 3
@@ -338,7 +337,7 @@ __device__ __inline__ void render_background_forward(
         // if (opt.randomize && opt.random_sigma_std_background > 0.0)
         //     sigma += ray.rng.randn() * opt.random_sigma_std_background;
         if (sigma > 0.f) {
-            const float pcnt = (t - t_last) * ray.world_step * sigma;
+            const float pcnt = (invr_last - invr_mid) * ray.world_step * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
 #pragma unroll 3
@@ -359,7 +358,7 @@ __device__ __inline__ void render_background_forward(
                 break;
             }
         }
-        t_last = t;
+        invr_last = invr_mid;
     }
 #pragma unroll 3
     for (int i = 0; i < 3; ++i) {
@@ -380,20 +379,19 @@ __device__ __inline__ void render_background_backward(
     // printf("log_transmit_init=%f\n", log_transmit);
     ConcentricSpheresIntersector csi(ray.origin, ray.dir);
 
-    float t, t_last;
     const int n_steps = int(grid.background_nlayers / opt.step_size) + 2;
 
     const float inner_radius = fmaxf(_dist_ray_to_origin(ray.origin, ray.dir) + 1e-3f, 1.f);
-    csi.intersect(inner_radius, &t_last);
+    float t, invr_last = 1.f / inner_radius;
+    // csi.intersect(inner_radius, &t_last);
     for (int i = 0; i < n_steps; ++i) {
         float r = n_steps / (n_steps - i - 0.5);
 
         if (r < inner_radius || !csi.intersect(r, &t)) continue;
 
-        const float t_mid = (t + t_last) * 0.5f;
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            ray.pos[j] = fmaf(t_mid, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
         }
 
         const float invr_mid = _rnorm(ray.pos);
@@ -431,7 +429,7 @@ __device__ __inline__ void render_background_backward(
         //     sigma += ray.rng.randn() * opt.random_sigma_std_background;
         if (sigma > 0.f) {
             float total_color = 0.f;
-            const float pcnt = ray.world_step * (t - t_last) * sigma;
+            const float pcnt = ray.world_step * (invr_last - invr_mid) * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
             log_transmit -= pcnt;
 
@@ -464,7 +462,7 @@ __device__ __inline__ void render_background_backward(
             }
 
             accum -= weight * total_color;
-            float curr_grad_sigma = ray.world_step * (t - t_last) * (
+            float curr_grad_sigma = ray.world_step * (invr_last - invr_mid) * (
                     total_color * _EXP(log_transmit) - accum);
 
             trilerp_backward_bg_one(
@@ -483,7 +481,7 @@ __device__ __inline__ void render_background_backward(
                 break;
             }
         }
-        t_last = t;
+        invr_last = invr_mid;
     }
 }
 

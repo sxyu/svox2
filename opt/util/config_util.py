@@ -39,12 +39,16 @@ def define_common_args(parser : argparse.ArgumentParser):
                          help="LLFF holdout every")
     group.add_argument('--normalize_by_bbox',
                          type=bool,
-                         default=True,
-                         help="Normalize by bounding box in bbox.txt, if available (NSVF dataset only)")
+                         default=False,
+                         help="Normalize by bounding box in bbox.txt, if available (NSVF dataset only); precedes normalize_by_camera")
     group.add_argument('--data_bbox_scale',
                          type=float,
                          default=1.2,
                          help="Data bbox scaling (NSVF dataset only)")
+    group.add_argument('--normalize_by_camera',
+                         type=bool,
+                         default=True,
+                         help="Normalize using cameras, assuming a 360 capture (NSVF dataset only); only used if not normalize_by_bbox")
     group.add_argument('--perm', action='store_true', default=False,
                          help='sample by permutation of rays (true epoch) instead of '
                               'uniformly random rays')
@@ -89,6 +93,9 @@ def define_common_args(parser : argparse.ArgumentParser):
 
 
 def build_data_options(args):
+    """
+    Arguments to pass as kwargs to the dataset constructor
+    """
     return {
         'dataset_type': args.dataset_type,
         'epoch_size': args.epoch_size * args.__dict__.get('batch_size', 5000),
@@ -98,6 +105,7 @@ def build_data_options(args):
         'hold_every': args.llffhold,
         'normalize_by_bbox': args.normalize_by_bbox,
         'data_bbox_scale': args.data_bbox_scale,
+        'normalize_by_camera': args.normalize_by_camera,
         'permutation': args.perm
     }
 
@@ -114,6 +122,9 @@ def maybe_merge_config_file(args, allow_invalid=False):
         args.__dict__.update(configs)
 
 def setup_render_opts(opt, args):
+    """
+    Pass render arguments to the SparseGrid renderer options
+    """
     opt.step_size = args.step_size
     opt.sigma_thresh = args.sigma_thresh
     opt.stop_thresh = args.stop_thresh

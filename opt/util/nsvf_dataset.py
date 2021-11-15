@@ -39,6 +39,7 @@ class NSVFDataset:
         white_bkgd: bool = True,
         normalize_by_bbox: bool = False,
         data_bbox_scale : float = 1.1,
+        normalize_by_camera: bool = True,
         **kwargs
     ):
         assert path.isdir(root), f"'{root}' is not a directory"
@@ -113,7 +114,10 @@ class NSVFDataset:
             pose_path = path.join(root, pose_dir_name, pose_fname)
             #  intrin_path = path.join(root, intrin_dir_name, pose_fname)
 
-            cam_mtx = np.loadtxt(pose_path).reshape(4, 4)
+            cam_mtx = np.loadtxt(pose_path).reshape(-1, 4)
+            if len(cam_mtx == 3):
+                bottom = np.array([[0.0, 0.0, 0.0, 1.0]])
+                cam_mtx = np.concatenate([cam_mtx, bottom], axis=0)
             all_c2w.append(torch.from_numpy(cam_mtx))  # C2W (4, 4) OpenCV
             full_size = list(image.shape[:2])
             rsz_h, rsz_w = [round(hw * scale) for hw in full_size]
@@ -125,6 +129,7 @@ class NSVFDataset:
 
         self.c2w_f64 = torch.stack(all_c2w)
 
+        print('NORMALIZE BY?', 'bbox' if normalize_by_bbox else 'camera' if normalize_by_camera else 'manual')
         if normalize_by_bbox:
             # Not used, but could be helpful
             bbox_path = path.join(root, "bbox.txt")
@@ -137,10 +142,21 @@ class NSVFDataset:
                 self.c2w_f64[:, :3, 3] -= center
                 # Rescale
                 scene_scale = 1.0 / radius.max()
-                print(' Overriding scene_scale by ', scene_scale)
             else:
                 warn('normalize_by_bbox=True but bbox.txt was not available')
+        elif normalize_by_camera:
+            norm_pose_files = sorted(os.listdir(path.join(root, pose_dir_name)), key=sort_key)
+            norm_pose_files = [x for x in norm_pose_files if not x.startswith('2_')]
+            norm_poses = np.stack([np.loadtxt(path.join(root, pose_dir_name, x)).reshape(-1, 4)
+                                    for x in norm_pose_files], axis=0)
 
+            # Select subset of files
+            center = np.median(norm_poses[:, :3, 3], axis=0)
+            radius = np.median(np.linalg.norm(norm_poses[:, :3, 3] - center, axis=-1))
+            self.c2w_f64[:, :3, 3] -= center
+            scene_scale = 1.0 / radius
+
+        print('scene_scale', scene_scale)
         self.c2w_f64[:, :3, 3] *= scene_scale
         self.c2w = self.c2w_f64.float()
 

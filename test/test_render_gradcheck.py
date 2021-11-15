@@ -3,8 +3,8 @@ import torch
 import torch.nn.functional as F
 from util import Timing
 
-#  torch.random.manual_seed(0)
-torch.random.manual_seed(8289)
+torch.random.manual_seed(2)
+#  torch.random.manual_seed(8289)
 
 device = 'cuda:0'
 dtype = torch.float32
@@ -15,17 +15,18 @@ grid = svox2.SparseGrid(
                      basis_dim=9,
                      use_z_order=True,
                      device=device,
-                     background_nlayers=2,
+                     background_nlayers=0,
                      basis_type=svox2.BASIS_TYPE_SH)
+grid.opt.backend = 'nvol'
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
-grid.opt.background_brightness = 0.0
+grid.opt.background_brightness = 1.0
 
 print(grid.sh_data.shape)
 #  grid.sh_data.data.normal_()
 grid.sh_data.data[..., 0] = 0.5
-grid.sh_data.data[..., 1:].normal_(std=0.01)
-grid.density_data.data[:] = 0.1
+grid.sh_data.data[..., 1:].normal_(std=0.1)
+grid.density_data.data[:] = 100.0
 
 if grid.use_background:
 	grid.background_data.data[..., -1] = 0.5
@@ -37,7 +38,8 @@ if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
     grid.basis_data.data += 1.0
 
 ENABLE_TORCH_CHECK = True
-N_RAYS = 5000 #200 * 200
+#  N_RAYS = 5000 #200 * 200
+N_RAYS = 200 * 200
 origins = torch.randn((N_RAYS, 3), device=device, dtype=dtype) * 3
 dirs = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
 #  origins = torch.clip(origins, -0.8, 0.8)
@@ -46,10 +48,11 @@ dirs = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
 #  dirs = torch.tensor([[0.6418760418891907, -0.37417781352996826, 0.6693176627159119]], device=device, dtype=dtype)
 dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 
-start = 50
-end = 100
-origins = origins[start:end]
-dirs = dirs[start:end]
+#  start = 71
+#  end = 72
+#  origins = origins[start:end]
+#  dirs = dirs[start:end]
+#  print(origins.tolist(), dirs.tolist())
 
 #  breakpoint()
 rays = svox2.Rays(origins, dirs)

@@ -69,8 +69,8 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
         with open(log_file_path, 'w') as f:
             f.write(opt_ret)
         secs = (end_time - start_time).total_seconds()
-        timings_file = open(os.path.join(train_dir, 'timings.txt'), 'a')
-        timings_file.write(f"{secs} s = {secs / 60} m = {secs / (60 * 60)} h\n")
+        timings_file = open(os.path.join(train_dir, 'time_mins.txt'), 'a')
+        timings_file.write(f"{secs / 60}\n")
 
     if eval_mode:
         eval_base_cmd = [
@@ -255,16 +255,18 @@ if __name__ == '__main__':
     if args.eval:
         print('Done')
         with open(leaderboard_path, 'w') as leaderboard_file:
-            lines = [f'dir\tPSNR\tSSIM\tLPIPS\n']
+            lines = [f'dir\tPSNR\tSSIM\tLPIPS\nminutes\n']
             all_tasks = sorted(all_tasks, key=lambda task:task['train_dir'])
             all_psnr = []
             all_ssim = []
             all_lpips = []
+            all_times = []
             for task in all_tasks:
                 train_dir = task['train_dir']
                 psnr_file_path = path.join(train_dir, 'test_renders', 'psnr.txt')
                 ssim_file_path = path.join(train_dir, 'test_renders', 'ssim.txt')
                 lpips_file_path = path.join(train_dir, 'test_renders', 'lpips.txt')
+                time_file_path = path.join(train_dir, 'time_mins.txt')
 
                 if path.isfile(psnr_file_path):
                     with open(psnr_file_path, 'r') as f:
@@ -287,7 +289,14 @@ if __name__ == '__main__':
                     lpips_txt = f'{lpips:.10f}'
                 else:
                     lpips_txt = 'ERR'
-                line = f'{path.basename(train_dir.rstrip("/"))}\t{psnr_txt}\t{ssim_txt}\t{lpips_txt}\n'
+                if path.isfile(time_file_path):
+                    with open(time_file_path, 'r') as f:
+                        time_mins = float(f.read())
+                    all_times.append(time_mins)
+                    time_txt = f'{time_mins:.10f}'
+                else:
+                    time_txt = 'ERR'
+                line = f'{path.basename(train_dir.rstrip("/"))}\t{psnr_txt}\t{ssim_txt}\t{lpips_txt}\t{time_txt}\n'
                 lines.append(line)
             lines.append('---------\n')
             if len(all_psnr):
@@ -296,6 +305,8 @@ if __name__ == '__main__':
                 lines.append('Average SSIM: ' + str(sum(all_ssim) / len(all_ssim)) + '\n')
             if len(all_lpips):
                 lines.append('Average LPIPS: ' + str(sum(all_lpips) / len(all_lpips)) + '\n')
+            if len(all_times):
+                lines.append('Average Time (mins): ' + str(sum(all_times) / len(all_times)) + '\n')
             leaderboard_file.writelines(lines)
 
     else:

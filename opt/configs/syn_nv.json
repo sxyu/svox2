@@ -1,0 +1,11 @@
+{
+    "reso": "[[256, 256, 256]]",
+    "upsamp_every": 38400,
+    "renderer_backend": "nvol",
+    "lr_sigma": 3e-1,
+    "lr_sigma_final": 3e-5,
+    "lr_sigma_delay_steps": 0,
+    "lr_sh": 1e-2,
+    "lambda_tv": 0.0,
+    "lambda_tv_sh": 0.0
+}

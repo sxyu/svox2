@@ -49,7 +49,7 @@ __device__ __inline__ void trace_ray_nvol(
 
     float total_alpha = 0.f;
 
-    while (t < ray.tmax) {
+    while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
@@ -74,10 +74,7 @@ __device__ __inline__ void trace_ray_nvol(
                 1,
                 ray.l, ray.pos,
                 0);
-        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
-            sigma += 1e9;
-        }
-        if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
+
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
                             grid.links,
@@ -88,9 +85,10 @@ __device__ __inline__ void trace_ray_nvol(
                             ray.l, ray.pos, lane_id);
             lane_color *= sphfunc_val[lane_colorgrp_id];
 
-            const float curr_transmit = _EXP(-ray.world_step * sigma);
-            const float weight = 1.f - fmaxf(curr_transmit, total_alpha);
-            total_alpha += weight;
+            const float new_total_alpha = fminf(total_alpha + 1.f - _EXP(
+                                 -ray.world_step * sigma), 1.f);
+            const float weight = new_total_alpha - total_alpha;
+            total_alpha = new_total_alpha;
 
             float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            lane_color, lane_colorgrp_id == 0);
@@ -125,13 +123,7 @@ __device__ __inline__ void trace_ray_nvol_backward(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim));
 
-    float accum = fmaf(color_cache[0], grad_output[0],
-                      fmaf(color_cache[1], grad_output[1],
-                           color_cache[2] * grad_output[2]));
-
-
     if (ray.tmin > ray.tmax) {
-        // printf("accum_end_fg_fast=%f\n", accum);
         return;
     }
     float t = ray.tmin;
@@ -139,11 +131,10 @@ __device__ __inline__ void trace_ray_nvol_backward(
     const float gout = grad_output[lane_colorgrp];
 
     float total_alpha = 0.f;
-
     float last_total_color = 0.f;
 
     // remat samples
-    while (t < ray.tmax) {
+    while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
@@ -168,10 +159,6 @@ __device__ __inline__ void trace_ray_nvol_backward(
                 1,
                 ray.l, ray.pos,
                 0);
-        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
-            sigma += 1e9;
-        }
-        if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
                             grid.links,
@@ -183,9 +170,10 @@ __device__ __inline__ void trace_ray_nvol_backward(
             float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
 
             const float curr_transmit = _EXP(-ray.world_step * sigma);
-            const float weight = 1.f - fmaxf(curr_transmit, total_alpha);
-            bool not_last = curr_transmit > total_alpha;
-            total_alpha += weight;
+            const float new_total_alpha = fminf(total_alpha + 1.f - curr_transmit, 1.f);
+            const float weight = new_total_alpha - total_alpha;
+            bool not_last = new_total_alpha < 1.f;
+            total_alpha = new_total_alpha;
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            weighted_lane_color, lane_colorgrp_id == 0) + 0.5f;
@@ -245,11 +233,31 @@ __device__ __inline__ void trace_ray_nvol_backward(
         }
         t += opt.step_size;
     }
+    if (total_alpha < 1.f) {
+        // Never saturatedo
+        last_total_color = opt.background_brightness * (
+                grad_output[0] + grad_output[1] + grad_output[2]);
+    }
     if (last_total_color != 0.f) {
         t = ray.tmin;
         total_alpha = 0.f;
 
-        while (t < ray.tmax) {
+        while (t <= ray.tmax) {
+#pragma unroll 3
+            for (int j = 0; j < 3; ++j) {
+                ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+                ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
+                ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
+                ray.pos[j] -= static_cast<float>(ray.l[j]);
+            }
+            const float skip = compute_skip_dist(ray,
+                    grid.links, grid.stride_x,
+                    grid.size[2], 0);
+            if (skip >= opt.step_size) {
+                // For consistency, we skip the by step size
+                t += ceilf(skip / opt.step_size) * opt.step_size;
+                continue;
+            }
             float sigma = trilerp_cuvol_one(
                     grid.links,
                     grid.density_data,
@@ -258,12 +266,13 @@ __device__ __inline__ void trace_ray_nvol_backward(
                     1,
                     ray.l, ray.pos,
                     0);
-            if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
-                sigma += 1e9;
-            }
 
             const float curr_transmit = _EXP(-ray.world_step * sigma);
-            const float weight = 1.f - fmaxf(curr_transmit, total_alpha);
+            total_alpha = fminf(total_alpha + 1.f - curr_transmit, 1.f);
+            // const float weight = new_total_alpha - total_alpha;
+            // total_alpha = new_total_alpha;
+
+            if (total_alpha >= 1.f) break;
 
             float curr_grad_sigma = -ray.world_step * curr_transmit * last_total_color;
             if (lane_id == 0) {
@@ -454,7 +463,7 @@ void volume_render_nvol_fused(
         RaysSpec& rays,
         RenderOptions& opt,
         torch::Tensor rgb_gt,
-        float _,  // not supported 
+        float _,  // not supported
         float sparsity_loss,
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {

@@ -3,6 +3,7 @@
 
 import torch
 import svox2
+import svox2.utils
 import math
 import argparse
 import numpy as np
@@ -121,6 +122,9 @@ if grid.use_background:
         render_dir += '_nobg'
     if args.nofg:
         grid.density_data.data[:] = 0.0
+        #  grid.sh_data.data[..., 0] = 1.0 / svox2.utils.SH_C0
+        #  grid.sh_data.data[..., 9] = 1.0 / svox2.utils.SH_C0
+        #  grid.sh_data.data[..., 18] = 1.0 / svox2.utils.SH_C0
         render_dir += '_nofg'
 
 config_util.setup_render_opts(grid.opt, args)
