@@ -23,6 +23,7 @@ from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis
 from util import config_util
 
 from warnings import warn
+from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
@@ -249,7 +250,6 @@ torch.manual_seed(20200823)
 np.random.seed(20200823)
 
 factor = 1
-
 dset = datasets[args.dataset_type](
                args.data_dir,
                split="train",
@@ -264,6 +264,8 @@ if args.background_nlayers > 0 and not dset.should_use_background:
 dset_test = datasets[args.dataset_type](
         args.data_dir, split="test", **config_util.build_data_options(args))
 
+global_start_time = datetime.now()
+
 grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         center=dset.scene_center,
                         radius=dset.scene_radius,
@@ -277,7 +279,6 @@ grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         mlp_width=args.mlp_width,
                         background_nlayers=args.background_nlayers,
                         background_reso=args.background_reso)
-
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
@@ -362,8 +363,8 @@ while True:
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
             # Standard set
-            N_IMGS_TO_SAVE = min(5, dset_test.n_images) if not args.tune_mode else 1
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
+            N_IMGS_TO_SAVE = N_IMGS_TO_EVAL if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
             img_ids = range(0, dset_test.n_images, img_eval_interval)
@@ -373,7 +374,7 @@ while True:
             #             44, 45, 47, 49, 56,
             #             80, 88, 99, 115, 120,
             #             154]
-            img_save_interval = 1
+            #  img_save_interval = 1
 
             n_images_gen = 0
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
@@ -439,7 +440,8 @@ while True:
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    if epoch_id % max(factor, args.eval_every) == 0:
+    if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0 or not args.tune_mode):
+        # NOTE: we do an eval sanity check, if not in tune_mode
         eval_step()
         gc.collect()
 
@@ -609,6 +611,10 @@ while True:
     if gstep_id_base >= args.n_iters:
         print('* Final eval and save')
         eval_step()
+        global_stop_time = datetime.now()
+        secs = (global_stop_time - global_start_time).total_seconds()
+        timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
+        timings_file.write(f"{secs / 60}\n")
         if not args.tune_nosave:
             grid.save(ckpt_path)
         break

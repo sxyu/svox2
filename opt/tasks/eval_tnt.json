@@ -1,7 +1,7 @@
 {
     "eval": true,
     "data_root": "/home/sxyu/data/TanksAndTempleBG",
-    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/tnt_equirectlin_fasttv_autoscale",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/tnt_equirectlin_fasttv_autoscale_time",
     "variables": {
         "scene": ["Train", "M60", "Truck", "Playground"]
     },

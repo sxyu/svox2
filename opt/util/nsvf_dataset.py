@@ -146,15 +146,14 @@ class NSVFDataset:
                 warn('normalize_by_bbox=True but bbox.txt was not available')
         elif normalize_by_camera:
             norm_pose_files = sorted(os.listdir(path.join(root, pose_dir_name)), key=sort_key)
-            norm_pose_files = [x for x in norm_pose_files if not x.startswith('2_')]
             norm_poses = np.stack([np.loadtxt(path.join(root, pose_dir_name, x)).reshape(-1, 4)
                                     for x in norm_pose_files], axis=0)
 
             # Select subset of files
-            center = np.median(norm_poses[:, :3, 3], axis=0)
+            center = np.mean(norm_poses[:, :3, 3], axis=0)
             radius = np.median(np.linalg.norm(norm_poses[:, :3, 3] - center, axis=-1))
             self.c2w_f64[:, :3, 3] -= center
-            scene_scale = 1.0 / radius
+            scene_scale = 0.95 / radius
 
         print('scene_scale', scene_scale)
         self.c2w_f64[:, :3, 3] *= scene_scale

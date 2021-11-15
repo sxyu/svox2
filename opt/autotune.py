@@ -58,19 +58,14 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
         print('! RUN opt.py -t', train_dir)
         opt_cmd = ' '.join(opt_base_cmd + flags + common_flags)
         print(opt_cmd)
-        start_time = datetime.now()
         try:
             opt_ret = subprocess.check_output(opt_cmd, shell=True, env=env).decode(
                     sys.stdout.encoding)
         except subprocess.CalledProcessError:
             print('Error occurred while running OPT for exp', train_dir, 'on', env["CUDA_VISIBLE_DEVICES"])
             return
-        end_time = datetime.now()
         with open(log_file_path, 'w') as f:
             f.write(opt_ret)
-        secs = (end_time - start_time).total_seconds()
-        timings_file = open(os.path.join(train_dir, 'time_mins.txt'), 'a')
-        timings_file.write(f"{secs / 60}\n")
 
     if eval_mode:
         eval_base_cmd = [
