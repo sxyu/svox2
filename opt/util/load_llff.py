@@ -405,6 +405,7 @@ def load_llff_data(
     dists = np.sum(np.square(c2w[:3, 3] - train_poses[:, :3, 3]), -1)
     reference_view_id = np.argmin(dists)
     reference_depth = train_bds[reference_view_id]
+    print(reference_depth)
 
     return (
         reference_depth,

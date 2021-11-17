@@ -6,7 +6,7 @@ import numpy as np
 import random
 from multiprocessing import Process, Queue
 import os
-from os import path
+from os import path, listdir
 import argparse
 import json
 import subprocess
@@ -16,6 +16,7 @@ import itertools
 from warnings import warn
 from datetime import datetime
 import numpy as np
+from glob import glob
 
 parser = argparse.ArgumentParser()
 parser.add_argument("task_json", type=str)

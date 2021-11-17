@@ -150,6 +150,9 @@ group.add_argument('--eval_every', type=int, default=1,
 group.add_argument('--init_sigma', type=float,
                    default=0.1,
                    help='initialization sigma')
+group.add_argument('--init_sigma_bg', type=float,
+                   default=0.1,
+                   help='initialization sigma (for BG)')
 
 
 
@@ -166,7 +169,7 @@ group.add_argument('--density_thresh', type=float,
                     default=5.0,
                    help='Upsample sigma threshold')
 group.add_argument('--background_density_thresh', type=float,
-                    default=0.25,
+                    default=1.0+1e-9,
                    help='Background sigma threshold for sparsification')
 group.add_argument('--max_grid_elements', type=int,
                     default=44_000_000,
@@ -285,8 +288,8 @@ grid.sh_data.data[:] = 0.0
 grid.density_data.data[:] = args.init_sigma
 
 if grid.use_background:
-    grid.background_data.data[..., -1] = args.init_sigma
-    grid.background_data.data[..., :-1] = 0.0 / svox2.utils.SH_C0
+    grid.background_data.data[..., -1] = args.init_sigma_bg
+    #  grid.background_data.data[..., :-1] = 0.5 / svox2.utils.SH_C0
 
 #  grid.sh_data.data[:, 0] = 4.0
 #  osh = grid.density_data.data.shape
@@ -364,7 +367,7 @@ while True:
 
             # Standard set
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
-            N_IMGS_TO_SAVE = N_IMGS_TO_EVAL if not args.tune_mode else 1
+            N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
             img_ids = range(0, dset_test.n_images, img_eval_interval)
@@ -440,7 +443,7 @@ while True:
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0 or not args.tune_mode):
+    if epoch_id % max(factor, args.eval_every) == 0: #and (epoch_id > 0 or not args.tune_mode):
         # NOTE: we do an eval sanity check, if not in tune_mode
         eval_step()
         gc.collect()
@@ -516,6 +519,16 @@ while True:
                     grid.sh_data.data *= args.weight_decay_sigma
                 if args.weight_decay_sigma < 1.0:
                     grid.density_data.data *= args.weight_decay_sh
+
+            #  # For outputting the % sparsity of the gradient
+            #  indexer = grid.sparse_sh_grad_indexer
+            #  if indexer is not None:
+            #      if indexer.dtype == torch.bool:
+            #          nz = torch.count_nonzero(indexer)
+            #      else:
+            #          nz = indexer.size()
+            #      with open(os.path.join(args.train_dir, 'grad_sparsity.txt'), 'a') as sparsity_file:
+            #          sparsity_file.write(f"{gstep_id} {nz}\n")
 
             # Apply TV/Sparsity regularizers
             if args.lambda_tv > 0.0:

@@ -79,9 +79,9 @@ __device__ __inline__ void trace_ray_cuvol(
                 ray.l, ray.pos,
                 0);
         if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
-            sigma += 1e9;
+            ray.world_step = 1e9;
         }
-        if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
+        // if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
 
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
@@ -189,9 +189,9 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                 1,
                 ray.l, ray.pos,
                 0);
-        // if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
-        //     sigma += 1e9;
-        // }
+        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
+            ray.world_step = 1e9;
+        }
         // if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
         if (sigma > opt.sigma_thresh) {
             float lane_color = trilerp_cuvol_one(
@@ -324,7 +324,6 @@ __device__ __inline__ void render_background_forward(
             ray.pos[j] -= ray.l[j];
         }
 
-
         float sigma = trilerp_bg_one(
                 grid.background_links,
                 grid.background_data,
@@ -334,6 +333,10 @@ __device__ __inline__ void render_background_forward(
                 ray.l,
                 ray.pos,
                 3);
+
+        // if (i == n_steps - 1) {
+        //     ray.world_step = 1e9;
+        // }
         // if (opt.randomize && opt.random_sigma_std_background > 0.0)
         //     sigma += ray.rng.randn() * opt.random_sigma_std_background;
         if (sigma > 0.f) {
@@ -425,6 +428,10 @@ __device__ __inline__ void render_background_backward(
                 ray.l,
                 ray.pos,
                 3);
+        // if (i == n_steps - 1) {
+        //     ray.world_step = 1e9;
+        // }
+
         // if (opt.randomize && opt.random_sigma_std_background > 0.0)
         //     sigma += ray.rng.randn() * opt.random_sigma_std_background;
         if (sigma > 0.f) {

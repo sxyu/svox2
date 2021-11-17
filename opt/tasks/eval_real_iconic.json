@@ -1,0 +1,15 @@
+{
+    "eval": true,
+    "render": true,
+    "data_root": "/home/sxyu/data/real_iconic",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/real_iconic_mass_tv2x",
+    "variables": {
+        "scene": "[x for x in listdir('/home/sxyu/data/real_iconic') if path.isfile(path.join('/home/sxyu/data/real_iconic', x, 'poses_bounds.npy'))]"
+    },
+    "tasks": [{
+        "train_dir": "{scene}",
+        "data_dir": "{scene}",
+        "config": "configs/llff_hitv.json",
+        "eval_flags": ["--crop", "0.95"]
+    }]
+}

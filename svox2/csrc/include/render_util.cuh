@@ -556,18 +556,14 @@ struct ConcentricSpheresIntersector {
 
     // Get the far intersection, which we want for rendering MSI
     __device__
-    bool intersect(float r, float* __restrict__ out) {
+    bool intersect(float r, float* __restrict__ out, bool near=false) {
         float det = _det(r);
         if (det < 0) return false;
-        *out = (-qb + sqrtf(det)) / q2a;
-        return true;
-    }
-
-    __device__
-    bool intersect_near(float r, float* __restrict__ out) {
-        float det = _det(r);
-        if (det < 0) return false;
-        *out = (-qb - sqrtf(det)) / q2a;
+        if (near) {
+            *out = (-qb - sqrtf(det)) / q2a;
+        } else {
+            *out = (-qb + sqrtf(det)) / q2a;
+        }
         return true;
     }
 

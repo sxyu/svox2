@@ -52,7 +52,7 @@ Tensor tv(Tensor, Tensor, int, int, bool, float, bool, float, float);
 void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, float, float,
              Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
-                    float, bool, float, float, Tensor);
+                    float, bool, bool, float, float, Tensor);
 void msi_tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
 void lumisphere_tv_grad_sparse(SparseGridSpec &, Tensor, Tensor, Tensor, float,
                                float, float, float, GridOutputGrads &);
@@ -139,10 +139,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("stop_thresh", &RenderOptions::stop_thresh)
       .def_readwrite("near_clip", &RenderOptions::near_clip)
       .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque)
-      .def_readwrite("randomize", &RenderOptions::randomize)
-      .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
-      .def_readwrite("random_sigma_std_background",
-                     &RenderOptions::random_sigma_std_background)
+      // .def_readwrite("randomize", &RenderOptions::randomize)
+      // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
+      // .def_readwrite("random_sigma_std_background",
+      //                &RenderOptions::random_sigma_std_background)
       .def_readwrite("_m1", &RenderOptions::_m1)
       .def_readwrite("_m2", &RenderOptions::_m2)
       .def_readwrite("_m3", &RenderOptions::_m3);

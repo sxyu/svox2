@@ -40,6 +40,10 @@ parser.add_argument('--no_vid',
                     action='store_true',
                     default=False,
                     help="Disable video generation")
+parser.add_argument('--no_imsave',
+                    action='store_true',
+                    default=False,
+                    help="Disable image saving (can still save video; MUCH faster)")
 parser.add_argument('--fps',
                     type=int,
                     default=30,
@@ -58,6 +62,10 @@ parser.add_argument('--near_clip',
                     type=float,
                     default=0.0,
                     help="Near clip of poses (in voxels)")
+parser.add_argument('--crop',
+                    type=float,
+                    default=1.0,
+                    help="Crop (0, 1], 1.0 = full image")
 
 # Foreground/background only
 parser.add_argument('--nofg',
@@ -91,6 +99,8 @@ if args.timing:
 if not args.no_lpips:
     import lpips
     lpips_vgg = lpips.LPIPS(net="vgg").eval().to(device)
+if not path.isfile(args.ckpt):
+    args.ckpt = path.join(args.ckpt, 'ckpt.npz')
 
 render_dir = path.join(path.dirname(args.ckpt),
             'train_renders' if args.train else 'test_renders')
@@ -100,12 +110,18 @@ if args.render_path:
     render_dir += '_path'
     want_metrics = False
 
+# Handle various image transforms
 if args.z_shift != 0:
     render_dir += f'_zshift{args.z_shift}'
 if args.near_clip != 0:
     render_dir += f'_nclip{args.near_clip}'
 if args.xy_shrink != 1.0:
     render_dir += f'_xy_shrink{args.xy_shrink}'
+if not args.render_path:
+    # Do not crop if not render_path
+    args.crop = 1.0
+if args.crop != 1.0:
+    render_dir += f'_crop{args.crop}'
 if args.ray_len:
     render_dir += f'_raylen'
     want_metrics = False
@@ -147,9 +163,12 @@ with torch.no_grad():
     avg_ssim = 0.0
     avg_lpips = 0.0
     n_images_gen = 0
+    w = dset.w if args.crop == 1.0 else int(dset.w * args.crop)
+    h = dset.h if args.crop == 1.0 else int(dset.h * args.crop)
     cam = svox2.Camera(torch.tensor(0), dset.intrins.fx, dset.intrins.fy,
-                       dset.intrins.cx, dset.intrins.cy,
-                       dset.w, dset.h,
+                       dset.intrins.cx + (w - dset.w) * 0.5,
+                       dset.intrins.cy + (h - dset.h) * 0.5,
+                       w, h,
                        ndc_coeffs=dset.ndc_coeffs)
     c2ws = dset.render_c2w.to(device=device) if args.render_path else dset.c2w.to(device=device)
     if args.z_shift != 0.0:
@@ -158,6 +177,21 @@ with torch.no_grad():
         c2ws[:, :2, 3] *= args.xy_shrink
     if args.near_clip != 0.0:
         grid.opt.near_clip = args.near_clip
+    # DEBUGGING
+    #  rad = [1.496031746031746, 1.6613756613756614, 1.0]
+    #  half_sz = [grid.links.size(0) // 2, grid.links.size(1) // 2]
+    #  pad_size_x = int(half_sz[0] - half_sz[0] / 1.496031746031746)
+    #  pad_size_y = int(half_sz[1] - half_sz[1] / 1.6613756613756614)
+    #  print(pad_size_x, pad_size_y)
+    #  grid.links[:pad_size_x] = -1
+    #  grid.links[-pad_size_x:] = -1
+    #  grid.links[:, :pad_size_y] = -1
+    #  grid.links[:, -pad_size_y:] = -1
+    #  grid.links[:, :, -8:] = -1
+
+    #  LAYER = -16
+    #  grid.links[:, :, :LAYER] = -1
+    #  grid.links[:, :, LAYER+1:] = -1
 
     frames = []
     im_gt_all = dset.gt.to(device=device)
@@ -196,7 +230,8 @@ with torch.no_grad():
             im = np.concatenate([im_gt, im], axis=1)
         if not args.timing:
             im = (im * 255).astype(np.uint8)
-            imageio.imwrite(img_path,im)
+            if not args.no_imsave:
+                imageio.imwrite(img_path,im)
             if not args.no_vid:
                 frames.append(im)
         im = None

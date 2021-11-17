@@ -145,7 +145,6 @@ class LLFFDataset(Dataset):
             # Apply alpha channel
             self.gt = self.gt[..., :3] * self.gt[..., 3:] + (1.0 - self.gt[..., 3:])
         self.c2w = torch.stack(all_c2w)
-        #  bds_scale = 1.0 / (self.sfm.dmin * 0.75) # 0.9
         bds_scale = 1.0
         self.z_bounds = [self.sfm.dmin * bds_scale, self.sfm.dmax * bds_scale]
         if bds_scale != 1.0:

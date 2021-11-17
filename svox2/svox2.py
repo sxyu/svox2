@@ -50,9 +50,6 @@ class RenderOptions:
     random_sigma_std_background: float = 1.0        # Noise to add to sigma
                                                     # (for the BG model; only if randomize=True)
 
-    #  msi_start_layer: int = 0
-    #  msi_end_layer: int = 66
-
     def _to_cpp(self, randomize: bool = False):
         """
         Generate object to pass to C++
@@ -65,21 +62,18 @@ class RenderOptions:
         opt.near_clip = self.near_clip
 
         opt.last_sample_opaque = self.last_sample_opaque
-        opt.randomize = randomize
-        opt.random_sigma_std = self.random_sigma_std
-        opt.random_sigma_std_background = self.random_sigma_std_background
+        #  opt.randomize = randomize
+        #  opt.random_sigma_std = self.random_sigma_std
+        #  opt.random_sigma_std_background = self.random_sigma_std_background
 
-        #  opt.msi_start_layer = self.msi_start_layer
-        #  opt.msi_end_layer = self.msi_end_layer
-
-        if randomize:
-            # For our RNG
-            UINT32_MAX = 2**32-1
-            opt._m1 = np.random.randint(0, UINT32_MAX)
-            opt._m2 = np.random.randint(0, UINT32_MAX)
-            opt._m3 = np.random.randint(0, UINT32_MAX)
-            if opt._m2 == opt._m3:
-                opt._m3 += 1  # Prevent all equal case
+        #  if randomize:
+        #      # For our RNG
+        #      UINT32_MAX = 2**32-1
+        #      opt._m1 = np.random.randint(0, UINT32_MAX)
+        #      opt._m2 = np.random.randint(0, UINT32_MAX)
+        #      opt._m3 = np.random.randint(0, UINT32_MAX)
+        #      if opt._m2 == opt._m3:
+        #          opt._m3 += 1  # Prevent all equal case
         # Note that the backend option is handled in Python
         return opt
 
@@ -1127,7 +1121,7 @@ class SparseGrid(nn.Module):
         :return: (H, W, 3), predicted RGB image
         """
         imrend_fn_name = f"volume_render_{self.opt.backend}_image"
-        if self.basis_type != BASIS_TYPE_MLP and imrend_fn_name in _C.__dict__ and not torch.is_grad_enabled():
+        if self.basis_type != BASIS_TYPE_MLP and imrend_fn_name in _C.__dict__ and not torch.is_grad_enabled() and not return_raylen:
             # Use the fast image render kernel if available
             cu_fn = _C.__dict__[imrend_fn_name]
             return cu_fn(
@@ -1277,7 +1271,8 @@ class SparseGrid(nn.Module):
                         sample_vals_density, cam._to_cpp(),
                         0.5,
                         weight_render_stop_thresh,
-                        self.opt.last_sample_opaque,
+                        #  self.opt.last_sample_opaque,
+                        False,
                         offset, scaling, max_wt_grid
                     )
                     #  if i % 5 == 0:
@@ -1636,6 +1631,7 @@ class SparseGrid(nn.Module):
         assert (
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for total variation"
+        assert not logalpha, "No longer supported"
         return _TotalVariationFunction.apply(
                 self.density_data, self.links, 0, 1, logalpha, logalpha_delta,
                 False, ndc_coeffs)
@@ -1658,6 +1654,7 @@ class SparseGrid(nn.Module):
         assert (
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for total variation"
+        assert not logalpha, "No longer supported"
         if end_dim is None:
             end_dim = self.sh_data.size(1)
         end_dim = end_dim + self.sh_data.size(1) if end_dim < 0 else end_dim
@@ -1691,6 +1688,7 @@ class SparseGrid(nn.Module):
             _C is not None and self.density_data.is_cuda and grad.is_cuda
         ), "CUDA extension is currently required for total variation"
 
+        assert not logalpha, "No longer supported"
         rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
         if rand_cells is not None:
             if rand_cells.size(0) > 0:
@@ -1700,6 +1698,7 @@ class SparseGrid(nn.Module):
                         0, 1, scaling,
                         logalpha, logalpha_delta,
                         False,
+                        self.opt.last_sample_opaque,
                         ndc_coeffs[0], ndc_coeffs[1],
                         grad)
         else:
@@ -1734,6 +1733,7 @@ class SparseGrid(nn.Module):
         assert (
             _C is not None and self.sh_data.is_cuda and grad.is_cuda
         ), "CUDA extension is currently required for total variation"
+        assert not logalpha, "No longer supported"
         if end_dim is None:
             end_dim = self.sh_data.size(1)
         end_dim = end_dim + self.sh_data.size(1) if end_dim < 0 else end_dim
@@ -1751,6 +1751,7 @@ class SparseGrid(nn.Module):
                                   logalpha,
                                   logalpha_delta,
                                   True,
+                                  False,
                                   ndc_coeffs[0], ndc_coeffs[1],
                                   grad)
         else:
@@ -2168,7 +2169,7 @@ class SparseGrid(nn.Module):
         if sparse_frac < 1.0 or force:
             assert self.sparse_grad_indexer is None or self.sparse_grad_indexer.dtype == torch.bool, \
                    "please call sparse loss after rendering and before gradient updates"
-            grid_size = (self.links.size(0) - 1) * (self.links.size(1) - 1) * (self.links.size(2) - 1)
+            grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
             sparse_num = max(int(sparse_frac * grid_size), 1)
             if contiguous:
                 start = np.random.randint(0, grid_size - sparse_num + 1)
@@ -2186,7 +2187,7 @@ class SparseGrid(nn.Module):
                "please call sparse loss after rendering and before gradient updates"
         grid_size = self.background_links.size(0) \
                     * self.background_links.size(1) \
-                    * (self.background_data.size(1) - 1)
+                    * self.background_data.size(1)
         sparse_num = max(int(sparse_frac * grid_size), 1)
         if contiguous:
             start = np.random.randint(0, grid_size - sparse_num + 1)

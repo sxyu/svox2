@@ -122,9 +122,9 @@ struct RenderOptions {
 
   bool last_sample_opaque;
 
-  bool randomize;
-  float random_sigma_std;
-  float random_sigma_std_background;
+  // bool randomize;
+  // float random_sigma_std;
+  // float random_sigma_std_background;
   // 32-bit RNG state masks
   uint32_t _m1, _m2, _m3;
 
