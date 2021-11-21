@@ -1,4 +1,6 @@
+# Standard NeRF Blender dataset loader
 from .util import Rays, Intrin, select_or_shuffle_rays
+from .dataset_base import DatasetBase
 import torch
 import torch.nn.functional as F
 from typing import NamedTuple, Optional, Union
@@ -10,7 +12,7 @@ import json
 import numpy as np
 
 
-class NeRFDataset:
+class NeRFDataset(DatasetBase):
     """
     NeRF dataset loader
     """
@@ -38,6 +40,7 @@ class NeRFDataset:
         n_images = None,
         **kwargs
     ):
+        super().__init__()
         assert path.isdir(root), f"'{root}' is not a directory"
 
         if scene_scale is None:
@@ -111,53 +114,5 @@ class NeRFDataset:
             self.h, self.w = self.h_full, self.w_full
             self.intrins : Intrin = self.intrins_full
 
-        # Hardcoded; adjust scene_scale to make sure the scene fits in a unit sphere
-        self.scene_center = [0.0, 0.0, 0.0]
-        self.scene_radius = 1.0
-        self.ndc_coeffs = (-1.0, -1.0)  # disable
-        self.use_sphere_bound = True
         self.should_use_background = False  # Give warning
 
-    def gen_rays(self, factor=1):
-        print(" Generating rays, scaling factor", factor)
-        # Generate rays
-        self.factor = factor
-        self.h = self.h_full // factor
-        self.w = self.w_full // factor
-        true_factor = self.h_full / self.h
-        self.intrins = self.intrins_full.scale(1.0 / true_factor)
-        yy, xx = torch.meshgrid(
-            torch.arange(self.h, dtype=torch.float32) + 0.5,
-            torch.arange(self.w, dtype=torch.float32) + 0.5,
-        )
-        xx = (xx - self.intrins.cx) / self.intrins.fx
-        yy = (yy - self.intrins.cy) / self.intrins.fy
-        zz = torch.ones_like(xx)
-        dirs = torch.stack((xx, yy, zz), dim=-1)  # OpenCV convention
-        dirs /= torch.norm(dirs, dim=-1, keepdim=True)
-        dirs = dirs.reshape(1, -1, 3, 1)
-        del xx, yy, zz
-        dirs = (self.c2w[:, None, :3, :3] @ dirs)[..., 0]
-
-        if factor != 1:
-            gt = F.interpolate(
-                self.gt.permute([0, 3, 1, 2]), size=(self.h, self.w), mode="area"
-            ).permute([0, 2, 3, 1])
-            gt = gt.reshape(self.n_images, -1, 3)
-        else:
-            gt = self.gt.reshape(self.n_images, -1, 3)
-        origins = self.c2w[:, None, :3, 3].expand(-1, self.h * self.w, -1).contiguous()
-        if self.split == "train":
-            origins = origins.view(-1, 3)
-            dirs = dirs.view(-1, 3)
-            gt = gt.reshape(-1, 3)
-
-        self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
-        self.rays = self.rays_init
-
-    def shuffle_rays(self):
-        """
-        Shuffle all rays
-        """
-        if self.split == "train":
-            self.rays = select_or_shuffle_rays(self.rays_init, self.permutation, self.epoch_size, self.device)

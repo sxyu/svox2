@@ -3,6 +3,7 @@ Run COLMAP on a folder of images
 Requires colmap installed
 """
 # Copyright 2021 Oliver Wang (Adobe Research), with modifications by Alex Yu
+# Similar version also found https://github.com/kwea123/nsff_pl/blob/master/preprocess.py 
 
 import cv2
 import moviepy
@@ -19,6 +20,7 @@ import torchvision
 import glob
 import numpy as np
 from tqdm import tqdm
+from warnings import warn
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -90,7 +92,7 @@ def read_colmap(strPath):
     return objCameras, objPoints
 
 
-def compute_masks(vid_root, args, overwrite=False):
+def generate_masks(vid_root, args, overwrite=False):
     print('compute masks')
     vid_name = os.path.basename(vid_root)
 
@@ -152,6 +154,33 @@ def compute_masks(vid_root, args, overwrite=False):
         cv2.imwrite(filename=out_mask_fn, img=mask_np)
 
 
+def resize_frames(vid_root, args):
+    vid_name = os.path.basename(vid_root)
+    frames_dir = os.path.join(vid_root, args.images_resized)
+    os.makedirs(frames_dir, exist_ok=True)
+
+    files = sorted(
+        glob.glob(os.path.join(vid_root, args.image_input, '*.jpg')) +
+        glob.glob(os.path.join(vid_root, args.image_input, '*.png')))
+
+    print('Resizing images ...')
+    for file_ind, file in enumerate(tqdm(files, desc=f'imresize: {vid_name}')):
+        out_frame_fn = f'{frames_dir}/{file_ind:05}.png'
+
+        # skip if both the output frame and the mask exist
+        if os.path.exists(out_frame_fn) and not args.overwrite:
+            continue
+
+        im = cv2.imread(file)
+
+        # resize if too big
+        if im.shape[1] > args.max_width or im.shape[0] > args.max_height:
+            factor = max(im.shape[1] / args.max_width, im.shape[0] / args.max_height)
+            dsize = (int(im.shape[1] / factor), int(im.shape[0] / factor))
+            im = cv2.resize(src=im, dsize=dsize, interpolation=cv2.INTER_AREA)
+
+        cv2.imwrite(out_frame_fn, im)
+
 def run_colmap(vid_root, args, overwrite=False):
     max_num_matches = 132768
     overlap_frames = 75  # only used with sequential matching
@@ -161,14 +190,15 @@ def run_colmap(vid_root, args, overwrite=False):
     extractor_cmd = f'''
         colmap feature_extractor \
             --database_path={vid_root}/database.db \
-            --image_path={vid_root}/{args.image_input}\
-            --ImageReader.mask_path={vid_root}/masks \
-            --ImageReader.camera_model=SIMPLE_PINHOLE \
+            --image_path={vid_root}/{args.images_resized}\
+            --ImageReader.camera_model=SIMPLE_RADIAL \
             --ImageReader.single_camera=1 \
             --ImageReader.default_focal_length_factor=0.95 \
             --SiftExtraction.peak_threshold=0.004 \
             --SiftExtraction.max_num_features=8192 \
             --SiftExtraction.edge_threshold=16'''
+    if args.use_masks:
+        extractor_cmd += ' --ImageReader.mask_path={vid_root}/masks'
     known_intrin = False
     if args.known_intrin:
         intrin_path = os.path.join(vid_root, 'intrinsics.txt')
@@ -194,6 +224,7 @@ def run_colmap(vid_root, args, overwrite=False):
                 --SiftMatching.max_distance=0.7 \
                 --SiftMatching.max_num_matches={max_num_matches}''')
     else:
+        warn("Using sequential matcher, which may be worse")
         os.system(f'''
             colmap sequential_matcher \
                 --database_path={vid_root}/database.db \
@@ -208,7 +239,7 @@ def run_colmap(vid_root, args, overwrite=False):
     mapper_cmd = f'''
         colmap mapper \
             --database_path={vid_root}/database.db \
-            --image_path={vid_root}/{args.image_input } \
+            --image_path={vid_root}/{args.images_resized} \
             --output_path={vid_root}/sparse '''
 
     if known_intrin and args.fix_intrin:
@@ -218,6 +249,16 @@ def run_colmap(vid_root, args, overwrite=False):
             --Mapper.ba_refine_extra_params=0 '''
 
     os.system(mapper_cmd)
+    
+    undist_dir = os.path.join(vid_root, args.undistorted_output)
+    if not os.path.exists(undist_dir) or args.overwrite:
+        os.makedirs(undist_dir, exist_ok=True)
+        os.system(f'''
+            colmap image_undistorter \
+                --input_path={vid_root}/sparse/0 \
+                --image_path={vid_root}/{args.images_resized} \
+                --output_path={vid_root} \
+                --output_type=COLMAP''')
 
 
 def render_movie(vid_root, args):
@@ -301,15 +342,25 @@ def compute_poses(vid_root, args, overwrite=False):
 def preprocess(vid_root, args):
     print(f'processing: {vid_root}')
 
-    frames_dir = os.path.join(vid_root, 'images')
+    frames_dir = os.path.join(vid_root, args.image_input)
     if not os.path.exists(frames_dir):
-        print(f'Error: images need to be in the location: {frames_dir}')
-        sys.exit(1)
+        files = os.listdir(vid_root)
+        os.makedirs(frames_dir)
+        print(f'Moving images to {frames_dir}')
+        for fname in files:
+            src_path = os.path.join(vid_root, fname)
+            if not os.path.isfile(src_path):
+                continue
+            ext = os.path.splitext(fname)[1].upper()
+            if ext == '.PNG' or ext == '.JPG' or ext == '.JPEG' or ext == '.EXR':
+                os.rename(src_path, os.path.join(frames_dir, fname))
 
     overwrite = True
     if not args.debug_only:
+        resize_frames(vid_root, args)
         # colmap
-        compute_masks(vid_root, args, overwrite=overwrite)
+        if args.use_masks:
+            generate_masks(vid_root, args, overwrite=overwrite)
         run_colmap(vid_root, args, overwrite=overwrite)
     render_movie(vid_root, args)
 
@@ -319,29 +370,27 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run COLMAP baseline')
     parser.add_argument(
-        '--vids', type=str, default=None, help='path to folder of videos with vidname/frames')
-    parser.add_argument(
-        '--vid', type=str, default=None, help='path to root with frames folder')
-    parser.add_argument('--colmap-root', type=str, default='/opt/github/colmap')
-    parser.add_argument('--image-input', default='images', help='location for source images')
+        'vids', type=str, nargs='+', help='path to root with frames folder')
+    parser.add_argument('--colmap-root', type=str, default='/home/sxyu/builds/colmap',
+                help="COLMAP installation dir (only needed for vocab tree in case of sequential matcher)")
+    parser.add_argument('--image-input', default='raw', help='location for source images')
     parser.add_argument('--mask-output', default='masks', help='location to store motion masks')
     parser.add_argument('--known-intrin', action='store_true', default=False, help='use intrinsics in <root>/intrinsics.txt if available')
     parser.add_argument('--fix-intrin', action='store_true', default=False, help='fix intrinsics in bundle adjustment, only used if --known-intrin is given and intrinsics.txt exists')
     parser.add_argument('--debug-only', action='store_true', default=False, help='only render debug video')
+    parser.add_argument('--use-masks', action='store_true', default=False, help='use automatic masks')
+    parser.add_argument(
+                    '--images-resized', default='images_resized', help='location for resized/renamed images')
     parser.add_argument(
         '--do-sequential', action='store_true', default=False, help='sequential rather than exhaustive matching')
+    parser.add_argument('--max-width', type=int, default=1280, help='max image width')
+    parser.add_argument('--max-height', type=int, default=720, help='max image height')
+    parser.add_argument(
+            '--undistorted-output', default='images', help='location of undistorted images')
 
     args = parser.parse_args()
 
-    # add arg-path based imports
-    # colmap
-    sys.path.insert(0, args.colmap_root + '/scripts/python')
-    import read_write_model
+    from vendor import read_write_model
 
-    if args.vids is not None:
-        vids = sorted([d for d in glob.glob(args.vids + '/*') if os.path.isdir(d)])
-    else:
-        vids = [args.vid]
-
-    for vid in vids:
+    for vid in args.vids:
         preprocess(vid_root=vid, args=args)

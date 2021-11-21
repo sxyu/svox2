@@ -5,6 +5,8 @@ Usage: <colmap_root_dir>/sparse/0 (or replace 0 with some other partial map)
 Add -s <number> to tune the world scale (default 1). You can tune this by
 view_colmap_data.py or other tools.
 
+NOTE: This file should probably be merged into the run_colmap.py
+
 IMPORTANT: The dataset will not be split into train/test sets as currently required by
 our code.  You need to append 1_ before test set image names and 0_ before train set image names.
 Use python create_split.py <colmap_root_dir> to split it automatically if lazy.
@@ -348,7 +350,7 @@ def main():
 
         imfile_name = osp.splitext(osp.basename(im.name))[0]
         pose_path = osp.join(pose_dir, imfile_name + ".txt")
-        feat_path = osp.join(feat_dir, imfile_name + ".npz")
+        feat_path = osp.join(feat_dir, imfile_name + ".npz")  # NOT USED but maybe nice?
         np.savetxt(pose_path, c2w)
         np.savez(feat_path, xys=xys, ids=point3d_ids)
     print(" Total cameras:", len(imdata))

@@ -50,14 +50,6 @@ parser.add_argument('--fps',
                     help="FPS of video")
 
 # Camera adjustment
-parser.add_argument('--xy_shrink',
-                    type=float,
-                    default=1.0,
-                    help="Multiply xy poses")
-parser.add_argument('--z_shift',
-                    type=float,
-                    default=0.0,
-                    help="Amount of z to add to poses")
 parser.add_argument('--near_clip',
                     type=float,
                     default=0.0,
@@ -111,12 +103,8 @@ if args.render_path:
     want_metrics = False
 
 # Handle various image transforms
-if args.z_shift != 0:
-    render_dir += f'_zshift{args.z_shift}'
 if args.near_clip != 0:
     render_dir += f'_nclip{args.near_clip}'
-if args.xy_shrink != 1.0:
-    render_dir += f'_xy_shrink{args.xy_shrink}'
 if not args.render_path:
     # Do not crop if not render_path
     args.crop = 1.0
@@ -143,6 +131,10 @@ if grid.use_background:
         #  grid.sh_data.data[..., 18] = 1.0 / svox2.utils.SH_C0
         render_dir += '_nofg'
 
+    # DEBUG
+    #  grid.links.data[grid.links.size(0)//2:] = -1
+    #  render_dir += "_chopx2"
+
 config_util.setup_render_opts(grid.opt, args)
 
 if args.blackbg:
@@ -156,25 +148,13 @@ os.makedirs(render_dir, exist_ok=True)
 # NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
 # other backends will manually generate rays per frame (slow)
 with torch.no_grad():
-    im_size = dset.h * dset.w
     n_images = dset.render_c2w.size(0) if args.render_path else dset.n_images
     img_eval_interval = max(n_images // args.n_eval, 1)
     avg_psnr = 0.0
     avg_ssim = 0.0
     avg_lpips = 0.0
     n_images_gen = 0
-    w = dset.w if args.crop == 1.0 else int(dset.w * args.crop)
-    h = dset.h if args.crop == 1.0 else int(dset.h * args.crop)
-    cam = svox2.Camera(torch.tensor(0), dset.intrins.fx, dset.intrins.fy,
-                       dset.intrins.cx + (w - dset.w) * 0.5,
-                       dset.intrins.cy + (h - dset.h) * 0.5,
-                       w, h,
-                       ndc_coeffs=dset.ndc_coeffs)
     c2ws = dset.render_c2w.to(device=device) if args.render_path else dset.c2w.to(device=device)
-    if args.z_shift != 0.0:
-        c2ws[:, 2, 3] += args.z_shift
-    if args.xy_shrink != 1.0:
-        c2ws[:, :2, 3] *= args.xy_shrink
     if args.near_clip != 0.0:
         grid.opt.near_clip = args.near_clip
     # DEBUGGING
@@ -194,10 +174,21 @@ with torch.no_grad():
     #  grid.links[:, :, LAYER+1:] = -1
 
     frames = []
-    im_gt_all = dset.gt.to(device=device)
+    #  im_gt_all = dset.gt.to(device=device)
 
     for img_id in tqdm(range(0, n_images, img_eval_interval)):
-        cam.c2w = c2ws[img_id]
+        dset_h, dset_w = dset.get_image_size(img_id)
+        im_size = dset_h * dset_w
+        w = dset_w if args.crop == 1.0 else int(dset_w * args.crop)
+        h = dset_h if args.crop == 1.0 else int(dset_h * args.crop)
+
+        cam = svox2.Camera(c2ws[img_id],
+                           dset.intrins.get('fx', img_id),
+                           dset.intrins.get('fy', img_id),
+                           dset.intrins.get('cx', img_id) + (w - dset_w) * 0.5,
+                           dset.intrins.get('cy', img_id) + (h - dset_h) * 0.5,
+                           w, h,
+                           ndc_coeffs=dset.ndc_coeffs)
         im = grid.volume_render_image(cam, use_kernel=True, return_raylen=args.ray_len)
         if args.ray_len:
             minv, meanv, maxv = im.min().item(), im.mean().item(), im.max().item()
@@ -208,7 +199,7 @@ with torch.no_grad():
         im.clamp_(0.0, 1.0)
 
         if not args.render_path:
-            im_gt = im_gt_all[img_id]
+            im_gt = dset.gt[img_id].to(device=device)
             mse = (im - im_gt) ** 2
             mse_num : float = mse.mean().item()
             psnr = -10.0 * math.log10(mse_num)

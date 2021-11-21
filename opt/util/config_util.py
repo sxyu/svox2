@@ -25,6 +25,10 @@ def define_common_args(parser : argparse.ArgumentParser):
                          type=float,
                          default=None,
                          help="Image scale, e.g. 0.5 for half resolution (or use dataset default)")
+    group.add_argument('--seq_id',
+                         type=int,
+                         default=1000,
+                         help="Sequence ID (for CO3D only)")
     group.add_argument('--epoch_size',
                          type=int,
                          default=12800,
@@ -45,6 +49,10 @@ def define_common_args(parser : argparse.ArgumentParser):
                          type=float,
                          default=1.2,
                          help="Data bbox scaling (NSVF dataset only)")
+    group.add_argument('--cam_scale_factor',
+                         type=float,
+                         default=0.95,
+                         help="Camera autoscale factor (NSVF/CO3D dataset only)")
     group.add_argument('--normalize_by_camera',
                          type=bool,
                          default=True,
@@ -98,6 +106,7 @@ def build_data_options(args):
     """
     return {
         'dataset_type': args.dataset_type,
+        'seq_id': args.seq_id,
         'epoch_size': args.epoch_size * args.__dict__.get('batch_size', 5000),
         'scene_scale': args.scene_scale,
         'scale': args.scale,
@@ -105,6 +114,7 @@ def build_data_options(args):
         'hold_every': args.llffhold,
         'normalize_by_bbox': args.normalize_by_bbox,
         'data_bbox_scale': args.data_bbox_scale,
+        'cam_scale_factor': args.cam_scale_factor,
         'normalize_by_camera': args.normalize_by_camera,
         'permutation': args.perm
     }

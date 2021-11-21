@@ -9,7 +9,6 @@ data_set_root should contain directories like images/, pose/
 # Copyright 2021 Alex Yu
 import os
 import os.path as osp
-import click
 from typing import NamedTuple, List
 import argparse
 import random
@@ -18,6 +17,7 @@ parser = argparse.ArgumentParser("Automatic dataset splitting")
 parser.add_argument('root_dir', type=str, help="COLMAP dataset root dir")
 parser.add_argument('--every', type=int, default=8, help="Every x images used for testing")
 parser.add_argument('--dry_run', action='store_true', help="Dry run, prints renames without modifying any files")
+parser.add_argument('--yes', '-y', action='store_true', help="Answer yes")
 parser.add_argument('--random', action='store_true', help="If set, chooses the split randomly rather than at a fixed interval "
                                                           "(but number of images in train/test set is same)")
 args = parser.parse_args()
@@ -52,7 +52,11 @@ dirs, dir_idx = list_filter_dirs(args.root_dir)
 
 refdir = dirs[dir_idx]
 print("going to split", [x.name for x in dirs], "reference", refdir.name)
-if args.dry_run or click.confirm("Continue?", default=True):
+do_proceed = args.dry_run or args.yes
+if not do_proceed:
+    import click
+    do_proceed = click.confirm("Continue?", default=True)
+if do_proceed:
     filedata = {}
     base_files = [osp.splitext(x)[0] for x in sorted(os.listdir(refdir.name))
                   if osp.splitext(x)[1].lower() in refdir.valid_exts]

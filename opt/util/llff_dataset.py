@@ -1,3 +1,6 @@
+# LLFF-format Forward-facing dataset loader
+# Please use the LLFF code to run COLMAP & convert 
+#
 # Adapted from NeX data loading code (NOT using their hand picked bounds)
 # Entry point: LLFFDataset
 #
@@ -5,7 +8,7 @@
 # Copyright (c) 2021 VISTEC - Vidyasirimedhi Institute of Science and Technology
 # Distribute under MIT License
 
-from torch.utils.data import Dataset
+#from torch.utils.data import Dataset
 from scipy.spatial.transform import Rotation
 import struct
 import json
@@ -20,13 +23,14 @@ from collections import deque
 from tqdm import tqdm
 import imageio
 import cv2
-from .util import Rays, Intrin, select_or_shuffle_rays
+from .util import Rays, Intrin
+from .dataset_base import DatasetBase
 from .load_llff import load_llff_data
 from typing import Union, Optional
 
 from svox2.utils import convert_to_ndc
 
-class LLFFDataset(Dataset):
+class LLFFDataset(DatasetBase):
     """
     LLFF dataset loader adapted from NeX code
     Some arguments are inherited from them and not super useful in our case
@@ -50,6 +54,7 @@ class LLFFDataset(Dataset):
         offset=250,
         **kwargs
     ):
+        super().__init__()
         if scale is None:
             scale = 1.0 / 4.0  # Default 1/4 size for LLFF data since it's huge
         self.scale = scale
@@ -179,56 +184,18 @@ class LLFFDataset(Dataset):
         self.use_sphere_bound = False
 
     def gen_rays(self, factor=1):
-        print(" Generating rays, scaling factor", factor)
-        # Generate rays
-        self.factor = factor
-        self.h = self.h_full // factor
-        self.w = self.w_full // factor
-        true_factor = self.h_full / self.h
-        self.intrins = self.intrins_full.scale(1.0 / true_factor)
-        yy, xx = torch.meshgrid(
-            torch.arange(self.h, dtype=torch.float32) + 0.5,
-            torch.arange(self.w, dtype=torch.float32) + 0.5,
-        )
-        xx = (xx - self.intrins.cx) / self.intrins.fx
-        yy = (yy - self.intrins.cy) / self.intrins.fy
-        zz = torch.ones_like(xx)
-        dirs = torch.stack((xx, yy, zz), dim=-1)  # OpenCV convention
-        dirs /= torch.norm(dirs, dim=-1, keepdim=True)
-        dirs = dirs.reshape(1, -1, 3, 1)
-        del xx, yy, zz
-        dirs = (self.c2w[:, None, :3, :3] @ dirs)[..., 0]
-
-        if factor != 1:
-            gt = F.interpolate(
-                self.gt.permute([0, 3, 1, 2]), size=(self.h, self.w), mode="area"
-            ).permute([0, 2, 3, 1])
-            gt = gt.reshape(self.n_images, -1, 3)
-        else:
-            gt = self.gt.reshape(self.n_images, -1, 3)
-        origins = self.c2w[:, None, :3, 3].expand(-1, self.h * self.w, -1).contiguous()
-        if self.split == "train":
-            origins = origins.view(-1, 3)
-            dirs = dirs.view(-1, 3)
-            gt = gt.reshape(-1, 3)
-
-        # To NDC
+        super().gen_rays(factor)
+        # To NDC (currently, we are normalizing these rays unlike NeRF,
+        #  may not be ideal)
         origins, dirs = convert_to_ndc(
-                origins,
-                dirs,
+                self.rays.origins,
+                self.rays.dirs,
                 self.ndc_coeffs)
         dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 
-        self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
+        self.rays_init = Rays(origins=origins, dirs=dirs, gt=self.rays.gt)
         self.rays = self.rays_init
 
-    def shuffle_rays(self):
-        """
-        Shuffle all rays
-        """
-        if self.split == "train":
-            del self.rays
-            self.rays = select_or_shuffle_rays(self.rays_init, self.permutation, self.epoch_size, self.device)
 
 
 class SfMData:

@@ -106,6 +106,8 @@ group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
 group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 
+group.add_argument('--lr_fg_begin_step', type=int, default=0, help="Foreground begins training at given step number")
+
 # BG LRs
 group.add_argument('--bg_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Background optimizer")
 group.add_argument('--lr_sigma_bg', type=float, default=3e0,
@@ -285,7 +287,7 @@ grid = svox2.SparseGrid(reso=reso_list[reso_id],
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
-grid.density_data.data[:] = args.init_sigma
+grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
 
 if grid.use_background:
     grid.background_data.data[..., -1] = args.init_sigma_bg
@@ -323,13 +325,13 @@ gstep_id_base = 0
 
 resample_cameras = [
         svox2.Camera(c2w.to(device=device),
-                     dset.intrins.fx,
-                     dset.intrins.fy,
-                     dset.intrins.cx,
-                     dset.intrins.cy,
-                     width=dset.w,
-                     height=dset.h,
-                     ndc_coeffs=dset.ndc_coeffs) for c2w in dset.c2w
+                     dset.intrins.get('fx', i),
+                     dset.intrins.get('fy', i),
+                     dset.intrins.get('cx', i),
+                     dset.intrins.get('cy', i),
+                     width=dset.get_image_size(i)[1],
+                     height=dset.get_image_size(i)[0],
+                     ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(dset.c2w)
     ]
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
@@ -383,12 +385,12 @@ while True:
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset_test.c2w[img_id].to(device=device)
                 cam = svox2.Camera(c2w,
-                                   dset_test.intrins.fx,
-                                   dset_test.intrins.fy,
-                                   dset_test.intrins.cx,
-                                   dset_test.intrins.cy,
-                                   width=dset_test.w,
-                                   height=dset_test.h,
+                                   dset_test.intrins.get('fx', img_id),
+                                   dset_test.intrins.get('fy', img_id),
+                                   dset_test.intrins.get('cx', img_id),
+                                   dset_test.intrins.get('cy', img_id),
+                                   width=dset_test.get_image_size(i)[1],
+                                   height=dset_test.get_image_size(i)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
                 rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
@@ -454,6 +456,8 @@ while True:
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
+            if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
+                grid.density_data.data[:] = args.init_sigma
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             lr_basis = lr_basis_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
@@ -569,8 +573,9 @@ while True:
             #        ' sh', torch.count_nonzero(grid.sparse_sh_grad_indexer).item())
 
             # Manual SGD/rmsprop step
-            grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
-            grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
+            if gstep_id >= args.lr_fg_begin_step:
+                grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
+                grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
                 grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
             if gstep_id >= args.lr_basis_begin_step:

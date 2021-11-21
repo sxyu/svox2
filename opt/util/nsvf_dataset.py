@@ -1,4 +1,8 @@
-from .util import Rays, Intrin, select_or_shuffle_rays
+# Extended NSVF-format dataset loader
+# This is a more sane format vs the NeRF formats
+
+from .util import Rays, Intrin, similarity_from_cameras
+from .dataset_base import DatasetBase
 import torch
 import torch.nn.functional as F
 from typing import NamedTuple, Optional, Union
@@ -12,7 +16,7 @@ import numpy as np
 from warnings import warn
 
 
-class NSVFDataset:
+class NSVFDataset(DatasetBase):
     """
     Extended NSVF dataset loader
     """
@@ -39,9 +43,11 @@ class NSVFDataset:
         white_bkgd: bool = True,
         normalize_by_bbox: bool = False,
         data_bbox_scale : float = 1.1,
+        cam_scale_factor : float = 0.95,
         normalize_by_camera: bool = True,
         **kwargs
     ):
+        super().__init__()
         assert path.isdir(root), f"'{root}' is not a directory"
 
         if scene_scale is None:
@@ -115,7 +121,7 @@ class NSVFDataset:
             #  intrin_path = path.join(root, intrin_dir_name, pose_fname)
 
             cam_mtx = np.loadtxt(pose_path).reshape(-1, 4)
-            if len(cam_mtx == 3):
+            if len(cam_mtx) == 3:
                 bottom = np.array([[0.0, 0.0, 0.0, 1.0]])
                 cam_mtx = np.concatenate([cam_mtx, bottom], axis=0)
             all_c2w.append(torch.from_numpy(cam_mtx))  # C2W (4, 4) OpenCV
@@ -150,10 +156,16 @@ class NSVFDataset:
                                     for x in norm_pose_files], axis=0)
 
             # Select subset of files
-            center = np.mean(norm_poses[:, :3, 3], axis=0)
-            radius = np.median(np.linalg.norm(norm_poses[:, :3, 3] - center, axis=-1))
-            self.c2w_f64[:, :3, 3] -= center
-            scene_scale = 0.95 / radius
+            T, sscale = similarity_from_cameras(norm_poses)
+
+            self.c2w_f64 = torch.from_numpy(T) @ self.c2w_f64
+            scene_scale = cam_scale_factor * sscale
+
+            #  center = np.mean(norm_poses[:, :3, 3], axis=0)
+            #  radius = np.median(np.linalg.norm(norm_poses[:, :3, 3] - center, axis=-1))
+            #  self.c2w_f64[:, :3, 3] -= center
+            #  scene_scale = cam_scale_factor / radius
+            #  print('good', self.c2w_f64[:2], scene_scale)
 
         print('scene_scale', scene_scale)
         self.c2w_f64[:, :3, 3] *= scene_scale
@@ -204,55 +216,3 @@ class NSVFDataset:
             # Rays are not needed for testing
             self.h, self.w = self.h_full, self.w_full
             self.intrins : Intrin = self.intrins_full
-
-        # Hardcoded; adjust scene_scale to make sure the scene fits in a unit sphere
-        self.scene_center = [0.0, 0.0, 0.0]
-        self.scene_radius = 1.0
-        self.ndc_coeffs = (-1.0, -1.0)  # disable
-        self.use_sphere_bound = True
-        self.should_use_background = True # a hint
-
-
-    def gen_rays(self, factor=1):
-        print(" Generating rays, scaling factor", factor)
-        # Generate rays
-        self.factor = factor
-        self.h = self.h_full // factor
-        self.w = self.w_full // factor
-        true_factor = self.h_full / self.h
-        self.intrins = self.intrins_full.scale(1.0 / true_factor)
-        yy, xx = torch.meshgrid(
-            torch.arange(self.h, dtype=torch.float64) + 0.5,
-            torch.arange(self.w, dtype=torch.float64) + 0.5,
-        )
-        xx = (xx - self.intrins.cx) / self.intrins.fx
-        yy = (yy - self.intrins.cy) / self.intrins.fy
-        zz = torch.ones_like(xx)
-        dirs = torch.stack((xx, yy, zz), dim=-1)  # OpenCV convention
-        dirs /= torch.norm(dirs, dim=-1, keepdim=True)
-        dirs = dirs.reshape(1, -1, 3, 1)
-        del xx, yy, zz
-        dirs = (self.c2w_f64[:, None, :3, :3] @ dirs)[..., 0].float()
-
-        if factor != 1:
-            gt = F.interpolate(
-                self.gt.permute([0, 3, 1, 2]), size=(self.h, self.w), mode="area"
-            ).permute([0, 2, 3, 1])
-            gt = gt.reshape(self.n_images, -1, 3)
-        else:
-            gt = self.gt.reshape(self.n_images, -1, 3)
-        origins = self.c2w[:, None, :3, 3].expand(-1, self.h * self.w, -1).contiguous()
-        if self.split == "train":
-            origins = origins.view(-1, 3)
-            dirs = dirs.view(-1, 3)
-            gt = gt.reshape(-1, 3)
-
-        self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)  # Pre-shuffling
-        self.rays = self.rays_init
-
-    def shuffle_rays(self):
-        """
-        Shuffle all rays or select epoch_size rays
-        """
-        if self.split == "train":
-            self.rays = select_or_shuffle_rays(self.rays_init, self.permutation, self.epoch_size, self.device)
