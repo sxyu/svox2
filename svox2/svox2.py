@@ -45,6 +45,7 @@ class RenderOptions:
     last_sample_opaque: bool = False   # Make the last sample opaque (for forward-facing)
 
     near_clip: float = 0.0
+    use_spheric_clip: bool = False
 
     random_sigma_std: float = 1.0                   # Noise to add to sigma (only if randomize=True)
     random_sigma_std_background: float = 1.0        # Noise to add to sigma
@@ -60,6 +61,7 @@ class RenderOptions:
         opt.sigma_thresh = self.sigma_thresh
         opt.stop_thresh = self.stop_thresh
         opt.near_clip = self.near_clip
+        opt.use_spheric_clip = self.use_spheric_clip
 
         opt.last_sample_opaque = self.last_sample_opaque
         #  opt.randomize = randomize

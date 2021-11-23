@@ -585,15 +585,37 @@ __device__ __inline__ void ray_find_bounds(
     // Warning: modifies ray.dir
     ray.world_step = _get_delta_scale(grid._scaling, ray.dir) * opt.step_size;
 
-    ray.tmin = opt.near_clip;
-    ray.tmax = 2e3f;
-    for (int i = 0; i < 3; ++i) {
-        const float invdir = 1.0 / ray.dir[i];
-        const float t1 = (-0.5f - ray.origin[i]) * invdir;
-        const float t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;
-        if (ray.dir[i] != 0.f) {
-            ray.tmin = max(ray.tmin, min(t1, t2));
-            ray.tmax = min(ray.tmax, max(t1, t2));
+    if (opt.use_spheric_clip) {
+        // Horrible hack
+        const float sphere_scaling[3] {
+            2.f / float(grid.size[0]),
+            2.f / float(grid.size[1]),
+            2.f / float(grid.size[2])
+        };
+        float sph_origin[3], sph_dir[3];
+
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            sph_origin[i] = fmaf(ray.origin[i] + 0.5f, sphere_scaling[i], -1.f);
+            sph_dir[i] = ray.dir[i] * sphere_scaling[i];
+        }
+
+        ConcentricSpheresIntersector csi(sph_origin, sph_dir);
+        if (!csi.intersect(1.f, &ray.tmax) || !csi.intersect(1.f - opt.near_clip, &ray.tmin, true)) {
+            ray.tmin = 1e-9f;
+            ray.tmax = 0.f;
+        }
+    } else {
+        ray.tmin = opt.near_clip / ray.world_step * opt.step_size;
+        ray.tmax = 2e3f;
+        for (int i = 0; i < 3; ++i) {
+            const float invdir = 1.0 / ray.dir[i];
+            const float t1 = (-0.5f - ray.origin[i]) * invdir;
+            const float t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;
+            if (ray.dir[i] != 0.f) {
+                ray.tmin = max(ray.tmin, min(t1, t2));
+                ray.tmax = min(ray.tmax, max(t1, t2));
+            }
         }
     }
 

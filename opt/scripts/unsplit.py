@@ -1,25 +1,17 @@
 """
-Splits dataset using NSVF conventions.
-Every eighth image is used as a test image (1_ prefix) and other images are train (0_ prefix)
-
-Usage:
-python create_split.py <data_set_root>
-data_set_root should contain directories like images/, pose/
+Inverse of create_split.py
 """
 # Copyright 2021 Alex Yu
 import os
 import os.path as osp
+import click
 from typing import NamedTuple, List
 import argparse
-import random
 
-parser = argparse.ArgumentParser("Automatic dataset splitting")
+parser = argparse.ArgumentParser()
 parser.add_argument('root_dir', type=str, help="COLMAP dataset root dir")
-parser.add_argument('--every', type=int, default=16, help="Every x images used for testing")
 parser.add_argument('--dry_run', action='store_true', help="Dry run, prints renames without modifying any files")
 parser.add_argument('--yes', '-y', action='store_true', help="Answer yes")
-parser.add_argument('--random', action='store_true', help="If set, chooses the split randomly rather than at a fixed interval "
-                                                          "(but number of images in train/test set is same)")
 args = parser.parse_args()
 
 class Dir(NamedTuple):
@@ -31,12 +23,9 @@ def list_filter_dirs(base):
     image_exts = [".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp"]
     depth_exts = [".exr", ".pfm", ".png", ".npy"]
     dirs_prefixes = [Dir(name="pose", valid_exts=[".txt"]),
-                     Dir(name="poses", valid_exts=[".txt"]),
                      Dir(name="feature", valid_exts=[".npz"]),
                      Dir(name="rgb", valid_exts=image_exts),
                      Dir(name="images", valid_exts=image_exts),
-                     Dir(name="image", valid_exts=image_exts),
-                     Dir(name="c2w", valid_exts=image_exts),
                      Dir(name="depths", valid_exts=depth_exts)]
     dirs = []
     dir_idx = 0
@@ -51,7 +40,7 @@ def list_filter_dirs(base):
 dirs, dir_idx = list_filter_dirs(args.root_dir)
 
 refdir = dirs[dir_idx]
-print("going to split", [x.name for x in dirs], "reference", refdir.name)
+print("going to unsplit", [x.name for x in dirs], "reference", dirs[dir_idx].name)
 do_proceed = args.dry_run or args.yes
 if not do_proceed:
     import click
@@ -59,19 +48,15 @@ if not do_proceed:
 if do_proceed:
     filedata = {}
     base_files = [osp.splitext(x)[0] for x in sorted(os.listdir(refdir.name))
-                  if osp.splitext(x)[1].lower() in refdir.valid_exts]
-    if args.random:
-        print('random enabled')
-        random.shuffle(base_files)
-    base_files_map = {x: f"{int(i % args.every == 0)}_" + x for i, x in enumerate(base_files)}
+                  if osp.splitext(x)[1] in refdir.valid_exts and
+                  (x.startswith('0_') or x.startswith('1_'))]
+    base_files_map = {x: '_'.join(x.split('_')[1:]) for x in base_files}
 
     for dir_obj in dirs:
         dirname = dir_obj.name
         files = sorted(os.listdir(dirname))
         for filename in files:
             full_filename = osp.join(dirname, filename)
-            if filename.startswith("0_") or filename.startswith("1_"):
-                continue
             if not osp.isfile(full_filename):
                 continue
             base_file, ext = osp.splitext(filename)
@@ -89,4 +74,4 @@ if do_proceed:
     if args.dry_run:
         print('(dry run complete)')
     else:
-        print('use unsplit.py to undo this operation')
+        print('use create_split.py to split again')

@@ -279,6 +279,14 @@ def main():
     base_dir = osp.dirname(osp.dirname(args.sparse_dir))
     pose_dir = osp.join(base_dir, "pose_colmap" if args.colmap_suffix else "pose")
     feat_dir = osp.join(base_dir, "feature")
+    base_scale_file = osp.join(base_dir, "base_scale.txt")
+    if osp.exists(base_scale_file):
+        with open(base_scale_file, 'r') as f:
+            base_scale = float(f.read())
+        print('base_scale', base_scale)
+    else:
+        base_scale = 1.0
+        print('base_scale defaulted to', base_scale)
     print("BASE_DIR", base_dir)
     print("POSE_DIR", pose_dir)
     print("FEATURE_DIR", feat_dir)
@@ -307,10 +315,10 @@ def main():
 
     print("Get intrinsics")
     K = np.eye(4)
-    K[0, 0] = cameras[0].params[0]
-    K[1, 1] = cameras[0].params[0]
-    K[0, 2] = cameras[0].params[1]
-    K[1, 2] = cameras[0].params[2]
+    K[0, 0] = cameras[0].params[0] / base_scale
+    K[1, 1] = cameras[0].params[0] / base_scale
+    K[0, 2] = cameras[0].params[1] / base_scale
+    K[1, 2] = cameras[0].params[2] / base_scale
     print("f", K[0, 0], "c", K[0:2, 2])
     np.savetxt(osp.join(base_dir, "intrinsics_colmap.txt" if args.colmap_suffix else "intrinsics.txt"), K)
     del K

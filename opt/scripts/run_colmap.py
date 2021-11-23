@@ -164,11 +164,12 @@ def resize_frames(vid_root, args):
         glob.glob(os.path.join(vid_root, args.image_input, '*.png')))
 
     print('Resizing images ...')
+    factor = 1.0
     for file_ind, file in enumerate(tqdm(files, desc=f'imresize: {vid_name}')):
         out_frame_fn = f'{frames_dir}/{file_ind:05}.png'
 
         # skip if both the output frame and the mask exist
-        if os.path.exists(out_frame_fn) and not args.overwrite:
+        if os.path.exists(out_frame_fn) and not overwrite:
             continue
 
         im = cv2.imread(file)
@@ -180,8 +181,9 @@ def resize_frames(vid_root, args):
             im = cv2.resize(src=im, dsize=dsize, interpolation=cv2.INTER_AREA)
 
         cv2.imwrite(out_frame_fn, im)
+    return factor
 
-def run_colmap(vid_root, args, overwrite=False):
+def run_colmap(vid_root, args, factor, overwrite=False):
     max_num_matches = 132768
     overlap_frames = 75  # only used with sequential matching
 
@@ -191,12 +193,15 @@ def run_colmap(vid_root, args, overwrite=False):
         colmap feature_extractor \
             --database_path={vid_root}/database.db \
             --image_path={vid_root}/{args.images_resized}\
-            --ImageReader.camera_model=SIMPLE_RADIAL \
             --ImageReader.single_camera=1 \
-            --ImageReader.default_focal_length_factor=0.95 \
+            --ImageReader.default_focal_length_factor=0.69388 \
             --SiftExtraction.peak_threshold=0.004 \
             --SiftExtraction.max_num_features=8192 \
             --SiftExtraction.edge_threshold=16'''
+    if args.noradial:
+        extractor_cmd += ' --ImageReader.camera_model=SIMPLE_PINHOLE'
+    else:
+        extractor_cmd += ' --ImageReader.camera_model=SIMPLE_RADIAL'
     if args.use_masks:
         extractor_cmd += ' --ImageReader.mask_path={vid_root}/masks'
     known_intrin = False
@@ -206,10 +211,13 @@ def run_colmap(vid_root, args, overwrite=False):
             known_intrin = True
             print('Using known intrinsics')
             intrins = np.loadtxt(intrin_path)
-            focal = (intrins[0, 0] + intrins[1, 1]) * 0.5
-            cx, cy = intrins[0, 2], intrins[1, 2]
+            focal = (intrins[0, 0] + intrins[1, 1]) * 0.5 / factor
+            cx, cy = intrins[0, 2] / factor, intrins[1, 2] / factor
             # f cx cy
-            extractor_cmd += f' --ImageReader.camera_params "{focal:.10f},{cx:.10f},{cy:.10f}"'
+            if args.noradial:
+                extractor_cmd += f' --ImageReader.camera_params "{focal:.10f},{cx:.10f},{cy:.10f}"'
+            else:
+                extractor_cmd += f' --ImageReader.camera_params "{focal:.10f},{cx:.10f},{cy:.10f},0.0"'
         else:
             print('--known-intrin given but intrinsics.txt does not exist in data')
     os.system(extractor_cmd)
@@ -250,15 +258,16 @@ def run_colmap(vid_root, args, overwrite=False):
 
     os.system(mapper_cmd)
     
-    undist_dir = os.path.join(vid_root, args.undistorted_output)
-    if not os.path.exists(undist_dir) or args.overwrite:
-        os.makedirs(undist_dir, exist_ok=True)
-        os.system(f'''
-            colmap image_undistorter \
-                --input_path={vid_root}/sparse/0 \
-                --image_path={vid_root}/{args.images_resized} \
-                --output_path={vid_root} \
-                --output_type=COLMAP''')
+    if not args.noradial:
+        undist_dir = os.path.join(vid_root, args.undistorted_output)
+        if not os.path.exists(undist_dir) or overwrite:
+            os.makedirs(undist_dir, exist_ok=True)
+            os.system(f'''
+                colmap image_undistorter \
+                    --input_path={vid_root}/sparse/0 \
+                    --image_path={vid_root}/{args.images_resized} \
+                    --output_path={vid_root} \
+                    --output_type=COLMAP''')
 
 
 def render_movie(vid_root, args):
@@ -356,13 +365,13 @@ def preprocess(vid_root, args):
                 os.rename(src_path, os.path.join(frames_dir, fname))
 
     overwrite = True
-    if not args.debug_only:
-        resize_frames(vid_root, args)
-        # colmap
-        if args.use_masks:
-            generate_masks(vid_root, args, overwrite=overwrite)
-        run_colmap(vid_root, args, overwrite=overwrite)
-    render_movie(vid_root, args)
+    factor = resize_frames(vid_root, args)
+    # colmap
+    if args.use_masks:
+        generate_masks(vid_root, args, overwrite=overwrite)
+    run_colmap(vid_root, args, factor, overwrite=overwrite)
+    if args.debug:
+        render_movie(vid_root, args)
 
 
 if __name__ == '__main__':
@@ -377,18 +386,21 @@ if __name__ == '__main__':
     parser.add_argument('--mask-output', default='masks', help='location to store motion masks')
     parser.add_argument('--known-intrin', action='store_true', default=False, help='use intrinsics in <root>/intrinsics.txt if available')
     parser.add_argument('--fix-intrin', action='store_true', default=False, help='fix intrinsics in bundle adjustment, only used if --known-intrin is given and intrinsics.txt exists')
-    parser.add_argument('--debug-only', action='store_true', default=False, help='only render debug video')
+    parser.add_argument('--debug', action='store_true', default=False, help='render debug video')
+    parser.add_argument('--noradial', action='store_true', default=False, help='do not use radial distortion')
     parser.add_argument('--use-masks', action='store_true', default=False, help='use automatic masks')
     parser.add_argument(
                     '--images-resized', default='images_resized', help='location for resized/renamed images')
     parser.add_argument(
         '--do-sequential', action='store_true', default=False, help='sequential rather than exhaustive matching')
     parser.add_argument('--max-width', type=int, default=1280, help='max image width')
-    parser.add_argument('--max-height', type=int, default=720, help='max image height')
+    parser.add_argument('--max-height', type=int, default=768, help='max image height')
     parser.add_argument(
             '--undistorted-output', default='images', help='location of undistorted images')
 
     args = parser.parse_args()
+    if args.noradial:
+        args.images_resized = args.undistorted_output
 
     from vendor import read_write_model
 

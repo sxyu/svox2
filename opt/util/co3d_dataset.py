@@ -15,7 +15,7 @@ import gzip
 
 from scipy.spatial.transform import Rotation
 from typing import NamedTuple, Optional, List, Union
-from .util import Rays, Intrin
+from .util import Rays, Intrin, similarity_from_cameras
 from .dataset_base import DatasetBase
 
 
@@ -179,8 +179,10 @@ class CO3DDataset(DatasetBase):
         fxs, fys, cxs, cys = [], [], [], []
         image_sizes = []
         c2ws = []
+        ref_c2ws = []
         for i in tqdm(range(self.curr_offset, self.next_offset)):
             is_train = i % self.hold_every != 0
+            ref_c2ws.append(self.image_pose[i])
             if self.split.endswith('train') != is_train:
                 continue
             im = cv2.imread(path.join(self.data_dir, self.image_path[i]))
@@ -210,6 +212,7 @@ class CO3DDataset(DatasetBase):
             self.gt.append(torch.from_numpy(im))
             c2ws.append(self.image_pose[i])
         c2w = np.stack(c2ws, axis=0)
+        ref_c2ws = np.stack(ref_c2ws, axis=0)  # For rescaling scene
         self.image_size = np.stack(image_sizes)
         fxs = torch.tensor(fxs)
         fys = torch.tensor(fys)
@@ -229,9 +232,13 @@ class CO3DDataset(DatasetBase):
                 cxs[good_mask], cys[good_mask])
 
         # Normalize
-        c2w[:, :3, 3] -= np.mean(c2w[:, :3, 3], axis=0)
-        dists = np.linalg.norm(c2w[:, :3, 3], axis=-1)
-        c2w[:, :3, 3] *= self.cam_scale_factor / np.median(dists)
+        #  c2w[:, :3, 3] -= np.mean(c2w[:, :3, 3], axis=0)
+        #  dists = np.linalg.norm(c2w[:, :3, 3], axis=-1)
+        #  c2w[:, :3, 3] *= self.cam_scale_factor / np.median(dists)
+
+        T, sscale = similarity_from_cameras(ref_c2ws)
+        c2w = T @ c2w
+        c2w[:, :3, 3] *= self.cam_scale_factor * sscale
 
         self.c2w = torch.from_numpy(c2w).float()
         self.cam_n_rays = self.image_size[:, 0] * self.image_size[:, 1]

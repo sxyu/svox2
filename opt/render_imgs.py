@@ -50,10 +50,6 @@ parser.add_argument('--fps',
                     help="FPS of video")
 
 # Camera adjustment
-parser.add_argument('--near_clip',
-                    type=float,
-                    default=0.0,
-                    help="Near clip of poses (in voxels)")
 parser.add_argument('--crop',
                     type=float,
                     default=1.0,
@@ -103,8 +99,6 @@ if args.render_path:
     want_metrics = False
 
 # Handle various image transforms
-if args.near_clip != 0:
-    render_dir += f'_nclip{args.near_clip}'
 if not args.render_path:
     # Do not crop if not render_path
     args.crop = 1.0
@@ -155,8 +149,6 @@ with torch.no_grad():
     avg_lpips = 0.0
     n_images_gen = 0
     c2ws = dset.render_c2w.to(device=device) if args.render_path else dset.c2w.to(device=device)
-    if args.near_clip != 0.0:
-        grid.opt.near_clip = args.near_clip
     # DEBUGGING
     #  rad = [1.496031746031746, 1.6613756613756614, 1.0]
     #  half_sz = [grid.links.size(0) // 2, grid.links.size(1) // 2]
@@ -246,6 +238,6 @@ with torch.no_grad():
                     f.write(str(avg_lpips))
     if not args.no_vid and len(frames):
         vid_path = render_dir + '.mp4'
-        imageio.mimwrite(vid_path, frames, fps=args.fps)  # pip install imageio-ffmpeg
+        imageio.mimwrite(vid_path, frames, fps=args.fps, macro_block_size=8)  # pip install imageio-ffmpeg
 
 

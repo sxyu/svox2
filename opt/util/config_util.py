@@ -90,6 +90,16 @@ def define_common_args(parser : argparse.ArgumentParser):
                          type=float,
                          default=0.0,
                          help="Random Gaussian std to add to density values for BG (only if enable_random)")
+    group.add_argument('--near_clip',
+                         type=float,
+                         default=0.00,
+                         help="Near clip distance (in world space distance units, only for FG)")
+    group.add_argument('--use_spheric_clip',
+                         action='store_true',
+                         default=False,
+                         help="Use spheric ray clipping instead of voxel grid AABB "
+                              "(only for FG; changes near_clip to mean 1-near_intersection_radius; "
+                              "far intersection is always at radius 1)")
     group.add_argument('--enable_random',
                          action='store_true',
                          default=False,
@@ -143,3 +153,5 @@ def setup_render_opts(opt, args):
     opt.random_sigma_std = args.random_sigma_std
     opt.random_sigma_std_background = args.random_sigma_std_background
     opt.last_sample_opaque = args.last_sample_opaque
+    opt.near_clip = args.near_clip
+    opt.use_spheric_clip = args.use_spheric_clip

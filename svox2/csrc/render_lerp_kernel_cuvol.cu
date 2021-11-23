@@ -376,6 +376,7 @@ __device__ __inline__ void render_background_backward(
             const RenderOptions& __restrict__ opt,
             float log_transmit,
             float accum,
+            float sparsity_loss,
             PackedGridOutputGrads& __restrict__ grads
         ) {
     // printf("accum_init=%f\n", accum);
@@ -471,6 +472,13 @@ __device__ __inline__ void render_background_backward(
             accum -= weight * total_color;
             float curr_grad_sigma = ray.world_step * (invr_last - invr_mid) * (
                     total_color * _EXP(log_transmit) - accum);
+            if (sparsity_loss > 0.f) {
+                // Cauchy version (from SNeRG)
+                curr_grad_sigma += sparsity_loss * (4 * sigma / (1 + 2 * (sigma * sigma)));
+
+                // Alphs version (from PlenOctrees)
+                // curr_grad_sigma += sparsity_loss * _EXP(-pcnt) * ray.world_step;
+            }
 
             trilerp_backward_bg_one(
                     grid.background_links,
@@ -711,6 +719,7 @@ __global__ void render_background_backward_kernel(
         const float* __restrict__ log_transmit,
         const float* __restrict__ accum,
         bool grad_out_is_rgb,
+        float sparsity_loss,
         // Outputs
         PackedGridOutputGrads grads) {
     CUDA_GET_THREAD_ID(ray_id, int(rays.origins.size(0)));
@@ -740,6 +749,7 @@ __global__ void render_background_backward_kernel(
         opt,
         log_transmit[ray_id],
         accum[ray_id],
+        sparsity_loss,
         grads);
 }
 
@@ -901,6 +911,7 @@ void volume_render_cuvol_backward(
                 log_transmit.data_ptr<float>(),
                 accum.data_ptr<float>(),
                 false,
+                0.f,
                 // Output
                 grads);
     }
@@ -984,6 +995,7 @@ void volume_render_cuvol_fused(
                 log_transmit.data_ptr<float>(),
                 accum.data_ptr<float>(),
                 true,
+                sparsity_loss,
                 // Output
                 grads);
     }

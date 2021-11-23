@@ -199,6 +199,8 @@ group.add_argument('--lambda_tv_lumisphere', type=float, default=0.0)#1e-2)#1e-3
 group.add_argument('--tv_lumisphere_sparsity', type=float, default=0.01)
 group.add_argument('--tv_lumisphere_dir_factor', type=float, default=0.0)
 
+group.add_argument('--tv_decay', type=float, default=1.0)
+
 group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
 group.add_argument('--tv_early_only', type=int, default=1, help="Turn off TV regularization after the first split/prune")
 
@@ -233,6 +235,10 @@ group.add_argument('--weight_decay_sh', type=float, default=1.0)
 group.add_argument('--lr_decay', action='store_true', default=True)
 
 group.add_argument('--n_train', type=int, default=None, help='Number of training images. Defaults to use all avaiable.')
+
+group.add_argument('--nosphereinit', action='store_true', default=False,
+                     help='do not start with sphere bounds (please do not use for 360)')
+group.add_argument('--redense', action='store_true', default=False)
 args = parser.parse_args()
 config_util.maybe_merge_config_file(args)
 
@@ -274,7 +280,7 @@ global_start_time = datetime.now()
 grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         center=dset.scene_center,
                         radius=dset.scene_radius,
-                        use_sphere_bound=dset.use_sphere_bound,
+                        use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
                         device=device,
@@ -389,8 +395,8 @@ while True:
                                    dset_test.intrins.get('fy', img_id),
                                    dset_test.intrins.get('cx', img_id),
                                    dset_test.intrins.get('cy', img_id),
-                                   width=dset_test.get_image_size(i)[1],
-                                   height=dset_test.get_image_size(i)[0],
+                                   width=dset_test.get_image_size(img_id)[1],
+                                   height=dset_test.get_image_size(img_id)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
                 rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
@@ -471,10 +477,7 @@ while True:
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
-            #  batch_dirs.normal_() # FIXME
-            #  batch_dirs /= batch_dirs.norm(dim=-1).unsqueeze(-1) # FIXME
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
-            #  rgb_gt[:] = 0 # FIXME
             rays = svox2.Rays(batch_origins, batch_dirs)
 
             #  with Timing("volrend_fused"):
@@ -509,8 +512,7 @@ while True:
                 #          tv_sh = grid.tv_color()
                 #      summary_writer.add_scalar("loss_tv_sh", tv_sh, global_step=gstep_id)
                 #  with torch.no_grad():
-                #      tv_basis = grid.tv_basis()
-                #  summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
+                #      tv_basis = grid.tv_basis() #  summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
@@ -596,6 +598,9 @@ while True:
         print('Saving', ckpt_path)
         grid.save(ckpt_path)
 
+    if args.redense and epoch_id == 1:
+        grid.density_data.data[:] = args.init_sigma
+
     if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
         last_upsamp_step = gstep_id_base
         if reso_id < len(reso_list) - 1:
@@ -604,6 +609,10 @@ while True:
                 print('turning off TV regularization')
                 args.lambda_tv = 0.0
                 args.lambda_tv_sh = 0.0
+            elif args.tv_decay != 1.0:
+                args.lambda_tv *= args.tv_decay
+                args.lambda_tv_sh *= args.tv_decay
+
             reso_id += 1
             use_sparsify = True
             z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]

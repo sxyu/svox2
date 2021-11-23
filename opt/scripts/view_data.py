@@ -253,7 +253,7 @@ def main():
         world_up = np.mean(ups, axis=0)
         world_up /= np.linalg.norm(world_up)
 
-        up_camspace = np.array([0, 0.0, 1.0])
+        up_camspace = np.array([0.0, -1.0, 0.0])
         c = (up_camspace * world_up).sum()
         cross = np.cross(world_up, up_camspace)
         skew = np.array([[0.0, -cross[2], cross[1]],
@@ -263,11 +263,11 @@ def main():
         if c > -1:
             R_align = R_align + skew + (skew @ skew) * 1 / (1+c)
         else:
-            # In the unlikely case the original data has z- up axis,
-            # rotate 180-deg about x axis 
-            R_align = np.array([[1.0, 0.0, 0.0],
-                                [0.0, -1.0, 0.0],
-                                [0.0, 0.0, -1.0]])
+            # In the unlikely case the original data has y+ up axis,
+            # rotate 180-deg about x axis
+            R_align = np.array([[-1.0, 0.0, 0.0],
+                                [0.0, 1.0, 0.0],
+                                [0.0, 0.0, 1.0]])
 
         R = (R_align @ R)
         fwds = np.sum(R * np.array([0, 0.0, 1.0]), axis=-1)
