@@ -1,34 +1,86 @@
+# Plenoxels: Radiance Fields without Neural Networks
 
-## Installation
+Alex Yu*, Sara Fridovich-Keil*, Matthew Tancik, Qinhong Chen, Benjamin Recht, Angjoo Kanazawa
+
+UC Berkeley
+
+This is the optimization code. A real-time renderer is not available yet.
+
+## Setup
+
+First create the virtualenv; we recommend using conda:
+```sh
+conda env create -f environment.yml
+conda activate plenoxel
+```
+
+Then clone the repo and install the library at the root (svox2), which includes a CUDA extension.
+
 If your CUDA toolkit is older than 11, then you will need to install CUB as follows:
-`conda install -c bottler nvidiacub`
+`conda install -c bottler nvidiacub`.
+Since CUDA 11, CUB is shipped with the toolkit.
 
-Since CUDA 11, CUB is shipped with the toolkit. To install the main library, simply run
-`pip install .` 
-in the root directory.
+To install the main library, simply run
+```
+pip install .
+```
+In the repo root directory.
 
-## Voxel Optimization
+## Voxel Optimization (aka Training)
 
-See `opt/opt.py`
+For training a single scene, see `opt/opt.py`. The launch script makes this easier.
 
-`./launch.sh <exp_name> <GPU_id> <data_dir>`
+Inside `opt/`, run
+`./launch.sh <exp_name> <GPU_id> <data_dir> -c <config>`
 
-NOTE: can no longer use `sh`
+Where `<config>` should be `configs/syn.json` for NeRF-synthetic scenes,
+`configs/llff.json`
+for forward-facing scenes, and 
+`configs/tnt.json` for tanks and temples scenes, for example.
+
+The dataset format will be auto-detected from `data_dir`.
+Checkpoints will be in `ckpt/exp_name`.
 
 ## Evaluation
 
-See `opt/render_imgs.py`
+Use `opt/render_imgs.py`
 
+Usage,
 (in opt/)
 `python render_imgs.py <CHECKPOINT.npz> <data_dir>`
 
+By default this saves all frames, which is very slow. Add `--no_imsave` to avoid this.
+
+## Rendering a spiral
+
+Use `opt/render_imgs_circle.py`
+
+Usage,
+(in opt/)
+`python render_imgs_circle.py <CHECKPOINT.npz> <data_dir>`
+
 ## Parallel task executor
 
-Including evaluation, ablations, and hypertuning (based on the task_manager one from PlenOctrees)
+We provide a parallel task executor based on the task manager from PlenOctrees to automatically
+schedule many tasks across sets of scenes or hyperparameters.
+This is used for evaluation, ablations, and hypertuning
 See `opt/autotune.py`. Configs in `opt/tasks/*.json`
 
-Automatic eval:
-`python autotune.py -g '<space delimited GPU ids>' tasks/eval.json`. Configs in `opt/tasks/*.json`
+For example, to automatically train and eval all synthetic scenes:
+you will need to change `train_root` and `data_root` in `tasks/eval.json`, then run:
+```sh
+python autotune.py -g '<space delimited GPU ids>' tasks/eval.json
+```
+
+For forward-facing scenes
+```sh
+python autotune.py -g '<space delimited GPU ids>' tasks/eval_ff.json
+```
+
+For Tanks and Temples scenes
+```sh
+python autotune.py -g '<space delimited GPU ids>' tasks/eval_tnt.json
+```
 
 ## Using a custom image set
 
@@ -49,7 +101,12 @@ To view the data use:
 
 This should launch a server at localhost:8889
 
-## Random tip: how to make pip install faster
+
+You may need to tune the TV. For forward-facing scenes, often making the TV weights 10x
+higher is helpful (`configs/llff_hitv.json`).
+For the real lego scene I used the config `configs/custom.json`.
+
+## Random tip: how to make pip install faster for native extensions
 
 You may notice that this CUDA extension takes forever to install.
 A suggestion is using ninja. On Ubuntu,

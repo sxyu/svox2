@@ -14,11 +14,11 @@
     "weight_thresh": 1.28,
     "lambda_tv": 5e-3,
     "lambda_tv_sh": 5e-3,
-    "lambda_tv_background_sigma": 1e-3,
-    "lambda_tv_background_color": 1e-3,
+    "lambda_tv_background_sigma": 5e-3,
+    "lambda_tv_background_color": 5e-3,
     "lambda_beta": 1e-5,
     "lambda_sparsity": 1e-11,
-    "background_brightness": 1.0,
+    "background_brightness": 0.5,
     "tv_early_only": 0,
     "tv_decay": 0.5
 }
