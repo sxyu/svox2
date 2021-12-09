@@ -20,6 +20,7 @@ dependencies:
       - imageio-ffmpeg
       - pymcubes
       - scipy>=1.6.0
-      - torch>=1.7.0
+  - pytorch
+  - cudatoolkit
   - tqdm
 

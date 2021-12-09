@@ -1,10 +1,12 @@
 # Plenoxels: Radiance Fields without Neural Networks
 
-Alex Yu*, Sara Fridovich-Keil*, Matthew Tancik, Qinhong Chen, Benjamin Recht, Angjoo Kanazawa
+Alex Yu\*, Sara Fridovich-Keil\*, Matthew Tancik, Qinhong Chen, Benjamin Recht, Angjoo Kanazawa
 
 UC Berkeley
 
-This is the optimization code. A real-time renderer is not available yet.
+Website and video: <https://alexyu.net/plenoxels>
+
+This contains the optimization code.
 
 ## Setup
 
@@ -25,6 +27,17 @@ To install the main library, simply run
 pip install .
 ```
 In the repo root directory.
+
+## Getting datasets
+
+We have backends for NeRF-Blender, LLFF, NSVF, and CO3D dataset formats, and the dataset will be auto-detected.
+Please get the NeRF-synthetic and LLFF datasets from:
+
+<https://drive.google.com/drive/folders/128yBriW1IG_3NJ5Rp7APSTZsJqdJdfc1>
+
+We provide a processed Tanks and temples dataset (with background) in NSVF format at:
+(TBA)
+Note this data should be identical to that in NeRF++
 
 ## Voxel Optimization (aka Training)
 
