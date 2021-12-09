@@ -2174,9 +2174,12 @@ class SparseGrid(nn.Module):
             grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
             sparse_num = max(int(sparse_frac * grid_size), 1)
             if contiguous:
-                start = np.random.randint(0, grid_size - sparse_num + 1)
+                start = np.random.randint(0, grid_size)
                 arr = torch.arange(start, start + sparse_num, dtype=torch.int32, device=
                                                 self.links.device)
+
+                if start > grid_size - sparse_num: 
+                    arr[grid_size - sparse_num - start:] -= grid_size
                 return arr
             else:
                 return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
@@ -2192,9 +2195,12 @@ class SparseGrid(nn.Module):
                     * self.background_data.size(1)
         sparse_num = max(int(sparse_frac * grid_size), 1)
         if contiguous:
-            start = np.random.randint(0, grid_size - sparse_num + 1)
-            return torch.arange(start, start + sparse_num, dtype=torch.int32, device=
+            start = np.random.randint(0, grid_size)# - sparse_num + 1)
+            arr = torch.arange(start, start + sparse_num, dtype=torch.int32, device=
                                             self.links.device)
+            if start > grid_size - sparse_num: 
+                arr[grid_size - sparse_num - start:] -= grid_size
+            return arr
         else:
             return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
                                             self.links.device)

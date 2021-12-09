@@ -258,7 +258,7 @@ __global__ void msi_tv_grad_sparse_kernel(
         torch::PackedTensorAccessor32<bool, 2, torch::RestrictPtrTraits> msi_mask,
         torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_msi) {
     CUDA_GET_THREAD_ID_U64(tid, Q);
-    const int MSI_DATA_DIM = 4;
+    const int MSI_DATA_DIM = msi.size(2);
     const int channel_id = tid % MSI_DATA_DIM;
     const int msi_idx = rand_cells[tid / MSI_DATA_DIM];
 
@@ -276,11 +276,11 @@ __global__ void msi_tv_grad_sparse_kernel(
     const int lnk10 = links[nx][y];
 
     const float v00 = lnk00 >= 0 ? msi[lnk00][z][channel_id] : 0.f;
-    const float v_nxl = (lnk00 >= 0 && z + 1 < msi.size(1)) ? msi[lnk00][z + 1][channel_id] : 0.f;
+    const float v_nxl = (lnk00 >= 0 && z + 1 < msi.size(1)) ? msi[lnk00][z + 1][channel_id] : ((channel_id == MSI_DATA_DIM - 1) ? 0.f : v00);
     const float v01 = lnk01 >= 0 ? msi[lnk01][z][channel_id] : 0.f;
     const float v10 = lnk10 >= 0 ? msi[lnk10][z][channel_id] : 0.f;
 
-    if (channel_id == msi.size(2) - 1) {
+    if (channel_id == MSI_DATA_DIM - 1) {
         scale = scale_last;
     }
 
@@ -311,19 +311,21 @@ __global__ void msi_tv_grad_sparse_kernel(
     // dx *= _rnorm(coord10) * invr;
     // dy *= _rnorm(coord01) * invr;
     // dz *= 1.f / (nxl_radius - radius);
-    dx *= links.size(1) * (1.f / 256.f);
+    dx *= links.size(0) * (1.f / 256.f);
     dy *= links.size(1) * (1.f / 256.f);
     dz *= msi.size(1) * (1.f / 256.f);
 
-#define MAYBE_ADD_SET(link, z, val) if (link >= 0 && val != 0.f) { \
-    atomicAdd(&grad_msi[link][z][channel_id], val * idelta); \
+#define MAYBE_ADD_SET(link, zz, val) if (link >= 0 && val != 0.f) { \
+    atomicAdd(&grad_msi[link][zz][channel_id], val * idelta); \
     if (msi_mask.size(0) > 0) \
-        msi_mask[link][z] = true; \
+        msi_mask[link][zz] = true; \
 } \
 
     const float sm = -(dx + dy + dz);
     MAYBE_ADD_SET(lnk00, z, sm);
-    MAYBE_ADD_SET(lnk00, z + 1, dz);
+    if (z + 1 < msi.size(1)) {
+        MAYBE_ADD_SET(lnk00, z + 1, dz);
+    }
     MAYBE_ADD_SET(lnk01, z, dy);
     MAYBE_ADD_SET(lnk10, z, dx);
 #undef MAYBE_ADD_SET

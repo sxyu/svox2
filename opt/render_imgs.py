@@ -139,6 +139,9 @@ if args.blackbg:
 print('Writing to', render_dir)
 os.makedirs(render_dir, exist_ok=True)
 
+if not args.no_imsave:
+    print('Will write out all frames as PNG (this take most of the time)')
+
 # NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
 # other backends will manually generate rays per frame (slow)
 with torch.no_grad():

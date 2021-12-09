@@ -42,7 +42,7 @@ class NSVFDataset(DatasetBase):
         permutation: bool = True,
         white_bkgd: bool = True,
         normalize_by_bbox: bool = False,
-        data_bbox_scale : float = 1.1,
+        data_bbox_scale : float = 1.1,                    # Only used if normalize_by_bbox
         cam_scale_factor : float = 0.95,
         normalize_by_camera: bool = True,
         **kwargs

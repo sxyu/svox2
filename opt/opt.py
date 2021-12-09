@@ -238,7 +238,6 @@ group.add_argument('--n_train', type=int, default=None, help='Number of training
 
 group.add_argument('--nosphereinit', action='store_true', default=False,
                      help='do not start with sphere bounds (please do not use for 360)')
-group.add_argument('--redense', action='store_true', default=False)
 args = parser.parse_args()
 config_util.maybe_merge_config_file(args)
 
@@ -597,9 +596,6 @@ while True:
             factor, args.save_every) == 0 and not args.tune_mode:
         print('Saving', ckpt_path)
         grid.save(ckpt_path)
-
-    if args.redense and epoch_id == 1:
-        grid.density_data.data[:] = args.init_sigma
 
     if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
         last_upsamp_step = gstep_id_base
