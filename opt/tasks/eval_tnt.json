@@ -1,7 +1,7 @@
 {
     "eval": true,
     "data_root": "/home/sxyu/data/TanksAndTempleBG",
-    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/tnt_equirectlin_fasttv_unify2_delfg",
+    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/tnt_equirectlin_fasttv_unify2_grey_delfg",
     "variables": {
         "scene": ["Train", "M60", "Truck", "Playground"]
     },

@@ -7,7 +7,6 @@
     "lr_sigma": 3e1,
     "lr_sh": 1e-2,
     "lr_sigma_delay_steps": 15000,
-    "lr_fg_begin_step": 1000,
     "thresh_type": "weight",
     "weight_thresh": 1.28,
     "lambda_tv": 5e-5,
@@ -16,6 +15,6 @@
     "lambda_tv_background_color": 1e-3,
     "lambda_beta": 1e-5,
     "lambda_sparsity": 1e-11,
-    "background_brightness": 0.5,
+    "background_brightness": 1.0,
     "tv_early_only": 0
 }
