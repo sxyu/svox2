@@ -6,7 +6,21 @@ UC Berkeley
 
 Website and video: <https://alexyu.net/plenoxels>
 
-This contains the optimization code.
+arXiv: <https://arxiv.org/abs/2112.05131>
+
+Citation:
+```
+@misc{yu2021plenoxels,
+      title={Plenoxels: Radiance Fields without Neural Networks}, 
+      author={Alex Yu and Sara Fridovich-Keil and Matthew Tancik and Qinhong Chen and Benjamin Recht and Angjoo Kanazawa},
+      year={2021},
+      eprint={2112.05131},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+```
+
+This contains the official optimization code.
 
 ## Setup
 
