@@ -22,6 +22,10 @@ Citation:
 
 This contains the official optimization code.
 
+![Fast optimization](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/fastopt.gif)
+
+![Overview](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/pipeline.png)
+
 ## Setup
 
 First create the virtualenv; we recommend using conda:
