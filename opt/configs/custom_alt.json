@@ -1,8 +1,6 @@
 {
     "reso": "[[128, 128, 128], [256, 256, 256], [512, 512, 512]]",
-    "scale": 1.0,
     "n_iters": 102400,
-    "cam_scale_factor": 1.5,
     "background_nlayers": 64,
     "background_reso": 1024,
     "cam_scale_factor": 0.95,
