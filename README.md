@@ -60,7 +60,8 @@ Please get the NeRF-synthetic and LLFF datasets from:
 <https://drive.google.com/drive/folders/128yBriW1IG_3NJ5Rp7APSTZsJqdJdfc1>
 
 We provide a processed Tanks and temples dataset (with background) in NSVF format at:
-(TBA)
+<https://drive.google.com/file/d/1PD4oTP4F8jTtpjd_AQjCsL4h8iYFCyvO/view?usp=sharing>
+
 Note this data should be identical to that in NeRF++
 
 ## Voxel Optimization (aka Training)
