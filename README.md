@@ -4,12 +4,15 @@ Alex Yu\*, Sara Fridovich-Keil\*, Matthew Tancik, Qinhong Chen, Benjamin Recht, 
 
 UC Berkeley
 
-**Note:** This is a preliminary release. We have not carefully tested everything,
-but feel that it would be better to first put the code out there.
-
 Website and video: <https://alexyu.net/plenoxels>
 
 arXiv: <https://arxiv.org/abs/2112.05131>
+
+**Note:** This is a preliminary release. We have not carefully tested everything,
+but feel that it would be better to first put the code out there.
+
+Also, despite the name, it's not strictly intended to be a successor of svox
+
 
 Citation:
 ```
