@@ -121,8 +121,9 @@ For Tanks and Temples scenes
 python autotune.py -g '<space delimited GPU ids>' tasks/eval_tnt.json
 ```
 
-## Using a custom image set
+## Using a custom image set (360)
 
+Please take images all around the object and try to take images at different elevations.
 First make sure you have colmap installed. Then
 
 (in opt/scripts)
@@ -141,10 +142,16 @@ To view the data use:
 This should launch a server at localhost:8889
 
 
-You may need to tune the TV.
- For forward-facing scenes, often making the TV weights 10x
-higher is helpful (`configs/llff_hitv.json`).
-For the real lego scene I used the config `configs/custom.json`, or you can also try `configs/custom_alt.json` which has some minor differences.
+Now follow the "Voxel Optimization (aka Training)" section to train:
+
+`./launch.sh <exp_name> <GPU_id> <data_dir> -c configs/custom.json`
+
+You can also try `configs/custom_alt.json` which has some minor differences.
+You may need to tune the TV for best results.
+
+To render a video, please see the "rendering a spiral" section.
+To convert to a svox1-compatible PlenOctree (not perfect quality since interpolation is not implemented)
+you can try `to_svox1.py <ckpt>`
 
 ## Random tip: how to make pip install faster for native extensions
 
