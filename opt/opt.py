@@ -417,7 +417,8 @@ while True:
                                 mse_img, global_step=gstep_id_base, dataformats='HWC')
                     if args.log_depth_map:
                         depth_img = grid.volume_render_depth_image(cam,
-                                    15.0 if args.log_depth_map_use_thresh else None
+                                    args.log_depth_map_use_thresh if
+                                    args.log_depth_map_use_thresh else None
                                 )
                         depth_img = viridis_cmap(depth_img.cpu())
                         summary_writer.add_image(f'test/depth_map_{img_id:04d}',
