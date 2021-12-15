@@ -23,6 +23,7 @@ dependencies:
       - matplotlib
       - scipy>=1.6.0
   - pytorch
+  - torchvision
   - cudatoolkit
   - tqdm
 

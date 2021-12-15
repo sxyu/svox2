@@ -13,6 +13,7 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor,
 void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
                           Tensor, bool);
 
+// ** NeRF rendering formula (trilerp)
 Tensor volume_render_cuvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
 Tensor volume_render_cuvol_image(SparseGridSpec &, CameraSpec &,
                                  RenderOptions &);
@@ -20,13 +21,21 @@ void volume_render_cuvol_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 void volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                Tensor, float, float, Tensor, GridOutputGrads &);
+// Expected termination (depth) rendering
+torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
+                                          RenderOptions &);
+// Depth rendering based on sigma-threshold as in Dex-NeRF
+torch::Tensor volume_render_sigma_thresh(SparseGridSpec &, RaysSpec &,
+                                         RenderOptions &, float);
 
+// ** NV rendering formula (trilerp)
 Tensor volume_render_nvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
 void volume_render_nvol_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                  Tensor, Tensor, GridOutputGrads &);
 void volume_render_nvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
                               Tensor, float, float, Tensor, GridOutputGrads &);
 
+// ** NeRF rendering formula (nearest-neighbor, infinitely many steps)
 Tensor volume_render_svox1(SparseGridSpec &, RaysSpec &, RenderOptions &);
 void volume_render_svox1_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
@@ -70,6 +79,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(volume_render_cuvol_image);
   _REG_FUNC(volume_render_cuvol_backward);
   _REG_FUNC(volume_render_cuvol_fused);
+  _REG_FUNC(volume_render_expected_term);
+  _REG_FUNC(volume_render_sigma_thresh);
 
   _REG_FUNC(volume_render_nvol);
   _REG_FUNC(volume_render_nvol_backward);

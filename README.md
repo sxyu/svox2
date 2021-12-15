@@ -125,8 +125,8 @@ python autotune.py -g '<space delimited GPU ids>' tasks/eval_tnt.json
 
 First make sure you have colmap installed. Then
 
-(in opt/)
-`bash scripts/proc_colmap.sh <img_dir>`
+(in opt/scripts)
+`bash proc_colmap.sh <img_dir>`
 
 Where `<img_dir>` should be a directory directly containing png/jpg images from a 
 normal perspective camera.
@@ -136,14 +136,15 @@ For custom datasets we adopt a data format similar to that in NSVF
 You should be able to use this dataset directly afterwards. The format will be auto-detected.
 
 To view the data use:
-`python scripts/view_data.py <img_dir>`
+`python view_data.py <img_dir>`
 
 This should launch a server at localhost:8889
 
 
-You may need to tune the TV. For forward-facing scenes, often making the TV weights 10x
+You may need to tune the TV.
+ For forward-facing scenes, often making the TV weights 10x
 higher is helpful (`configs/llff_hitv.json`).
-For the real lego scene I used the config `configs/custom.json`.
+For the real lego scene I used the config `configs/custom.json`, or you can also try `configs/custom_alt.json` which has some minor differences.
 
 ## Random tip: how to make pip install faster for native extensions
 
