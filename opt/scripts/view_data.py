@@ -230,18 +230,15 @@ def main():
 
     all_poses = []
     pnum, seg_begin = None, 0
-    segs = []
     for i, pose_file in enumerate(pose_files):
         pose = np.loadtxt(path.join(pose_dir, pose_file)).reshape(4, 4)
         splt = path.splitext(pose_file)[0].split('_')
         num = int(splt[1] if len(splt) > 1 else splt[0])
         if pnum is not None and num - pnum > 1 and seg_begin < num:
-            segs.append((seg_begin, num))
-            seg_begin = num
+            seg_begin = i
         pnum = num
         all_poses.append(pose)
     all_poses = np.stack(all_poses)
-    segs.append((seg_begin, len(pose_files)))
 
     def get_transform(c2w):
         t = c2w[:, :3, 3]
@@ -323,18 +320,14 @@ def main():
     center = origin - vforward * np.linalg.norm(t - origin, axis=-1).mean() * 0.7 * 3
     print('  camera center', center, 'vforward', vforward, 'world_up', world_up)
 
-    for i, seg in enumerate(segs):
-        print(seg)
-        print(R.shape, t.shape)
-        print(seg[0], seg[1])
-        scene.add_camera_frustum(name=f"traj_{i:04d}", focal_length=focal,
-                                 image_width=image_wh[0],
-                                 image_height=image_wh[1],
-                                 z=0.1,
-                                 r=R[seg[0]:seg[1]],
-                                 t=t[seg[0]:seg[1]],
-                                 connect=args.seg,
-                                 color=[1.0, 0.0, 0.0])
+    scene.add_camera_frustum(name=f"traj_{i:04d}", focal_length=focal,
+                             image_width=image_wh[0],
+                             image_height=image_wh[1],
+                             z=0.1,
+                             r=R,
+                             t=t,
+                             connect=args.seg,
+                             color=[1.0, 0.0, 0.0])
 
     if pose_gt_dir is not None:
         print('Loading GT')
