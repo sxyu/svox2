@@ -229,14 +229,10 @@ def main():
     image_files = sorted([x for x in os.listdir(images_dir) if x.lower().endswith('.png') or x.lower().endswith('.jpg')], key=sort_key)
 
     all_poses = []
-    pnum, seg_begin = None, 0
     for i, pose_file in enumerate(pose_files):
         pose = np.loadtxt(path.join(pose_dir, pose_file)).reshape(4, 4)
-        splt = path.splitext(pose_file)[0].split('_')
-        num = int(splt[1] if len(splt) > 1 else splt[0])
-        if pnum is not None and num - pnum > 1 and seg_begin < num:
-            seg_begin = i
-        pnum = num
+        #  splt = path.splitext(pose_file)[0].split('_')
+        #  num = int(splt[1] if len(splt) > 1 else splt[0])
         all_poses.append(pose)
     all_poses = np.stack(all_poses)
 
