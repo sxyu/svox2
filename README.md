@@ -80,6 +80,8 @@ for forward-facing scenes, and
 The dataset format will be auto-detected from `data_dir`.
 Checkpoints will be in `ckpt/exp_name`.
 
+**For pretrained checkpoints please see:** https://drive.google.com/drive/folders/1SOEJDw8mot7kf5viUK9XryOAmZGe_vvE?usp=sharing
+
 ## Evaluation
 
 Use `opt/render_imgs.py`
