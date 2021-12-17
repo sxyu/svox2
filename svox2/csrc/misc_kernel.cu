@@ -11,9 +11,13 @@
 #include "cubemap_util.cuh"
 
 namespace {
+
+const int MISC_CUDA_THREADS = 256;
+const int MISC_MIN_BLOCKS_PER_SM = 4;
 namespace device {
 
 // Can also implement using convs.....
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
 __global__ void dilate_kernel(
         const torch::PackedTensorAccessor32<bool, 3, torch::RestrictPtrTraits> grid,
         // Output
@@ -49,6 +53,7 @@ __global__ void dilate_kernel(
 // ** Distance transforms
 // TODO: Maybe replace this with an euclidean distance transform eg PBA
 // Actual L-infty distance transform; turns out this is slower than the geometric way
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
 __global__ void accel_linf_dist_transform_kernel(
         torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> grid,
         int32_t* __restrict__ tmp,
@@ -101,6 +106,7 @@ __global__ void accel_linf_dist_transform_kernel(
 }
 
 // Geometric L-infty distance transform-ish thing
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
 __global__ void accel_dist_set_kernel(
         const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> grid,
         bool* __restrict__ tmp) {
@@ -134,6 +140,7 @@ __global__ void accel_dist_set_kernel(
     }
 }
 
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
 __global__ void accel_dist_prop_kernel(
         torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> grid,
         const bool* __restrict__ tmp) {
@@ -299,6 +306,7 @@ __device__ __inline__ void grid_trace_ray(
 //             chnl_id);
 // }
 
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
 __global__ void grid_weight_render_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
         data,
@@ -336,10 +344,9 @@ torch::Tensor dilate(torch::Tensor grid) {
 
     int Q = grid.size(0) * grid.size(1) * grid.size(2);
 
-    const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
     torch::Tensor result = torch::empty_like(grid);
-    device::dilate_kernel<<<blocks, cuda_n_threads>>>(
+    device::dilate_kernel<<<blocks, MISC_CUDA_THREADS>>>(
             grid.packed_accessor32<bool, 3, torch::RestrictPtrTraits>(),
             // Output
             result.packed_accessor32<bool, 3, torch::RestrictPtrTraits>());
@@ -359,8 +366,7 @@ void accel_dist_prop(torch::Tensor grid) {
 
     int Q = grid.size(0) * grid.size(1) * grid.size(2);
 
-    const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
 
     int64_t req_size = 0;
     while (sz_x > 1 && sz_y > 1 && sz_z > 1) {
@@ -376,11 +382,11 @@ void accel_dist_prop(torch::Tensor grid) {
                   .device(grid.device())
                   .requires_grad(false);
     torch::Tensor tmp = torch::zeros({req_size}, tmp_options);
-    device::accel_dist_set_kernel<<<blocks, cuda_n_threads>>>(
+    device::accel_dist_set_kernel<<<blocks, MISC_CUDA_THREADS>>>(
             grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
             tmp.data_ptr<bool>());
 
-    device::accel_dist_prop_kernel<<<blocks, cuda_n_threads>>>(
+    device::accel_dist_prop_kernel<<<blocks, MISC_CUDA_THREADS>>>(
             grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
             tmp.data_ptr<bool>());
 
@@ -396,10 +402,9 @@ void accel_dist_prop(torch::Tensor grid) {
     //         int d1 = 3 - d0 - d2;
     //         int Q = grid.size(d0) * grid.size(d1);
     //
-    //         const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
-    //         const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    //         const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
     //
-    //         device::accel_linf_dist_transform_kernel<<<blocks, cuda_n_threads>>>(
+    //         device::accel_linf_dist_transform_kernel<<<blocks, MISC_CUDA_THREADS>>>(
     //                 grid.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
     //                 tmp,
     //                 d2);
@@ -425,10 +430,9 @@ void grid_weight_render(
     cam.check();
     const size_t Q = size_t(cam.width) * cam.height;
 
-    const int cuda_n_threads = 512;
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
 
-    device::grid_weight_render_kernel<<<blocks, cuda_n_threads>>>(
+    device::grid_weight_render_kernel<<<blocks, MISC_CUDA_THREADS>>>(
         data.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         cam,
         step_size,
@@ -455,10 +459,9 @@ void grid_weight_render(
 //     TORCH_CHECK(cubemap.size(1) == cubemap.size(2));
 //
 //     const size_t Q = size_t(dirs.size(0)) * cubemap.size(3);
-//     const int cuda_n_threads = 512;
-//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
 //
-//     device::sample_cubemap_kernel<<<blocks, cuda_n_threads>>>(
+//     device::sample_cubemap_kernel<<<blocks, MISC_CUDA_THREADS>>>(
 //         cubemap.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
 //         dirs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
 //         Q,

@@ -156,6 +156,11 @@ group.add_argument('--init_sigma_bg', type=float,
                    default=0.1,
                    help='initialization sigma (for BG)')
 
+# Extra logging
+group.add_argument('--log_mse_image', action='store_true', default=False)
+group.add_argument('--log_depth_map', action='store_true', default=False)
+group.add_argument('--log_depth_map_use_thresh', type=float, default=None,
+        help="If specified, uses the Dex-neRF version of depth with given thresh; else returns expected term")
 
 
 group = parser.add_argument_group("misc experiments")
@@ -238,6 +243,7 @@ group.add_argument('--n_train', type=int, default=None, help='Number of training
 
 group.add_argument('--nosphereinit', action='store_true', default=False,
                      help='do not start with sphere bounds (please do not use for 360)')
+
 args = parser.parse_args()
 config_util.maybe_merge_config_file(args)
 
@@ -405,9 +411,19 @@ while True:
                     img_pred.clamp_max_(1.0)
                     summary_writer.add_image(f'test/image_{img_id:04d}',
                             img_pred, global_step=gstep_id_base, dataformats='HWC')
-                    mse_img = all_mses / all_mses.max()
-                    summary_writer.add_image(f'test/mse_map_{img_id:04d}',
-                            mse_img, global_step=gstep_id_base, dataformats='HWC')
+                    if args.log_mse_image:
+                        mse_img = all_mses / all_mses.max()
+                        summary_writer.add_image(f'test/mse_map_{img_id:04d}',
+                                mse_img, global_step=gstep_id_base, dataformats='HWC')
+                    if args.log_depth_map:
+                        depth_img = grid.volume_render_depth_image(cam,
+                                    args.log_depth_map_use_thresh if
+                                    args.log_depth_map_use_thresh else None
+                                )
+                        depth_img = viridis_cmap(depth_img.cpu())
+                        summary_writer.add_image(f'test/depth_map_{img_id:04d}',
+                                depth_img,
+                                global_step=gstep_id_base, dataformats='HWC')
 
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()

@@ -19,8 +19,11 @@ dependencies:
       - imageio
       - imageio-ffmpeg
       - pymcubes
+      - moviepy
+      - matplotlib
       - scipy>=1.6.0
   - pytorch
+  - torchvision
   - cudatoolkit
   - tqdm
 

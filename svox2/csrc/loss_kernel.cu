@@ -61,6 +61,7 @@ void calculate_ray_scale(float ndc_coeffx,
             maxz, \
             out_name)
 
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void tv_kernel(
         torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
         torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
@@ -497,10 +498,9 @@ torch::Tensor tv(torch::Tensor links, torch::Tensor data,
     int nl = (links.size(0) - 1) * (links.size(1) - 1) * (links.size(2) - 1);
     size_t Q = nl * size_t(end_dim - start_dim);
 
-    const int cuda_n_threads = 1024;
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TV_GRAD_CUDA_THREADS);
     torch::Tensor result = torch::zeros({}, data.options());
-    device::tv_kernel<<<blocks, cuda_n_threads>>>(
+    device::tv_kernel<<<blocks, TV_GRAD_CUDA_THREADS>>>(
             links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
             data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
             start_dim,

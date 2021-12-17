@@ -18,7 +18,7 @@ Citation:
 ```
 @misc{yu2021plenoxels,
       title={Plenoxels: Radiance Fields without Neural Networks}, 
-      author={Alex Yu and Sara Fridovich-Keil and Matthew Tancik and Qinhong Chen and Benjamin Recht and Angjoo Kanazawa},
+      author={{Alex Yu and Sara Fridovich-Keil} and Matthew Tancik and Qinhong Chen and Benjamin Recht and Angjoo Kanazawa},
       year={2021},
       eprint={2112.05131},
       archivePrefix={arXiv},
@@ -27,6 +27,7 @@ Citation:
 ```
 
 This contains the official optimization code.
+A JAX implementation is also available at <https://github.com/sarafridov/plenoxels>. However, note that the JAX version is currently feature-limited, running in about 1 hour per epoch and only supporting bounded scenes (at present). 
 
 ![Fast optimization](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/fastopt.gif)
 
@@ -83,6 +84,8 @@ for forward-facing scenes, and
 The dataset format will be auto-detected from `data_dir`.
 Checkpoints will be in `ckpt/exp_name`.
 
+**For pretrained checkpoints please see:** https://drive.google.com/drive/folders/1SOEJDw8mot7kf5viUK9XryOAmZGe_vvE?usp=sharing
+
 ## Evaluation
 
 Use `opt/render_imgs.py`
@@ -124,12 +127,13 @@ For Tanks and Temples scenes
 python autotune.py -g '<space delimited GPU ids>' tasks/eval_tnt.json
 ```
 
-## Using a custom image set
+## Using a custom image set (360)
 
+Please take images all around the object and try to take images at different elevations.
 First make sure you have colmap installed. Then
 
-(in opt/)
-`bash scripts/proc_colmap.sh <img_dir>`
+(in opt/scripts)
+`bash proc_colmap.sh <img_dir>`
 
 Where `<img_dir>` should be a directory directly containing png/jpg images from a 
 normal perspective camera.
@@ -139,14 +143,21 @@ For custom datasets we adopt a data format similar to that in NSVF
 You should be able to use this dataset directly afterwards. The format will be auto-detected.
 
 To view the data use:
-`python scripts/view_data.py <img_dir>`
+`python view_data.py <img_dir>`
 
 This should launch a server at localhost:8889
 
 
-You may need to tune the TV. For forward-facing scenes, often making the TV weights 10x
-higher is helpful (`configs/llff_hitv.json`).
-For the real lego scene I used the config `configs/custom.json`.
+Now follow the "Voxel Optimization (aka Training)" section to train:
+
+`./launch.sh <exp_name> <GPU_id> <data_dir> -c configs/custom.json`
+
+You can also try `configs/custom_alt.json` which has some minor differences.
+You may need to tune the TV for best results.
+
+To render a video, please see the "rendering a spiral" section.
+To convert to a svox1-compatible PlenOctree (not perfect quality since interpolation is not implemented)
+you can try `to_svox1.py <ckpt>`
 
 ## Random tip: how to make pip install faster for native extensions
 

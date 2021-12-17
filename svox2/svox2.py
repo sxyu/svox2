@@ -81,6 +81,28 @@ class RenderOptions:
 
 
 @dataclass
+class Rays:
+    origins: torch.Tensor
+    dirs: torch.Tensor
+
+    def _to_cpp(self):
+        """
+        Generate object to pass to C++
+        """
+        spec = _C.RaysSpec()
+        spec.origins = self.origins
+        spec.dirs = self.dirs
+        return spec
+
+    def __getitem__(self, key):
+        return Rays(self.origins[key], self.dirs[key])
+
+    @property
+    def is_cuda(self) -> bool:
+        return self.origins.is_cuda and self.dirs.is_cuda
+
+
+@dataclass
 class Camera:
     c2w: torch.Tensor  # OpenCV
     fx: float = 1111.11
@@ -129,27 +151,36 @@ class Camera:
         return spec
 
     @property
-    def is_cuda(self):
+    def is_cuda(self) -> bool:
         return self.c2w.is_cuda
 
-
-@dataclass
-class Rays:
-    origins: torch.Tensor
-    dirs: torch.Tensor
-
-    def _to_cpp(self):
+    def gen_rays(self) -> Rays:
         """
-        Generate object to pass to C++
+        Generate the rays for this camera
+        :return: (origins (H*W, 3), dirs (H*W, 3))
         """
-        spec = _C.RaysSpec()
-        spec.origins = self.origins
-        spec.dirs = self.dirs
-        return spec
+        origins = self.c2w[None, :3, 3].expand(self.height * self.width, -1).contiguous()
+        yy, xx = torch.meshgrid(
+            torch.arange(self.height, dtype=torch.float64, device=self.c2w.device) + 0.5,
+            torch.arange(self.width, dtype=torch.float64, device=self.c2w.device) + 0.5,
+        )
+        xx = (xx - self.cx_val) / self.fx_val
+        yy = (yy - self.cy_val) / self.fy_val
+        zz = torch.ones_like(xx)
+        dirs = torch.stack((xx, yy, zz), dim=-1)   # OpenCV
+        del xx, yy, zz
+        dirs /= torch.norm(dirs, dim=-1, keepdim=True)
+        dirs = dirs.reshape(-1, 3, 1)
+        dirs = (self.c2w[None, :3, :3].double() @ dirs)[..., 0]
+        dirs = dirs.reshape(-1, 3).float()
 
-    @property
-    def is_cuda(self):
-        return self.origins.is_cuda and self.dirs.is_cuda
+        if self.ndc_coeffs[0] > 0.0:
+            origins, dirs = utils.convert_to_ndc(
+                    origins,
+                    dirs,
+                    self.ndc_coeffs)
+            dirs /= torch.norm(dirs, dim=-1, keepdim=True)
+        return Rays(origins, dirs)
 
 
 # BEGIN Differentiable CUDA functions with custom gradient
@@ -1037,6 +1068,7 @@ class SparseGrid(nn.Module):
             else:
                 return self._volume_render_gradcheck_lerp(rays, return_raylen=return_raylen)
 
+
     def volume_render_fused(
         self,
         rays: Rays,
@@ -1048,7 +1080,8 @@ class SparseGrid(nn.Module):
         """
         Standard volume rendering with fused MSE gradient generation,
             given a ground truth color for each pixel.
-        Parameter gradients will be updated (no need for backward()).
+        Will update the *.grad tensors for each parameter
+        You can then subtract the grad manually or use the optim_*_step methods
 
         See grid.opt.* (RenderOptions) for configs.
 
@@ -1133,38 +1166,59 @@ class SparseGrid(nn.Module):
             )
         else:
             # Manually generate rays for now
-            origins = camera.c2w[None, :3, 3].expand(camera.height * camera.width, -1).contiguous()
-            yy, xx = torch.meshgrid(
-                torch.arange(camera.height, dtype=torch.float64, device=camera.c2w.device) + 0.5,
-                torch.arange(camera.width, dtype=torch.float64, device=camera.c2w.device) + 0.5,
-            )
-            xx = (xx - camera.cx_val) / camera.fx_val
-            yy = (yy - camera.cy_val) / camera.fy_val
-            zz = torch.ones_like(xx)
-            dirs = torch.stack((xx, yy, zz), dim=-1)   # OpenCV
-            del xx, yy, zz
-            dirs /= torch.norm(dirs, dim=-1, keepdim=True)
-            dirs = dirs.reshape(-1, 3, 1)
-            dirs = (camera.c2w[None, :3, :3].double() @ dirs)[..., 0]
-            dirs = dirs.reshape(-1, 3).float()
-
-            if camera.ndc_coeffs[0] > 0.0:
-                origins, dirs = utils.convert_to_ndc(
-                        origins,
-                        dirs,
-                        camera.ndc_coeffs)
-                dirs /= torch.norm(dirs, dim=-1, keepdim=True)
-
+            rays = camera.gen_rays()
             all_rgb_out = []
             for batch_start in range(0, camera.height * camera.width, batch_size):
-                rays = Rays(origins[batch_start:batch_start+batch_size], dirs[batch_start:batch_start+batch_size])
-                rgb_out_part = self.volume_render(rays, use_kernel=use_kernel,
+                rgb_out_part = self.volume_render(rays[batch_start:batch_start+batch_size],
+                                                  use_kernel=use_kernel,
                                                   randomize=randomize,
                                                   return_raylen=return_raylen)
                 all_rgb_out.append(rgb_out_part)
 
             all_rgb_out = torch.cat(all_rgb_out, dim=0)
             return all_rgb_out.view(camera.height, camera.width, -1)
+
+    def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None):
+        """
+        Volumetric depth rendering for rays
+
+        :param rays: Rays, (origins (N, 3), dirs (N, 3))
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: (N,)
+        """
+        if sigma_thresh is None:
+            return _C.volume_render_expected_term(
+                    self._to_cpp(),
+                    rays._to_cpp(),
+                    self.opt._to_cpp())
+        else:
+            return _C.volume_render_sigma_thresh(
+                    self._to_cpp(),
+                    rays._to_cpp(),
+                    self.opt._to_cpp(),
+                    sigma_thresh)
+
+    def volume_render_depth_image(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000):
+        """
+        Volumetric depth rendering for full image
+
+        :param camera: Camera, a single camera
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: depth (H, W)
+        """
+        rays = camera.gen_rays()
+        all_depths = []
+        for batch_start in range(0, camera.height * camera.width, batch_size):
+            depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh)
+            all_depths.append(depths)
+        all_depth_out = torch.cat(all_depths, dim=0)
+        return all_depth_out.view(camera.height, camera.width)
 
     def resample(
         self,
@@ -2178,7 +2232,7 @@ class SparseGrid(nn.Module):
                 arr = torch.arange(start, start + sparse_num, dtype=torch.int32, device=
                                                 self.links.device)
 
-                if start > grid_size - sparse_num: 
+                if start > grid_size - sparse_num:
                     arr[grid_size - sparse_num - start:] -= grid_size
                 return arr
             else:
@@ -2198,7 +2252,7 @@ class SparseGrid(nn.Module):
             start = np.random.randint(0, grid_size)# - sparse_num + 1)
             arr = torch.arange(start, start + sparse_num, dtype=torch.int32, device=
                                             self.links.device)
-            if start > grid_size - sparse_num: 
+            if start > grid_size - sparse_num:
                 arr[grid_size - sparse_num - start:] -= grid_size
             return arr
         else:
