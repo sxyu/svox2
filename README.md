@@ -55,14 +55,18 @@ In the repo root directory.
 ## Getting datasets
 
 We have backends for NeRF-Blender, LLFF, NSVF, and CO3D dataset formats, and the dataset will be auto-detected.
-Please get the NeRF-synthetic and LLFF datasets from:
 
+Please get the NeRF-synthetic and LLFF datasets from:
 <https://drive.google.com/drive/folders/128yBriW1IG_3NJ5Rp7APSTZsJqdJdfc1>
+(`nerf_synthetic.zip` and `nerf_llff_data.zip`). 
 
 We provide a processed Tanks and temples dataset (with background) in NSVF format at:
 <https://drive.google.com/file/d/1PD4oTP4F8jTtpjd_AQjCsL4h8iYFCyvO/view?usp=sharing>
 
 Note this data should be identical to that in NeRF++
+
+Finally, the real Lego capture can be downloaded from:
+https://drive.google.com/file/d/1PG-KllCv4vSRPO7n5lpBjyTjlUyT8Nag/view?usp=sharing
 
 ## Voxel Optimization (aka Training)
 
