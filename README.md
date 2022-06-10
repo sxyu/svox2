@@ -16,15 +16,14 @@ Also, despite the name, it's not strictly intended to be a successor of svox
 
 Citation:
 ```
-@misc{yu2021plenoxels,
+@inproceedings{yu2021plenoxels,
       title={Plenoxels: Radiance Fields without Neural Networks}, 
-      author={{Alex Yu and Sara Fridovich-Keil} and Matthew Tancik and Qinhong Chen and Benjamin Recht and Angjoo Kanazawa},
-      year={2021},
-      eprint={2112.05131},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
+      author={Sara Fridovich-Keil and Alex Yu and Matthew Tancik and Qinhong Chen and Benjamin Recht and Angjoo Kanazawa},
+      year={2022},
+      booktitle={CVPR},
 }
 ```
+Note that the joint first-authors decided to swap the order of names between arXiv and CVPR proceedings.
 
 This contains the official optimization code.
 A JAX implementation is also available at <https://github.com/sarafridov/plenoxels>. However, note that the JAX version is currently feature-limited, running in about 1 hour per epoch and only supporting bounded scenes (at present). 
