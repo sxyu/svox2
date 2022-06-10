@@ -16,7 +16,7 @@ Also, despite the name, it's not strictly intended to be a successor of svox
 
 Citation:
 ```
-@inproceedings{yu2021plenoxels,
+@inproceedings{yu2022plenoxels,
       title={Plenoxels: Radiance Fields without Neural Networks}, 
       author={Sara Fridovich-Keil and Alex Yu and Matthew Tancik and Qinhong Chen and Benjamin Recht and Angjoo Kanazawa},
       year={2022},
