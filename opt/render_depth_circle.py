@@ -233,7 +233,8 @@ with torch.no_grad():
         torch.cuda.synchronize()
         im = grid.volume_render_depth_image(cam)
         torch.cuda.synchronize()
-        im.clamp_(0.0, 1.0)
+        # im.clamp_(0.0, 1.0)
+        im = im / im.max()
 
         im = im.cpu().numpy()
         im = (im * 255).astype(np.uint8)

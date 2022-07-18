@@ -37,7 +37,7 @@ parser.add_argument(
                     "--height", "-H", type=float, default=None, help="Rendering image height (only if not --traj)"
                             )
 parser.add_argument(
-	"--num_views", "-N", type=int, default=1,
+	"--num_views", "-N", type=int, default=100,
     help="Number of frames to render"
 )
 
@@ -228,14 +228,23 @@ with torch.no_grad():
                            ndc_coeffs=(-1.0, -1.0))
         torch.cuda.synchronize()
         # im = grid.volume_render_depth_image(cam)
-        pts, depth = grid.volume_render_extract_pts(cam)
+        pts, depth = grid.volume_render_extract_pts(cam, 0.25)
         torch.cuda.synchronize()
 
         # depth.clamp_(0.0, 1.0)
+        depth = depth /depth.max()
         pts = pts.cpu().numpy()
         depth = depth.cpu().numpy()
         depth = (depth * 255).astype(np.uint8)
         all_pts.append(pts)
+
+        # # debug purpose, save pts from only one view
+        # np.save(path.join(path.dirname(args.ckpt), 'pts.npy'), pts.astype(np.half))
+        # imageio.imsave(path.join(path.dirname(args.ckpt), 'depth.png'),depth)
+
+        # raise NotImplementedError
+
+        
 
 all_pts = np.concatenate(all_pts, 0).astype(np.half)
 np.save(path.join(path.dirname(args.ckpt), 'pts.npy'), all_pts)
