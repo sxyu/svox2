@@ -1220,6 +1220,31 @@ class SparseGrid(nn.Module):
         all_depth_out = torch.cat(all_depths, dim=0)
         return all_depth_out.view(camera.height, camera.width)
 
+
+    def volume_render_extract_pts(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000):
+        """
+        Volume render and caculate depth for each camera ray, then store a 3D point for each ray
+
+        :param camera: Camera, a single camera
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: [N, 3] points array
+        """
+        # raise NotImplementedError()
+        rays = camera.gen_rays()
+        all_depths = []
+        for batch_start in range(0, camera.height * camera.width, batch_size):
+            depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh)
+            all_depths.append(depths)
+        all_depth_out = torch.cat(all_depths, dim=0)
+        
+        pts = rays.origins + rays.dirs * all_depth_out[:,None]
+        # filter 0 depth
+        pts = pts[all_depth_out!=0.]
+        return pts
+
     def resample(
         self,
         reso: Union[int, List[int]],

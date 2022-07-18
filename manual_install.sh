@@ -1,5 +1,8 @@
-cp svox2/svox2.py ~/miniconda3/envs/plenoctree/lib/python3.8/site-packages/svox2/svox2.py
-cp svox2/utils.py ~/miniconda3/envs/plenoctree/lib/python3.8/site-packages/svox2/utils.py
-cp svox2/version.py ~/miniconda3/envs/plenoctree/lib/python3.8/site-packages/svox2/version.py
-cp svox2/defs.py ~/miniconda3/envs/plenoctree/lib/python3.8/site-packages/svox2/defs.py
-cp svox2/__init__.py ~/miniconda3/envs/plenoctree/lib/python3.8/site-packages/svox2/__init__.py
+LIB_PATH="/home/tw554/.conda/envs/plenoxel/lib/python3.8/site-packages/svox2"
+
+cp svox2/svox2.py $LIB_PATH/svox2.py
+cp svox2/utils.py $LIB_PATH/utils.py
+cp svox2/version.py $LIB_PATH/version.py
+cp svox2/defs.py $LIB_PATH/defs.py
+cp svox2/__init__.py $LIB_PATH/__init__.py
+

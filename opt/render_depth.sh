@@ -1,0 +1,1 @@
+python render_depth_circle.py /rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt/ckpt/test/ckpt.npz /rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/data/nerf_synthetic/lego

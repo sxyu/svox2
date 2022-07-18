@@ -72,6 +72,7 @@ void rmsprop_step(Tensor, Tensor, Tensor, Tensor, float, float, float, float,
 void sgd_step(Tensor, Tensor, Tensor, float, float);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+// macro for easily registering functions
 #define _REG_FUNC(funname) m.def(#funname, &funname)
   _REG_FUNC(sample_grid);
   _REG_FUNC(sample_grid_backward);

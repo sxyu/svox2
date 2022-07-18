@@ -3,3 +3,8 @@ __pycache__/
 *$py.class
 Session.vim
 ckpt/
+
+data/
+.eggs/
+build/
+svox2.egg-info/

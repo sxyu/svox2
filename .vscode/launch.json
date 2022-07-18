@@ -1,0 +1,36 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "train",
+            "type": "python",
+            "request": "launch",
+            "program": "opt.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt",
+            "args": [
+                "-t", "ckpt/debug",
+                "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/data/nerf_synthetic/lego",
+                "-c", "configs/syn.json"
+            ]
+        },
+        {
+            "name": "extract_pts",
+            "type": "python",
+            "request": "launch",
+            "program": "exract_points.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            // "preLaunchTask": "updatesvox2",
+            "cwd": "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt",
+            "args": [
+                "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt/ckpt/test/ckpt.npz",
+                "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/data/nerf_synthetic/lego"
+            ]
+        },
+    ]
+}
