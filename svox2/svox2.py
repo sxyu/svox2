@@ -1,3 +1,4 @@
+from multiprocessing.util import sub_debug
 from .defs import *
 from . import utils
 import torch
@@ -26,7 +27,7 @@ class RenderOptions:
     :param stop_thresh: float
     """
 
-    backend: str = "cuvol"  # One of cuvol, svox1, nvol
+    backend: str = "sdf"  # One of cuvol, svox1, nvol, sdf
 
     background_brightness: float = 1.0  # [0, 1], the background color black-white
 
@@ -367,9 +368,11 @@ class SparseGrid(nn.Module):
         background_nlayers : int = 0,  # BG MSI layers
         background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
+        backend: str = "svox", # svox -- plenoxel volume rendering, sdf -- ours
     ):
         super().__init__()
         self.basis_type = basis_type
+        self.backend = backend
         if basis_type == BASIS_TYPE_SH:
             assert utils.isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
         assert (
@@ -522,6 +525,20 @@ class SparseGrid(nn.Module):
 
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
+
+        if backend == 'sdf':
+            # use density data as alpha values
+            # initialize with small non-zero alpha values
+            self.density_data = nn.Parameter(
+                torch.rand(self.capacity, 1, dtype=torch.float32, device=device) * .1
+            ) # note that it is overritten
+            # TODO: better initialization of SDF values?
+            self.sdf_data = nn.Parameter(
+                torch.rand(self.capacity, 1, dtype=torch.float32, device=device)
+            )
+            with torch.no_grad(): # check!
+                self.sdf_data[self.links[np.arange(1,reso[0],2),:,:].view(-1).long()] *= -1.
+
         self.opt = RenderOptions()
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
@@ -571,6 +588,9 @@ class SparseGrid(nn.Module):
         idxs = links[mask].long()
         results_sigma[mask] = self.density_data[idxs]
         results_sh[mask] = self.sh_data[idxs]
+        if self.backend == 'sdf':
+            results_sdf = self.sdf_data[idxs]
+            return results_sigma, results_sh, results_sdf
         return results_sigma, results_sh
 
     def sample(self, points: torch.Tensor,
@@ -595,6 +615,9 @@ class SparseGrid(nn.Module):
 
         :return: (density, color)
         """
+        if self.backend == 'sdf':
+            raise NotImplementedError
+
         if use_kernel and self.links.is_cuda and _C is not None:
             assert points.is_cuda
             return _SampleGridAutogradFunction.apply(
@@ -679,7 +702,7 @@ class SparseGrid(nn.Module):
 
         gsz = self._grid_size()
         gsz_cu = gsz.to(device=dirs.device)
-        t1 = (-0.5 - origins) * invdirs
+        t1 = (-0.5 - origins) * invdirs # origin + t1 * dir = (-0.5, -0.5, -0.5)
         t2 = (gsz_cu - 0.5 - origins) * invdirs
 
         t = torch.min(t1, t2)
@@ -768,7 +791,7 @@ class SparseGrid(nn.Module):
                 -self.opt.step_size
                 * torch.relu(sigma[..., 0])
                 * delta_scale[good_indices]
-            )
+            ) # alpha
             weight = torch.exp(log_light_intensity[good_indices]) * (
                 1.0 - torch.exp(log_att)
             )
@@ -883,9 +906,9 @@ class SparseGrid(nn.Module):
             )
         return out_rgb
 
-    def _volume_render_gradcheck_nvol_lerp(self, rays: Rays, return_raylen: bool=False):
+    def _sdf_render_gradcheck_lerp(self, rays: Rays, return_raylen: bool=False):
         """
-        trilerp gradcheck version
+        gradcheck version for sdf rendering
         """
         origins = self.world2grid(rays.origins)
         dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True)
@@ -903,6 +926,7 @@ class SparseGrid(nn.Module):
             sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
         else:
             sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
+
         invdirs = 1.0 / dirs
 
         gsz = self._grid_size()
@@ -920,6 +944,594 @@ class SparseGrid(nn.Module):
         if return_raylen:
             return tmax - t
 
+        log_light_intensity = torch.zeros(B, device=origins.device)
+        out_rgb = torch.zeros((B, 3), device=origins.device)
+        good_indices = torch.arange(B, device=origins.device)
+        # last visited voxel for each ray
+        # preventing evaluation on the same voxel twice for the same ray
+        last_voxels = -1 * torch.ones((B, 3), device=origins.device)
+
+        origins_ini = origins
+        dirs_ini = dirs
+
+        # TODO: implement more efficient way to find a set of voxels intersect with given rays
+
+        mask = t <= tmax
+        good_indices = good_indices[mask]
+        origins = origins[mask]
+        dirs = dirs[mask]
+        last_voxels = last_voxels[mask]
+
+        #  invdirs = invdirs[mask]
+        del invdirs
+        t = t[mask]
+        sh_mult = sh_mult[mask]
+        tmax = tmax[mask]
+
+        while good_indices.numel() > 0:
+            pos = origins + t[:, None] * dirs
+            pos = pos.clamp_min_(0.0)
+            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
+            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
+            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
+            _pos = torch.clone(pos)
+            #  print('pym', pos, log_light_intensity)
+
+            l = pos.to(torch.long)
+            l.clamp_min_(0)
+            l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
+            l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
+            l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
+            pos -= l
+
+            # stores ray ids that intersect with new voxels
+            new_voxel_ids = torch.arange(good_indices.numel(), device=origins.device)
+            new_voxel_ids = new_voxel_ids[(l!=last_voxels).any(axis=-1)]
+
+            # BEGIN CRAZY TRILERP
+            # only queries new voxels
+            lx, ly, lz = l[new_voxel_ids].unbind(-1)
+            links000 = self.links[lx, ly, lz]
+            links001 = self.links[lx, ly, lz + 1]
+            links010 = self.links[lx, ly + 1, lz]
+            links011 = self.links[lx, ly + 1, lz + 1]
+            links100 = self.links[lx + 1, ly, lz]
+            links101 = self.links[lx + 1, ly, lz + 1]
+            links110 = self.links[lx + 1, ly + 1, lz]
+            links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+            alpha000, rgb000, sdf000 = self._fetch_links(links000)
+            alpha001, rgb001, sdf001 = self._fetch_links(links001)
+            alpha010, rgb010, sdf010 = self._fetch_links(links010)
+            alpha011, rgb011, sdf011 = self._fetch_links(links011)
+            alpha100, rgb100, sdf100 = self._fetch_links(links100)
+            alpha101, rgb101, sdf101 = self._fetch_links(links101)
+            alpha110, rgb110, sdf110 = self._fetch_links(links110)
+            alpha111, rgb111, sdf111 = self._fetch_links(links111)
+
+            # find intersection between sdf surfaces and rays
+
+            # wx = pos[:, :1]
+            # wy = pos[:, 1:2]
+            # wz = pos[:, 2:]
+            # c00 = sdf000 * (1.-wz) + sdf001 * wz
+            # c01 = sdf010 * (1.-wz) + sdf011 * wz
+            # c10 = sdf100 * (1.-wz) + sdf101 * wz
+            # c11 = sdf110 * (1.-wz) + sdf111 * wz
+            # c0 = c00 * (1.-wy) + c01 * wy
+            # c1 = c10 * (1.-wy) + c11 * wy
+            # sdf = c0 * (1.-wx) + c1 * wx
+
+
+            ################## Simplifying Trlinear Interpolation Function ########################
+            def trilinear_simplify():
+                '''
+                Math for simplyfing trilinear interpolation (with syntax highlighting)
+                This function shouldn't be called
+                '''
+                _t = None # _t is the exact depth we want to calculate
+                ox, oy, oz = origins[new_voxel_ids][:, :1], origins[new_voxel_ids][:, 1:2], origins[new_voxel_ids][:, 2:]
+                vx, vy, vz = dirs[new_voxel_ids][:, :1], dirs[new_voxel_ids][:, 1:2], dirs[new_voxel_ids][:, 2:]
+                wx = ox + _t * vx - lx
+                wy = oy + _t * vy - ly
+                wz = oz + _t * vz - lz
+
+                sdf = ((sdf000 * (1.-wz) + sdf001 * (wz)) * (1.-wy) + (sdf010 * (1.-wz) + sdf011 * (wz)) * (wy)) * (1.-wx) + \
+                      ((sdf100 * (1.-wz) + sdf101 * (wz)) * (1.-wy) + (sdf110 * (1.-wz) + sdf111 * (wz)) * (wy)) * (wx)
+
+                # substituite wz
+
+                sdf = ((sdf000 * (1-oz) + sdf001 * (oz) + _t * vz * (-sdf000 + sdf001)) * (1.-wy) + (sdf010 * (1-oz) + sdf011 * (oz) + _t * vz * (-sdf010 + sdf011)) * (wy)) * (1.-wx) + \
+                      ((sdf100 * (1-oz) + sdf101 * (oz) + _t * vz * (-sdf100 + sdf101)) * (1.-wy) + (sdf110 * (1-oz) + sdf111 * (oz) + _t * vz * (-sdf110 + sdf111)) * (wy)) * (wx)
+                
+                a00 = sdf000 * (1-oz+lz) + sdf001 * (oz-lz)
+                a01 = sdf010 * (1-oz+lz) + sdf011 * (oz-lz)
+                a10 = sdf100 * (1-oz+lz) + sdf101 * (oz-lz)
+                a11 = sdf110 * (1-oz+lz) + sdf111 * (oz-lz)
+
+                b00 = -sdf000 + sdf001
+                b01 = -sdf010 + sdf011
+                b10 = -sdf100 + sdf101
+                b11 = -sdf110 + sdf111
+
+                sdf = ((a00 + _t * vz * b00) * (1.-wy) + (a01 + _t * vz * b01) * (wy)) * (1.-wx) + \
+                      ((a10 + _t * vz * b10) * (1.-wy) + (a11 + _t * vz * b11) * (wy)) * (wx)
+
+                # substitute wy
+
+                sdf = ((a00*(1-oy+ly) - _t * (a00*vy - vz*b00*(1-oy+ly)) - (_t**2) * vy*vz*b00) + (a01*(oy-ly) + _t * (a01*vy + vz*b01*(oy-ly)) + (_t**2) * (vy*vz*b01))) * (1.-wx) + \
+                      ((a10*(1-oy+ly) - _t * (a10*vy - vz*b10*(1-oy+ly)) - (_t**2) * vy*vz*b10) + (a11*(oy-ly) + _t * (a11*vy + vz*b11*(oy-ly)) + (_t**2) * (vy*vz*b11))) * (wx)
+
+
+                c0 = a00*(1-oy+ly) + a01*(oy-ly)
+                c1 = a10*(1-oy+ly) + a11*(oy-ly)
+
+                d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
+                d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
+
+                e0 = -vy*vz*b00 + vy*vz*b01
+                e1 = -vy*vz*b10 + vy*vz*b11
+
+                sdf = (c0 + _t*d0 + (_t**2)*e0) * (1.-wx) + \
+                      (c1 + _t*d1 + (_t**2)*e1) * (wx)
+
+                # substitute wz
+
+                sdf = (c0*(1-ox+lx) + _t*(-c0*vx + d0*(1-ox+lx)) + (_t**2)*(-d0*vx+e0*(1-ox+lx)) + (_t**3)*(-e0*vx)) + \
+                      (c1*(ox-lx  ) + _t*( c1*vx + d1*(ox-lx  )) + (_t**2)*( d1*vx+e1*(ox-lx  )) + (_t**3)*( e1*vx) )
+
+                # final cubic form
+
+                f0 = c0*(1-ox+lx) + c1*(ox-lx)
+                f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
+                f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
+                f3 = -e0*vx + e1*vx
+
+                sdf = f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3
+
+                return NotImplementedError
+
+            ox, oy, oz = origins[new_voxel_ids][:, 0], origins[new_voxel_ids][:, 1], origins[new_voxel_ids][:, 2]
+            vx, vy, vz = dirs[new_voxel_ids][:, 0], dirs[new_voxel_ids][:, 1], dirs[new_voxel_ids][:, 2]
+
+            a00 = sdf000[:,0] * (1-oz+lz) + sdf001[:,0] * (oz-lz)
+            a01 = sdf010[:,0] * (1-oz+lz) + sdf011[:,0] * (oz-lz)
+            a10 = sdf100[:,0] * (1-oz+lz) + sdf101[:,0] * (oz-lz)
+            a11 = sdf110[:,0] * (1-oz+lz) + sdf111[:,0] * (oz-lz)
+
+            b00 = -sdf000[:,0] + sdf001[:,0]
+            b01 = -sdf010[:,0] + sdf011[:,0]
+            b10 = -sdf100[:,0] + sdf101[:,0]
+            b11 = -sdf110[:,0] + sdf111[:,0]
+
+            c0 = a00*(1-oy+ly) + a01*(oy-ly)
+            c1 = a10*(1-oy+ly) + a11*(oy-ly)
+
+            d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
+            d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
+
+            e0 = -vy*vz*b00 + vy*vz*b01
+            e1 = -vy*vz*b10 + vy*vz*b11
+
+            f0 = c0*(1-ox+lx) + c1*(ox-lx)
+            f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
+            f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
+            f3 = -e0*vx + e1*vx
+
+            # analyical solution for f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3 = 0
+            # https://github.com/shril/CubicEquationSolver/blob/master/CubicEquationSolver.py
+
+            a = f3 
+            b = f2
+            c = f1
+            d = f0
+
+            # clip a to prevent it being too close to 0
+            eps = 1e-6
+            a[a>=0] = torch.clamp_min_(a[a>=0], eps)
+            a[a<0] = torch.clamp_max_(a[a<0], -eps)
+
+            ts = torch.ones([a.numel(), 3]).to(device=dirs.device) * -1 # negative roots are considered no roots and are filtered out later
+
+            # # check for trivial a and b -- reduce to linear or polynomial solutions
+            # MIN_VALUE = 1e-5 # TODO: check whether this threshold is ok
+            # tri_a_mask = torch.abs(a) < MIN_VALUE 
+            # tri_ab_mask = tri_a_mask & (torch.abs(b) < MIN_VALUE)
+
+            # ########### Linear Roots ###########
+            # ts[tri_ab_mask, 0] = (-d[tri_ab_mask] * 1.0) / c[tri_ab_mask]
+
+            # ########### Quadratic Roots ###########
+            # _b, _c, _d = b[tri_a_mask], c[tri_a_mask], d[tri_a_mask]
+            # D = _c**2 - 4.0 * _b * _d
+
+            # D_mask = D > 0 # two unique roots
+            # sqrt_D = torch.sqrt(D[D_mask])
+            # ids = torch.arange(ts.shape[0])[tri_a_mask][D_mask]
+            # ts[ids, 0] = ((-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask]))
+            # ts[ids, 1] = (-_c[D_mask] - sqrt_D) / (2.0 * _b[D_mask])
+
+            # D_mask = D == 0 # one unique roots
+            # sqrt_D = torch.sqrt(D[D_mask])
+            # ids = torch.arange(ts.shape[0])[tri_a_mask][D_mask]
+            # ts[ids, 0] = ((-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask]))
+
+            ########### Cubic Roots ###########
+
+            def cond_cbrt(x, eps=1e-6):
+                '''
+                Compute cubic root of x based on sign
+                '''
+                ret = torch.zeros_like(x)
+                ret[x >= 0] = torch.pow(torch.clamp_min_(x[x >= 0], eps), 1/3.)
+                ret[x < 0] = torch.pow(torch.clamp_min_(-x[x < 0], eps), 1/3.) * -1
+                return ret
+
+            f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
+            g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
+            h = ((g**2.) / 4. + (f**3.) / 27.)
+
+            # all three roots are real and equal
+            _mask = (f == 0) & (g == 0) & (h == 0)
+            ts[_mask, 0] = cond_cbrt(d[_mask]/a[_mask])
+
+            # all three roots are real 
+            _mask = (h <= 0) & (~(f == 0) & (g == 0) & (h == 0)) 
+            _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+            
+            _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
+            _j = _i ** (1 / 3.)                      
+            _k = torch.acos(-(_g / (2 * _i)))              
+            _L = _j * -1                              
+            _M = torch.cos(_k / 3.)       
+            _N = np.sqrt(3) * torch.sin(_k / 3.)    
+            _P = (_b / (3. * _a)) * -1                
+
+            ts[_mask, 0] = 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
+            ts[_mask, 1] = _L * (_M + _N) + _P
+            ts[_mask, 2] = _L * (_M - _N) + _P
+
+            # only one root is real
+            _mask = h > 0
+            _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+
+            _R = -(_g / 2.) + torch.sqrt(_h)    
+            _S = cond_cbrt(_R)
+
+            _T = -(_g / 2.) - torch.sqrt(_h)
+            _U = cond_cbrt(_T)
+
+            ts[_mask, 0] = (_S + _U) - (_b / (3. * _a))
+            # ts[_mask, 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
+            # ts[_mask, 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
+
+
+            assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots, possbily due to small coefficients'
+            assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
+
+            def check_solution(i,j):
+                return ts[i,j]**3 * a[i] + ts[i,j]**2 * b[i] + ts[i,j] * c[i] + d[i]
+
+            # TODO: issue, the root can be very coarse!
+
+            def solve(a, b, c, d):
+
+                if (a == 0 and b == 0):                     # Case for handling Liner Equation
+                    return np.array([(-d * 1.0) / c])                 # Returning linear root as numpy array.
+
+                elif (a == 0):                              # Case for handling Quadratic Equations
+
+                    D = c * c - 4.0 * b * d                       # Helper Temporary Variable
+                    if D >= 0:
+                        D = np.sqrt(D)
+                        x1 = (-c + D) / (2.0 * b)
+                        x2 = (-c - D) / (2.0 * b)
+                    else:
+                        D = np.sqrt(-D)
+                        x1 = (-c + D * 1j) / (2.0 * b)
+                        x2 = (-c - D * 1j) / (2.0 * b)
+                        
+                    return np.array([x1, x2])               # Returning Quadratic Roots as numpy array.
+
+                f = findF(a, b, c)                          # Helper Temporary Variable
+                g = findG(a, b, c, d)                       # Helper Temporary Variable
+                h = findH(g, f)                             # Helper Temporary Variable
+
+                if f == 0 and g == 0 and h == 0:            # All 3 Roots are Real and Equal
+                    if (d / a) >= 0:
+                        x = (d / (1.0 * a)) ** (1 / 3.0) * -1
+                    else:
+                        x = (-d / (1.0 * a)) ** (1 / 3.0)
+                    return np.array([x, x, x])              # Returning Equal Roots as numpy array.
+
+                elif h <= 0:                                # All 3 roots are Real
+
+                    i = math.sqrt(((g ** 2.0) / 4.0) - h)   # Helper Temporary Variable
+                    j = i ** (1 / 3.0)                      # Helper Temporary Variable
+                    k = math.acos(-(g / (2 * i)))           # Helper Temporary Variable
+                    L = j * -1                              # Helper Temporary Variable
+                    M = math.cos(k / 3.0)                   # Helper Temporary Variable
+                    N = math.sqrt(3) * math.sin(k / 3.0)    # Helper Temporary Variable
+                    P = (b / (3.0 * a)) * -1                # Helper Temporary Variable
+
+                    x1 = 2 * j * math.cos(k / 3.0) - (b / (3.0 * a))
+                    x2 = L * (M + N) + P
+                    x3 = L * (M - N) + P
+
+                    return np.array([x1, x2, x3])           # Returning Real Roots as numpy array.
+
+                elif h > 0:                                 # One Real Root and two Complex Roots
+                    R = -(g / 2.0) + math.sqrt(h)           # Helper Temporary Variable
+                    if R >= 0:
+                        S = R ** (1 / 3.0)                  # Helper Temporary Variable
+                    else:
+                        S = (-R) ** (1 / 3.0) * -1          # Helper Temporary Variable
+                    T = -(g / 2.0) - math.sqrt(h)
+                    if T >= 0:
+                        U = (T ** (1 / 3.0))                # Helper Temporary Variable
+                    else:
+                        U = ((-T) ** (1 / 3.0)) * -1        # Helper Temporary Variable
+
+                    x1 = (S + U) - (b / (3.0 * a))
+                    x2 = -(S + U) / 2 - (b / (3.0 * a)) + (S - U) * math.sqrt(3) * 0.5j
+                    x3 = -(S + U) / 2 - (b / (3.0 * a)) - (S - U) * math.sqrt(3) * 0.5j
+
+                    return np.array([x1, x2, x3])           # Returning One Real Root and two Complex Roots as numpy array.
+
+
+                # Helper function to return float value of f.
+                def findF(a, b, c):
+                    return ((3.0 * c / a) - ((b ** 2.0) / (a ** 2.0))) / 3.0
+
+
+                # Helper function to return float value of g.
+                def findG(a, b, c, d):
+                    return (((2.0 * (b ** 3.0)) / (a ** 3.0)) - ((9.0 * b * c) / (a **2.0)) + (27.0 * d / a)) /27.0
+
+
+                # Helper function to return float value of h.
+                def findH(g, f):
+                    return ((g ** 2.0) / 4.0 + (f ** 3.0) / 27.0)
+
+
+            ts = ts[..., None]
+            samples = origins[new_voxel_ids, None, :] + ts * dirs[new_voxel_ids, None, :] # B, three intersections, xyz
+
+            # filter out roots with negative t
+            neg_roots = ts.view(-1) < 0
+            samples.view(-1, 3)[neg_roots, :] = -1e3
+
+            # find the intersection that is closes to voxel center
+            centers = (l[new_voxel_ids]+.5)[:,None,:]
+            sq_dists = torch.sum((samples - centers) ** 2,axis=-1)
+            min_ids = torch.min(sq_dists,axis=-1).indices
+            samples = samples[torch.arange(samples.shape[0]), min_ids, :]
+            # note that the samples could still contain invalid coords -- when ray does not intersect with any surface!
+
+            # # remove negative t
+            # invalid_sample_ids = torch.arange(samples.shape[0])[(samples < 0).any(axis=-1)] 
+            # remove all samples outside of the voxel
+            invalid_sample_ids = torch.arange(samples.shape[0])[(
+                (samples < l[new_voxel_ids]).any(axis=-1) | (samples > l[new_voxel_ids]+1).any(axis=-1)
+                )] 
+            # TODO: too many seems to have no valid surface! Check!
+
+            def save_vis_cache():
+                '''
+                Save parameters for visualization
+                '''
+                cache = {
+                    'origins': origins.cpu().detach().numpy(),
+                    'dirs': dirs.cpu().detach().numpy(),
+                    'sdf000': sdf000.cpu().detach().numpy(),
+                    'sdf001': sdf001.cpu().detach().numpy(),
+                    'sdf010': sdf010.cpu().detach().numpy(),
+                    'sdf011': sdf011.cpu().detach().numpy(),
+                    'sdf100': sdf100.cpu().detach().numpy(),
+                    'sdf101': sdf101.cpu().detach().numpy(),
+                    'sdf110': sdf110.cpu().detach().numpy(),
+                    'sdf111': sdf111.cpu().detach().numpy(),
+                    'l': l.cpu().detach().numpy(),
+                    't': t.cpu().detach().numpy(),
+                }
+
+                np.save('vis_cache.npy', cache)
+
+            
+            # interpolate opacity
+            wa, wb = 1. - (samples - l[new_voxel_ids]), (samples - l[new_voxel_ids])
+            c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
+            c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
+            c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
+            c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+            # remove invalid samples
+            alpha[invalid_sample_ids] = 0.
+
+
+            # interpolate rgb
+            c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+            c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+            c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+            c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+            # END CRAZY TRILERP
+
+            # log_att = (
+            #     -self.opt.step_size
+            #     * torch.relu(alpha[..., 0])
+            #     * delta_scale[good_indices]
+            # ) # log(density * dist)
+
+            good_new_vox_ids = good_indices[new_voxel_ids]
+            log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
+
+            assert not torch.isnan(log_att).any(), 'NaN detcted in log_att!'
+
+            weight = torch.exp(log_light_intensity[good_new_vox_ids]) * alpha[:,0]
+            # [B', 3, n_sh_coeffs]
+            rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
+            rgb = torch.clamp_min(
+                torch.sum(sh_mult[new_voxel_ids,:].unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
+                0.0,
+            )  # [B', 3]
+            rgb = weight[:, None] * rgb[:, :3]
+
+            assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
+
+            out_rgb[good_new_vox_ids] += rgb
+            log_light_intensity[good_new_vox_ids] += log_att
+            # update last voxels
+            last_voxels = l
+            t += self.opt.step_size
+
+            mask = t <= tmax
+            good_indices = good_indices[mask]
+            origins = origins[mask]
+            dirs = dirs[mask]
+            #  invdirs = invdirs[mask]
+            t = t[mask]
+            sh_mult = sh_mult[mask]
+            tmax = tmax[mask]
+            last_voxels = last_voxels[mask]
+
+        if self.use_background:
+            raise NotImplementedError
+            # Render the MSI background model
+            csi = utils.ConcentricSpheresIntersector(
+                    gsz_cu,
+                    origins_ini,
+                    dirs_ini,
+                    delta_scale)
+            inner_radius = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1) + 1e-3
+            inner_radius = inner_radius.clamp_min(1.0)
+            _, t_last = csi.intersect(inner_radius)
+            n_steps = int(self.background_nlayers / self.opt.step_size) + 2
+            layer_scale = (self.background_nlayers - 1) / (n_steps + 1)
+
+            def fetch_bg_link(lx, ly, lz):
+                results = torch.zeros([lx.shape[0], self.background_data.size(-1)],
+                                        device=lx.device)
+                lnk = self.background_links[lx, ly]
+                mask = lnk >= 0
+                results[mask] = self.background_data[lnk[mask].long(), lz[mask]]
+                return results
+
+            for i in range(n_steps):
+                r : float = n_steps / (n_steps - i - 0.5)
+                normalized_inv_radius = min((i + 1) * layer_scale, self.background_nlayers - 1)
+                layerid = min(int(normalized_inv_radius), self.background_nlayers - 2);
+                interp_wt = normalized_inv_radius - layerid;
+
+                active_mask, t = csi.intersect(r)
+                active_mask = active_mask & (r >= inner_radius)
+                if active_mask.count_nonzero() == 0:
+                    continue
+                t_sub = t[active_mask]
+                t_mid_sub = (t_sub + t_last[active_mask]) * 0.5
+                sphpos = csi.origins[active_mask] + \
+                         t_mid_sub.unsqueeze(-1) * csi.dirs[active_mask]
+                invr_mid = 1.0 / torch.norm(sphpos, dim=-1)
+                sphpos *= invr_mid.unsqueeze(-1)
+
+                xy = utils.xyz2equirect(sphpos, self.background_links.size(1))
+                z = torch.clamp((1.0 - invr_mid) * self.background_nlayers - 0.5, 0.0,
+                               self.background_nlayers - 1);
+                points = torch.cat([xy, z.unsqueeze(-1)], dim=-1)
+                l = points.to(torch.long)
+                l[..., 0].clamp_max_(self.background_links.size(0) - 1)
+                l[..., 1].clamp_max_(self.background_links.size(1) - 1)
+                l[..., 2].clamp_max_(self.background_nlayers - 2)
+
+                wb = points - l
+                wa = 1.0 - wb
+                lx, ly, lz = l.unbind(-1)
+                lnx = (lx + 1) % self.background_links.size(0)
+                lny = (ly + 1) % self.background_links.size(1)
+                lnz = lz + 1
+
+                v000 = fetch_bg_link(lx, ly, lz)
+                v001 = fetch_bg_link(lx, ly, lnz)
+                v010 = fetch_bg_link(lx, lny, lz)
+                v011 = fetch_bg_link(lx, lny, lnz)
+                v100 = fetch_bg_link(lnx, ly, lz)
+                v101 = fetch_bg_link(lnx, ly, lnz)
+                v110 = fetch_bg_link(lnx, lny, lz)
+                v111 = fetch_bg_link(lnx, lny, lnz)
+
+                c00 = v000 * wa[:, 2:] + v001 * wb[:, 2:]
+                c01 = v010 * wa[:, 2:] + v011 * wb[:, 2:]
+                c10 = v100 * wa[:, 2:] + v101 * wb[:, 2:]
+                c11 = v110 * wa[:, 2:] + v111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                rgba = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * (
+                            t_sub - t_last[active_mask]
+                        )
+                weight = torch.exp(log_light_intensity[active_mask]) * (
+                    1.0 - torch.exp(log_att)
+                )
+                rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
+                out_rgb[active_mask] += rgb * weight[:, None]
+                log_light_intensity[active_mask] += log_att
+                t_last[active_mask] = t[active_mask]
+
+        # Add background color
+        if self.opt.background_brightness:
+            out_rgb += (
+                torch.exp(log_light_intensity).unsqueeze(-1)
+                * self.opt.background_brightness
+            )
+        return out_rgb
+
+    def _volume_render_gradcheck_nvol_lerp(self, rays: Rays, return_raylen: bool=False):
+        """
+        trilerp gradcheck version
+        """
+        origins = self.world2grid(rays.origins)
+        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True)
+        viewdirs = dirs
+        B = dirs.size(0)
+        assert origins.size(0) == B
+        gsz = self._grid_size() # gives grid dimension
+        # converting length of dirs to match grid size
+        # this is mainly to get the delta scale which converts between grid length to world length?
+        dirs = dirs * (self._scaling * gsz).to(device=dirs.device) 
+        delta_scale = 1.0 / dirs.norm(dim=1)
+        dirs *= delta_scale.unsqueeze(-1)
+
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            sh_mult = self._eval_learned_bases(viewdirs)
+        elif self.basis_type == BASIS_TYPE_MLP:
+            sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
+        else:
+            sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
+        # TODO: what is invdirs and t??? This seems to calculate near/far for all rays but how?
+        invdirs = 1.0 / dirs
+
+        gsz = self._grid_size()
+        gsz_cu = gsz.to(device=dirs.device)
+        t1 = (-0.5 - origins) * invdirs
+        t2 = (gsz_cu - 0.5 - origins) * invdirs
+
+        t = torch.min(t1, t2)
+        t[dirs == 0] = -1e9 # why?
+        t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
+
+        tmax = torch.max(t1, t2)
+        tmax[dirs == 0] = 1e9
+        tmax = torch.min(tmax, dim=-1).values
+        if return_raylen:
+            return tmax - t
+
         total_alpha = torch.zeros(B, device=origins.device)
         out_rgb = torch.zeros((B, 3), device=origins.device)
         good_indices = torch.arange(B, device=origins.device)
@@ -927,6 +1539,7 @@ class SparseGrid(nn.Module):
         origins_ini = origins
         dirs_ini = dirs
 
+        # mask out ts that are out of bound
         mask = t <= tmax
         good_indices = good_indices[mask]
         origins = origins[mask]
@@ -942,16 +1555,16 @@ class SparseGrid(nn.Module):
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
             pos = pos.clamp_min_(0.0)
-            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz[0] - 1)
-            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz[1] - 1)
-            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz[2] - 1)
+            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
+            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
+            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
 
             l = pos.to(torch.long)
             l.clamp_min_(0)
-            l[:, 0] = torch.clamp_max(l[:, 0], gsz[0] - 2)
-            l[:, 1] = torch.clamp_max(l[:, 1], gsz[1] - 2)
-            l[:, 2] = torch.clamp_max(l[:, 2], gsz[2] - 2)
-            pos -= l
+            l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
+            l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
+            l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
+            pos -= l # decimal part of the indices -- used to interpolate
 
             # BEGIN CRAZY TRILERP
             lx, ly, lz = l.unbind(-1)
@@ -964,7 +1577,7 @@ class SparseGrid(nn.Module):
             links110 = self.links[lx + 1, ly + 1, lz]
             links111 = self.links[lx + 1, ly + 1, lz + 1]
 
-            sigma000, rgb000 = self._fetch_links(links000)
+            sigma000, rgb000 = self._fetch_links(links000) # rgb here is actually SH coefficients
             sigma001, rgb001 = self._fetch_links(links001)
             sigma010, rgb010 = self._fetch_links(links010)
             sigma011, rgb011 = self._fetch_links(links011)
@@ -1001,7 +1614,7 @@ class SparseGrid(nn.Module):
             #      1.0 - torch.exp(log_att)
             #  )
             delta_alpha = 1.0 - torch.exp(log_att)
-            total_alpha_sub = total_alpha[good_indices]
+            total_alpha_sub = total_alpha[good_indices] # accumulated alpha along each ray
             new_total_alpha = torch.clamp_max(total_alpha_sub + delta_alpha, 1.0)
             weight = new_total_alpha - total_alpha_sub
             total_alpha[good_indices] = new_total_alpha
@@ -1065,6 +1678,8 @@ class SparseGrid(nn.Module):
             warn("Using slow volume rendering, should only be used for debugging")
             if self.opt.backend == 'nvol':
                 return self._volume_render_gradcheck_nvol_lerp(rays, return_raylen=return_raylen)
+            elif self.opt.backend == 'sdf':
+                return self._sdf_render_gradcheck_lerp(rays, return_raylen=return_raylen)
             else:
                 return self._volume_render_gradcheck_lerp(rays, return_raylen=return_raylen)
 
@@ -1095,6 +1710,9 @@ class SparseGrid(nn.Module):
                                  [Lombardi et al., ToG 2019]
         :return: (N, 3), predicted RGB
         """
+
+        if self.backend == 'sdf':
+            raise NotImplementedError
         assert (
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for fused"
@@ -1332,6 +1950,8 @@ class SparseGrid(nn.Module):
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
             self.density_data.grad = None
+            if self.backend == 'sdf':
+                self.sdf_data.grad = None
             self.sh_data.grad = None
             self.sparse_grad_indexer = None
             self.sparse_sh_grad_indexer = None
@@ -1418,6 +2038,8 @@ class SparseGrid(nn.Module):
 
             sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
             del self.density_data
+            if self.backend == 'sdf':
+                del self.sdf_data
             del self.sh_data
             del all_sample_vals_sh
 
@@ -1442,6 +2064,9 @@ class SparseGrid(nn.Module):
             print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
             print('links', init_links.shape, init_links.dtype)
             self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
+            if self.backend == 'sdf':
+                raise NotImplementedError
+
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
             self.links = init_links.view(reso).to(device=device)
 
@@ -1560,6 +2185,8 @@ class SparseGrid(nn.Module):
             "density_data":self.density_data.data.cpu().numpy(),
             "sh_data":self.sh_data.data.cpu().numpy().astype(np.float16),
         }
+        if self.backend == 'sdf':
+            data['sdf_data'] = self.sdf_data.data.cpu().numpy(),
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -1698,6 +2325,8 @@ class SparseGrid(nn.Module):
 
         t[index, :-1] = self.sh_data.data.to(device=device)
         t[index, -1:] = self.density_data.data.to(device=device)
+        if self.backend == 'sdf':
+            raise NotImplementedError
         return t
 
     def tv(self, logalpha: bool=False, logalpha_delta: float=2.0,
@@ -1713,6 +2342,10 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for total variation"
         assert not logalpha, "No longer supported"
+
+        if self.backend == 'sdf':
+            raise NotImplementedError
+
         return _TotalVariationFunction.apply(
                 self.density_data, self.links, 0, 1, logalpha, logalpha_delta,
                 False, ndc_coeffs)
@@ -1765,6 +2398,9 @@ class SparseGrid(nn.Module):
         [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
         """
+        if self.backend == 'sdf':
+            raise NotImplementedError
+
         assert (
             _C is not None and self.density_data.is_cuda and grad.is_cuda
         ), "CUDA extension is currently required for total variation"
@@ -2163,6 +2799,8 @@ class SparseGrid(nn.Module):
         """
         gspec = _C.SparseGridSpec()
         gspec.density_data = self.density_data
+        if self.backend == 'sdf':
+            gspec.sdf_data = self.sdf_data
         gspec.sh_data = self.sh_data
         gspec.links = self.links
         if grid_coords:

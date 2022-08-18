@@ -101,9 +101,19 @@ echo "Current directory: `pwd`"
 echo -e "\nnumtasks=$numtasks, numnodes=$numnodes, mpi_tasks_per_node=$mpi_tasks_per_node (OMP_NUM_THREADS=$OMP_NUM_THREADS)"
 
 
-EXP_NAME="test"
-DATA_DIR="/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/data/nerf_synthetic/lego"
-CONFIG="/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt/configs/syn.json"
+# EXP_NAME="lego"
+# DATA_DIR="../data/nerf_synthetic/lego"
+# CONFIG="./configs/syn.json"
+
+# EXP_NAME="horns"
+# DATA_DIR="../data/nerf_llff_data/horns"
+# CONFIG="./configs/llff.json"
+
+EXP_NAME="materials"
+DATA_DIR="../data/nerf_synthetic/materials"
+CONFIG="./configs/syn.json"
+
+
 
 
 CKPT_DIR=ckpt/$EXP_NAME

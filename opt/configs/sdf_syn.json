@@ -1,0 +1,10 @@
+{
+    "reso": "[[256, 256, 256], [512, 512, 512]]",
+    "upsamp_every": 1e20,
+    "lr_sigma": 3e1,
+    "lr_sh": 1e-2,
+    "lambda_tv": 0,
+    "lambda_tv_sh": 0,
+    "renderer_backend": "sdf",
+    "n_iters": 1000
+}

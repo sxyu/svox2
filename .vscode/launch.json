@@ -5,16 +5,16 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "train",
+            "name": "train_python",
             "type": "python",
             "request": "launch",
             "program": "opt.py",
             "console": "integratedTerminal",
-            "justMyCode": true,
-            "cwd": "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt",
+            "justMyCode": false,
+            "cwd": "/home/tw554/plenoxels/opt",
             "args": [
                 "-t", "ckpt/debug",
-                "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/data/nerf_synthetic/lego",
+                "../data/nerf_synthetic/lego",
                 "-c", "configs/syn.json"
             ]
         },
@@ -26,11 +26,71 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             // "preLaunchTask": "updatesvox2",
-            "cwd": "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt",
+            "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt/ckpt/test/ckpt.npz",
-                "/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/data/nerf_synthetic/lego"
+                "ckpt/lego/ckpt.npz",
+                "../data/nerf_synthetic/lego"
             ]
         },
+        {
+            "name": "train cpp",
+            "type": "pythoncpp",
+            "request": "launch",
+            "pythonLaunchName": "train_python",
+            "cppAttachName": "(gdb) Attach"
+        },
+        {
+            "name": "current file cpp",
+            "type": "pythoncpp",
+            "request": "launch",
+            "pythonLaunchName": "current file py",
+            "cppAttachName": "(gdb) Attach"
+        },
+        {
+            "name": "current file py",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "test sdf py",
+            "type": "python",
+            "request": "launch",
+            "program": "test/test_render_gradcheck_sdf.py",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "opt sdf py",
+            "type": "python",
+            "request": "launch",
+            "program": "opt.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "/home/tw554/plenoxels/opt",
+            "args": [
+                "-t", "ckpt/debug_sdf",
+                "../data/nerf_synthetic/lego",
+                "-c", "configs/sdf_syn.json"
+            ]
+        },
+        {
+            "name": "(gdb) Attach",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "/home/tw554/.conda/envs/plenoxel/bin/python3.8",
+            "processId": "",
+            "MIMode": "gdb",
+            // "miDebuggerPath": "/path/to/gdb or remove this attribute for the path to be found automatically",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
     ]
 }

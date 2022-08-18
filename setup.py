@@ -10,6 +10,8 @@ ROOT_DIR = osp.dirname(osp.abspath(__file__))
 __version__ = None
 exec(open('svox2/version.py', 'r').read())
 
+os.environ["MAX_JOBS"] = "8"
+
 CUDA_FLAGS = []
 INSTALL_REQUIREMENTS = []
 include_dirs = [osp.join(ROOT_DIR, "svox2", "csrc", "include")]
@@ -44,8 +46,12 @@ try:
             'svox2/csrc/misc_kernel.cu',
             'svox2/csrc/loss_kernel.cu',
             'svox2/csrc/optim_kernel.cu',
+            # 'svox2/csrc/add.cpp'
         ], include_dirs=include_dirs,
-        optional=False),
+        optional=False,
+        extra_compile_args=["-g"]
+        ),
+        # CUDAExtension("my_add", ["svox2/csrc/add.cpp"], optional=False, extra_compile_args=["-g"])
     ]
 except:
     import warnings

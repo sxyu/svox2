@@ -37,7 +37,7 @@ parser.add_argument(
                     "--height", "-H", type=float, default=None, help="Rendering image height (only if not --traj)"
                             )
 parser.add_argument(
-	"--num_views", "-N", type=int, default=100,
+	"--num_views", "-N", type=int, default=30,
     help="Number of frames to render"
 )
 
@@ -227,8 +227,9 @@ with torch.no_grad():
                            w, h,
                            ndc_coeffs=(-1.0, -1.0))
         torch.cuda.synchronize()
-        # im = grid.volume_render_depth_image(cam)
-        pts, depth = grid.volume_render_extract_pts(cam, 0.25)
+        depth = grid.volume_render_depth_image(cam)
+        torch.cuda.synchronize()
+        pts = grid.volume_render_extract_pts(cam, 0.25)
         torch.cuda.synchronize()
 
         # depth.clamp_(0.0, 1.0)
