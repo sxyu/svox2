@@ -68,7 +68,7 @@
             "request": "launch",
             "program": "opt.py",
             "console": "integratedTerminal",
-            "justMyCode": true,
+            "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
                 "-t", "ckpt/debug_sdf",

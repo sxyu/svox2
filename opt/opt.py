@@ -37,6 +37,7 @@ from typing import NamedTuple, Optional, Union
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 args = config_util.setup_conf()
+USE_KERNEL = not args.nokernel
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
 assert args.lr_sh_final <= args.lr_sh, "lr_sh must be >= lr_sh_final"
@@ -164,7 +165,7 @@ while True:
     epoch_size = dset.rays.origins.size(0)
     batches_per_epoch = (epoch_size-1)//args.batch_size+1
     # Test
-    def eval_step():
+    def eval_step(step_id=gstep_id_base):
         # Put in a function to avoid memory leak
         print('Eval step')
         with torch.no_grad():
@@ -172,6 +173,7 @@ while True:
 
             # Standard set
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
+            N_IMGS_TO_EVAL = 1
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
@@ -195,18 +197,18 @@ while True:
                                    width=dset_test.get_image_size(img_id)[1],
                                    height=dset_test.get_image_size(img_id)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
                     img_pred = rgb_pred_test.cpu()
                     img_pred.clamp_max_(1.0)
                     summary_writer.add_image(f'test/image_{img_id:04d}',
-                            img_pred, global_step=gstep_id_base, dataformats='HWC')
+                            img_pred, global_step=step_id, dataformats='HWC')
                     if args.log_mse_image:
                         mse_img = all_mses / all_mses.max()
                         summary_writer.add_image(f'test/mse_map_{img_id:04d}',
-                                mse_img, global_step=gstep_id_base, dataformats='HWC')
+                                mse_img, global_step=step_id, dataformats='HWC')
                     if args.log_depth_map:
                         depth_img = grid.volume_render_depth_image(cam,
                                     args.log_depth_map_use_thresh if
@@ -215,7 +217,7 @@ while True:
                         depth_img = viridis_cmap(depth_img.cpu())
                         summary_writer.add_image(f'test/depth_map_{img_id:04d}',
                                 depth_img,
-                                global_step=gstep_id_base, dataformats='HWC')
+                                global_step=step_id, dataformats='HWC')
 
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
@@ -248,20 +250,21 @@ while True:
                                 0, 0.5, [255, 0, 0])
                 sphfuncs_cmapped = np.concatenate(sphfuncs_cmapped, axis=0)
                 summary_writer.add_image(f'test/spheric',
-                        sphfuncs_cmapped, global_step=gstep_id_base, dataformats='HWC')
+                        sphfuncs_cmapped, global_step=step_id, dataformats='HWC')
                 # END add spherical map visualization
 
             stats_test['mse'] /= n_images_gen
             stats_test['psnr'] /= n_images_gen
             for stat_name in stats_test:
                 summary_writer.add_scalar('test/' + stat_name,
-                        stats_test[stat_name], global_step=gstep_id_base)
-            summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
+                        stats_test[stat_name], global_step=step_id)
+            summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=step_id)
             print('eval stats:', stats_test)
-    if epoch_id % max(factor, args.eval_every) == 0: #and (epoch_id > 0 or not args.tune_mode):
-        # NOTE: we do an eval sanity check, if not in tune_mode
-        eval_step()
-        gc.collect()
+    # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0 or not args.tune_mode):
+    # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0):
+    #     # NOTE: we do an eval sanity check, if not in tune_mode
+    #     eval_step()
+    #     gc.collect()
 
     def train_step():
         print('Train step')
@@ -288,13 +291,25 @@ while True:
             rays = svox2.Rays(batch_origins, batch_dirs)
 
             #  with Timing("volrend_fused"):
-            rgb_pred = grid.volume_render_fused(rays, rgb_gt,
-                    beta_loss=args.lambda_beta,
-                    sparsity_loss=args.lambda_sparsity,
-                    randomize=args.enable_random)
+            if not USE_KERNEL:
+                if args.renderer_backend == 'sdf':
+                    rgb_pred = grid._sdf_render_gradcheck_lerp(rays, rgb_gt,
+                            beta_loss=args.lambda_beta,
+                            sparsity_loss=args.lambda_sparsity,
+                            randomize=args.enable_random)
+                else:
+                    raise NotImplementedError
+            else:
+                rgb_pred = grid.volume_render_fused(rays, rgb_gt,
+                        beta_loss=args.lambda_beta,
+                        sparsity_loss=args.lambda_sparsity,
+                        randomize=args.enable_random)
 
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
+
+            if not USE_KERNEL:
+                mse.backward()
 
             # Stats
             mse_num : float = mse.detach().item()
@@ -384,6 +399,7 @@ while True:
             # Manual SGD/rmsprop step
             if gstep_id >= args.lr_fg_begin_step:
                 grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
+                grid.optim_sdf_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
                 grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
@@ -393,6 +409,21 @@ while True:
                 elif grid.basis_type == svox2.BASIS_TYPE_MLP:
                     optim_basis_mlp.step()
                     optim_basis_mlp.zero_grad()
+
+            if (gstep_id % args.eval_every_iter) == 0 and gstep_id > 0:
+                eval_step(step_id=gstep_id)
+                gc.collect()
+
+            if gstep_id >= args.n_iters:
+                print('* Final eval and save')
+                eval_step()
+                global_stop_time = datetime.now()
+                secs = (global_stop_time - global_start_time).total_seconds()
+                timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
+                timings_file.write(f"{secs / 60}\n")
+                if not args.tune_nosave:
+                    grid.save(ckpt_path)
+                exit(0)
 
     train_step()
     gc.collect()

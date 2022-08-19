@@ -539,16 +539,17 @@ class SparseGrid(nn.Module):
             with torch.no_grad(): # check!
                 self.sdf_data[self.links[np.arange(1,reso[0],2),:,:].view(-1).long()] *= -1.
 
-        self.opt = RenderOptions()
+        self.opt = RenderOptions() # set up outside of initializer
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_background_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
+        self.sdf_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
         self.background_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
 
-        if self.links.is_cuda and use_sphere_bound:
+        if self.links.is_cuda and use_sphere_bound and _C is not None:
             self.accelerate()
 
     @property
@@ -579,6 +580,9 @@ class SparseGrid(nn.Module):
         results_sigma = torch.zeros(
             (links.size(0), 1), device=links.device, dtype=torch.float32
         )
+        results_sdf = torch.zeros(
+            (links.size(0), 1), device=links.device, dtype=torch.float32
+        )
         results_sh = torch.zeros(
             (links.size(0), self.sh_data.size(1)),
             device=links.device,
@@ -589,7 +593,7 @@ class SparseGrid(nn.Module):
         results_sigma[mask] = self.density_data[idxs]
         results_sh[mask] = self.sh_data[idxs]
         if self.backend == 'sdf':
-            results_sdf = self.sdf_data[idxs]
+            results_sdf[mask] = self.sdf_data[idxs]
             return results_sigma, results_sh, results_sdf
         return results_sigma, results_sh
 
@@ -906,7 +910,15 @@ class SparseGrid(nn.Module):
             )
         return out_rgb
 
-    def _sdf_render_gradcheck_lerp(self, rays: Rays, return_raylen: bool=False):
+    def _sdf_render_gradcheck_lerp(
+        self,
+        rays: Rays,
+        rgb_gt: torch.Tensor = None,
+        randomize: bool = False,
+        beta_loss: float = 0.0,
+        sparsity_loss: float = 0.0,
+        return_raylen: bool = False
+    ):
         """
         gradcheck version for sdf rendering
         """
@@ -943,6 +955,30 @@ class SparseGrid(nn.Module):
         tmax = torch.min(tmax, dim=-1).values
         if return_raylen:
             return tmax - t
+        # TODO: implement more efficient way to find a set of voxels intersect with given rays
+
+        # # method1: find intersections between rays and all voxel surfaces, then round them
+        # ray_ends = origins + tmax[:, None] * dirs
+        # ray_starts = origins + t[:, None] * dirs
+
+        # # maximum number of samples, could just use sum(reso)
+        # ray_ends = ray_ends.clamp(0, self.links.shape[0]-1)
+        # ray_starts = ray_starts.clamp(0, self.links.shape[0]-1)
+        # sample_num = torch.sum(
+        #     torch.abs(ray_ends.long() - ray_starts.long())
+        #     , axis=-1).max()
+
+        # voxels = torch.ones([B, sample_num, 0]) * -1.
+        # # ignore intersection at voxel edges for now -- it can create repetitive samples!
+        # # ts where ray intersect with x-plane
+        # ts_sect_x = torch.stack([
+        #     torch.arange(
+        #         ray_starts[i,0].long(), ray_ends[i,0].long(), 
+        #         -1 if ray_starts[i,0].long() > ray_ends[i,0].long() else 1
+        #         ) for i in range(B)]) # too slow!
+        
+
+        # method2: adaptive step size for each ray
 
         log_light_intensity = torch.zeros(B, device=origins.device)
         out_rgb = torch.zeros((B, 3), device=origins.device)
@@ -954,9 +990,23 @@ class SparseGrid(nn.Module):
         origins_ini = origins
         dirs_ini = dirs
 
-        # TODO: implement more efficient way to find a set of voxels intersect with given rays
+        # forward an initial step to reach voxel surface
+        pos = origins + t[:, None] * dirs
 
-        mask = t <= tmax
+        l = pos.to(torch.long)
+        l.clamp_min_(0)
+        l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
+        l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
+        l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
+
+        next_plane = l + dirs / torch.abs(dirs)
+        ada_steps = (next_plane - pos) / dirs
+        # replace nan with inf to exclude them in min
+        torch.nan_to_num_(ada_steps, torch.inf)
+        ada_steps = ada_steps.min(axis=-1).values
+        t += ada_steps
+
+        mask = (t <= tmax) & (ada_steps > 0)
         good_indices = good_indices[mask]
         origins = origins[mask]
         dirs = dirs[mask]
@@ -968,25 +1018,29 @@ class SparseGrid(nn.Module):
         sh_mult = sh_mult[mask]
         tmax = tmax[mask]
 
+
+        def global_id_to_current_id(global_id):
+            return torch.arange(good_indices.shape[0])[good_indices == global_id]
+
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
-            pos = pos.clamp_min_(0.0)
-            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
-            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
-            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
-            _pos = torch.clone(pos)
+            # pos = pos.clamp_min_(0.0)
+            # pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
+            # pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
+            # pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
+            # _pos = torch.clone(pos)
             #  print('pym', pos, log_light_intensity)
 
-            l = pos.to(torch.long)
+            l = (pos+1e-3).to(torch.long) # add a small number to prevent integer round down FIXME
             l.clamp_min_(0)
             l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
             l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
             l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
-            pos -= l
+            # pos -= l
 
             # stores ray ids that intersect with new voxels
             new_voxel_ids = torch.arange(good_indices.numel(), device=origins.device)
-            new_voxel_ids = new_voxel_ids[(l!=last_voxels).any(axis=-1)]
+            new_voxel_ids = new_voxel_ids[(l!=last_voxels).any(axis=-1)] 
 
             # BEGIN CRAZY TRILERP
             # only queries new voxels
@@ -1009,19 +1063,21 @@ class SparseGrid(nn.Module):
             alpha110, rgb110, sdf110 = self._fetch_links(links110)
             alpha111, rgb111, sdf111 = self._fetch_links(links111)
 
+            # normalize sdf values
+            # if use trilinear interpolate, sdf values can be normalized without loss of generality
+            avg_norm = torch.mean(torch.stack(list(map(lambda s: torch.abs(s), 
+                [sdf000, sdf001, sdf010, sdf011, sdf100, sdf101, sdf110, sdf111]))), axis=0)
+
+            sdf000 /= avg_norm
+            sdf001 /= avg_norm
+            sdf010 /= avg_norm
+            sdf011 /= avg_norm
+            sdf100 /= avg_norm
+            sdf101 /= avg_norm
+            sdf110 /= avg_norm
+            sdf111 /= avg_norm
+
             # find intersection between sdf surfaces and rays
-
-            # wx = pos[:, :1]
-            # wy = pos[:, 1:2]
-            # wz = pos[:, 2:]
-            # c00 = sdf000 * (1.-wz) + sdf001 * wz
-            # c01 = sdf010 * (1.-wz) + sdf011 * wz
-            # c10 = sdf100 * (1.-wz) + sdf101 * wz
-            # c11 = sdf110 * (1.-wz) + sdf111 * wz
-            # c0 = c00 * (1.-wy) + c01 * wy
-            # c1 = c10 * (1.-wy) + c11 * wy
-            # sdf = c0 * (1.-wx) + c1 * wx
-
 
             ################## Simplifying Trlinear Interpolation Function ########################
             def trilinear_simplify():
@@ -1127,7 +1183,7 @@ class SparseGrid(nn.Module):
             d = f0
 
             # clip a to prevent it being too close to 0
-            eps = 1e-6
+            eps = 1e-4
             a[a>=0] = torch.clamp_min_(a[a>=0], eps)
             a[a<0] = torch.clamp_max_(a[a<0], -eps)
 
@@ -1158,6 +1214,8 @@ class SparseGrid(nn.Module):
 
             ########### Cubic Roots ###########
 
+            # TODO: remove voxels with invalid SDFs as they can cause numerical issues
+
             def cond_cbrt(x, eps=1e-6):
                 '''
                 Compute cubic root of x based on sign
@@ -1170,6 +1228,8 @@ class SparseGrid(nn.Module):
             f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
             g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
             h = ((g**2.) / 4. + (f**3.) / 27.)
+
+            h = torch.clamp_max_(h, 1e10)
 
             # all three roots are real and equal
             _mask = (f == 0) & (g == 0) & (h == 0)
@@ -1206,93 +1266,13 @@ class SparseGrid(nn.Module):
             # ts[_mask, 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
 
 
-            assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots, possbily due to small coefficients'
-            assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
+            # assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots, possbily due to small coefficients'
+            # assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
 
             def check_solution(i,j):
                 return ts[i,j]**3 * a[i] + ts[i,j]**2 * b[i] + ts[i,j] * c[i] + d[i]
 
             # TODO: issue, the root can be very coarse!
-
-            def solve(a, b, c, d):
-
-                if (a == 0 and b == 0):                     # Case for handling Liner Equation
-                    return np.array([(-d * 1.0) / c])                 # Returning linear root as numpy array.
-
-                elif (a == 0):                              # Case for handling Quadratic Equations
-
-                    D = c * c - 4.0 * b * d                       # Helper Temporary Variable
-                    if D >= 0:
-                        D = np.sqrt(D)
-                        x1 = (-c + D) / (2.0 * b)
-                        x2 = (-c - D) / (2.0 * b)
-                    else:
-                        D = np.sqrt(-D)
-                        x1 = (-c + D * 1j) / (2.0 * b)
-                        x2 = (-c - D * 1j) / (2.0 * b)
-                        
-                    return np.array([x1, x2])               # Returning Quadratic Roots as numpy array.
-
-                f = findF(a, b, c)                          # Helper Temporary Variable
-                g = findG(a, b, c, d)                       # Helper Temporary Variable
-                h = findH(g, f)                             # Helper Temporary Variable
-
-                if f == 0 and g == 0 and h == 0:            # All 3 Roots are Real and Equal
-                    if (d / a) >= 0:
-                        x = (d / (1.0 * a)) ** (1 / 3.0) * -1
-                    else:
-                        x = (-d / (1.0 * a)) ** (1 / 3.0)
-                    return np.array([x, x, x])              # Returning Equal Roots as numpy array.
-
-                elif h <= 0:                                # All 3 roots are Real
-
-                    i = math.sqrt(((g ** 2.0) / 4.0) - h)   # Helper Temporary Variable
-                    j = i ** (1 / 3.0)                      # Helper Temporary Variable
-                    k = math.acos(-(g / (2 * i)))           # Helper Temporary Variable
-                    L = j * -1                              # Helper Temporary Variable
-                    M = math.cos(k / 3.0)                   # Helper Temporary Variable
-                    N = math.sqrt(3) * math.sin(k / 3.0)    # Helper Temporary Variable
-                    P = (b / (3.0 * a)) * -1                # Helper Temporary Variable
-
-                    x1 = 2 * j * math.cos(k / 3.0) - (b / (3.0 * a))
-                    x2 = L * (M + N) + P
-                    x3 = L * (M - N) + P
-
-                    return np.array([x1, x2, x3])           # Returning Real Roots as numpy array.
-
-                elif h > 0:                                 # One Real Root and two Complex Roots
-                    R = -(g / 2.0) + math.sqrt(h)           # Helper Temporary Variable
-                    if R >= 0:
-                        S = R ** (1 / 3.0)                  # Helper Temporary Variable
-                    else:
-                        S = (-R) ** (1 / 3.0) * -1          # Helper Temporary Variable
-                    T = -(g / 2.0) - math.sqrt(h)
-                    if T >= 0:
-                        U = (T ** (1 / 3.0))                # Helper Temporary Variable
-                    else:
-                        U = ((-T) ** (1 / 3.0)) * -1        # Helper Temporary Variable
-
-                    x1 = (S + U) - (b / (3.0 * a))
-                    x2 = -(S + U) / 2 - (b / (3.0 * a)) + (S - U) * math.sqrt(3) * 0.5j
-                    x3 = -(S + U) / 2 - (b / (3.0 * a)) - (S - U) * math.sqrt(3) * 0.5j
-
-                    return np.array([x1, x2, x3])           # Returning One Real Root and two Complex Roots as numpy array.
-
-
-                # Helper function to return float value of f.
-                def findF(a, b, c):
-                    return ((3.0 * c / a) - ((b ** 2.0) / (a ** 2.0))) / 3.0
-
-
-                # Helper function to return float value of g.
-                def findG(a, b, c, d):
-                    return (((2.0 * (b ** 3.0)) / (a ** 3.0)) - ((9.0 * b * c) / (a **2.0)) + (27.0 * d / a)) /27.0
-
-
-                # Helper function to return float value of h.
-                def findH(g, f):
-                    return ((g ** 2.0) / 4.0 + (f ** 3.0) / 27.0)
-
 
             ts = ts[..., None]
             samples = origins[new_voxel_ids, None, :] + ts * dirs[new_voxel_ids, None, :] # B, three intersections, xyz
@@ -1372,7 +1352,7 @@ class SparseGrid(nn.Module):
             good_new_vox_ids = good_indices[new_voxel_ids]
             log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
 
-            assert not torch.isnan(log_att).any(), 'NaN detcted in log_att!'
+            # assert not torch.isnan(log_att).any(), 'NaN detcted in log_att!'
 
             weight = torch.exp(log_light_intensity[good_new_vox_ids]) * alpha[:,0]
             # [B', 3, n_sh_coeffs]
@@ -1383,15 +1363,21 @@ class SparseGrid(nn.Module):
             )  # [B', 3]
             rgb = weight[:, None] * rgb[:, :3]
 
-            assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
+            # assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
 
             out_rgb[good_new_vox_ids] += rgb
             log_light_intensity[good_new_vox_ids] += log_att
             # update last voxels
             last_voxels = l
-            t += self.opt.step_size
 
-            mask = t <= tmax
+            # TODO: find adaptive step size that reachs the next intersection between ray and voxel xyz plane
+            next_plane = l + dirs / torch.abs(dirs)
+            ada_steps = (next_plane - pos) / dirs
+            torch.nan_to_num_(ada_steps, torch.inf)
+            ada_steps = ada_steps.min(axis=-1).values
+            t += ada_steps
+
+            mask = (t <= tmax) & (ada_steps > 0)
             good_indices = good_indices[mask]
             origins = origins[mask]
             dirs = dirs[mask]
@@ -1774,7 +1760,8 @@ class SparseGrid(nn.Module):
         :return: (H, W, 3), predicted RGB image
         """
         imrend_fn_name = f"volume_render_{self.opt.backend}_image"
-        if self.basis_type != BASIS_TYPE_MLP and imrend_fn_name in _C.__dict__ and not torch.is_grad_enabled() and not return_raylen:
+        if (self.basis_type != BASIS_TYPE_MLP) and (_C is not None) and (imrend_fn_name in _C.__dict__) and \
+            (not torch.is_grad_enabled()) and (not return_raylen):
             # Use the fast image render kernel if available
             cu_fn = _C.__dict__[imrend_fn_name]
             return cu_fn(
@@ -2662,6 +2649,45 @@ class SparseGrid(nn.Module):
             _C.sgd_step(
                 self.density_data.data,
                 self.density_data.grad,
+                indexer,
+                lr,
+                lr
+            )
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+
+    def optim_sdf_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+                             optim : str='rmsprop'):
+        """
+        Execute RMSprop or sgd step on density
+        """
+        assert (
+            _C is not None and self.sdf_data.is_cuda
+        ), "CUDA extension is currently required for optimizers"
+
+        indexer = self._maybe_convert_sparse_grad_indexer()
+        if optim == 'rmsprop':
+            if (
+                self.sdf_rms is None
+                or self.sdf_rms.shape != self.sdf_data.shape
+            ):
+                del self.sdf_rms
+                self.sdf_rms = torch.zeros_like(self.sdf_data.data) # FIXME init?
+            _C.rmsprop_step(
+                self.sdf_data.data,
+                self.sdf_rms,
+                self.sdf_data.grad,
+                indexer,
+                beta,
+                lr,
+                epsilon,
+                -1e9,
+                lr
+            )
+        elif optim == 'sgd':
+            _C.sgd_step(
+                self.sdf_data.data,
+                self.sdf_data.grad,
                 indexer,
                 lr,
                 lr

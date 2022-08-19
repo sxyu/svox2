@@ -36,7 +36,7 @@ print(grid.sh_data.shape)
 #  grid.sh_data.data.normal_()
 grid.sh_data.data[..., 0] = 0.5
 grid.sh_data.data[..., 1:].normal_(std=0.1)
-# grid.density_data.data[:] = 100.0
+grid.density_data.data[:] = 0.001
 
 if grid.use_background:
 	grid.background_data.data[..., -1] = 0.5

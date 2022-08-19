@@ -270,11 +270,13 @@ def setup_conf():
 
     group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
-    group.add_argument('--print_every', type=int, default=20, help='print every')
+    group.add_argument('--print_every', type=int, default=20, help='print every iterations')
     group.add_argument('--save_every', type=int, default=5,
                     help='save every x epochs')
     group.add_argument('--eval_every', type=int, default=1,
                     help='evaluate every x epochs')
+    group.add_argument('--eval_every_iter', type=int, default=100,
+                    help='evaluate every x iterations')
 
     group.add_argument('--init_sigma', type=float,
                     default=0.1,
@@ -370,6 +372,9 @@ def setup_conf():
 
     group.add_argument('--nosphereinit', action='store_true', default=False,
                         help='do not start with sphere bounds (please do not use for 360)')
+
+    group.add_argument('--nokernel', action='store_true', default=False,
+                        help='do not use cuda kernel to speed up training')
 
     args = parser.parse_args()
     maybe_merge_config_file(args)
