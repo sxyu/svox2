@@ -74,40 +74,51 @@ dset_test = datasets[args.dataset_type](
 
 global_start_time = datetime.now()
 
-grid = svox2.SparseGrid(reso=reso_list[reso_id],
-                        center=dset.scene_center,
-                        radius=dset.scene_radius,
-                        use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
-                        basis_dim=args.sh_dim,
-                        use_z_order=True,
-                        device=device,
-                        basis_reso=args.basis_reso,
-                        basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
-                        mlp_posenc_size=args.mlp_posenc_size,
-                        mlp_width=args.mlp_width,
-                        background_nlayers=args.background_nlayers,
-                        background_reso=args.background_reso,
-                        backend=args.renderer_backend)
 
-# DC -> gray; mind the SH scaling!
-grid.sh_data.data[:] = 0.0
-grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
+ckpt_npz = path.join(args.train_dir, 'ckpt.npz')
 
-if grid.use_background:
-    grid.background_data.data[..., -1] = args.init_sigma_bg
-    #  grid.background_data.data[..., :-1] = 0.5 / svox2.utils.SH_C0
+if path.isfile(ckpt_npz) and args.load_ckpt:
+    print(f'Resume from ckpt at {ckpt_npz}!')
+    grid = svox2.SparseGrid.load(ckpt_npz, device=device, backend=args.renderer_backend)
+    gstep_id_base = grid.step_id
+else:
+    grid = svox2.SparseGrid(reso=reso_list[reso_id],
+                            center=dset.scene_center,
+                            radius=dset.scene_radius,
+                            use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
+                            basis_dim=args.sh_dim,
+                            use_z_order=True,
+                            device=device,
+                            basis_reso=args.basis_reso,
+                            basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
+                            mlp_posenc_size=args.mlp_posenc_size,
+                            mlp_width=args.mlp_width,
+                            background_nlayers=args.background_nlayers,
+                            background_reso=args.background_reso,
+                            backend=args.renderer_backend)
 
-#  grid.sh_data.data[:, 0] = 4.0
-#  osh = grid.density_data.data.shape
-#  den = grid.density_data.data.view(grid.links.shape)
-#  #  den[:] = 0.00
-#  #  den[:, :256, :] = 1e9
-#  #  den[:, :, 0] = 1e9
-#  grid.density_data.data = den.view(osh)
+    # DC -> gray; mind the SH scaling!
+    grid.sh_data.data[:] = 0.0
+    grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
+
+    if grid.use_background:
+        grid.background_data.data[..., -1] = args.init_sigma_bg
+        #  grid.background_data.data[..., :-1] = 0.5 / svox2.utils.SH_C0
+
+    #  grid.sh_data.data[:, 0] = 4.0
+    #  osh = grid.density_data.data.shape
+    #  den = grid.density_data.data.view(grid.links.shape)
+    #  #  den[:] = 0.00
+    #  #  den[:, :256, :] = 1e9
+    #  #  den[:, :, 0] = 1e9
+    #  grid.density_data.data = den.view(osh)
+
+    gstep_id_base = 0
 
 optim_basis_mlp = None
 
-if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
+if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE and not (path.isfile(ckpt_npz) and args.load_ckpt):
+    # do not reinit if resuming from ckpt
     grid.reinit_learned_bases(init_type='sh')
     #  grid.reinit_learned_bases(init_type='fourier')
     #  grid.reinit_learned_bases(init_type='sg', upper_hemi=True)
@@ -125,7 +136,7 @@ grid.requires_grad_(True)
 config_util.setup_render_opts(grid.opt, args)
 print('Render options', grid.opt)
 
-gstep_id_base = 0
+
 
 resample_cameras = [
         svox2.Camera(c2w.to(device=device),
@@ -173,7 +184,7 @@ while True:
 
             # Standard set
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
-            N_IMGS_TO_EVAL = 1
+            N_IMGS_TO_EVAL = 2
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
@@ -260,6 +271,40 @@ while True:
                         stats_test[stat_name], global_step=step_id)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=step_id)
             print('eval stats:', stats_test)
+
+            # log train imgs
+            for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
+                c2w = dset.c2w[img_id].to(device=device)
+                cam = svox2.Camera(c2w,
+                                   dset.intrins.get('fx', img_id),
+                                   dset.intrins.get('fy', img_id),
+                                   dset.intrins.get('cx', img_id),
+                                   dset.intrins.get('cy', img_id),
+                                   width=dset.get_image_size(img_id)[1],
+                                   height=dset.get_image_size(img_id)[0],
+                                   ndc_coeffs=dset.ndc_coeffs)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
+                rgb_gt_test = dset.gt[img_id].to(device=device)
+                all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
+                if i % img_save_interval == 0:
+                    img_pred = rgb_pred_test.cpu()
+                    img_pred.clamp_max_(1.0)
+                    summary_writer.add_image(f'train/image_{img_id:04d}',
+                            img_pred, global_step=step_id, dataformats='HWC')
+                    if args.log_mse_image:
+                        mse_img = all_mses / all_mses.max()
+                        summary_writer.add_image(f'train/mse_map_{img_id:04d}',
+                                mse_img, global_step=step_id, dataformats='HWC')
+                    if args.log_depth_map:
+                        depth_img = grid.volume_render_depth_image(cam,
+                                    args.log_depth_map_use_thresh if
+                                    args.log_depth_map_use_thresh else None
+                                )
+                        depth_img = viridis_cmap(depth_img.cpu())
+                        summary_writer.add_image(f'train/depth_map_{img_id:04d}',
+                                depth_img,
+                                global_step=step_id, dataformats='HWC')
+
     # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0 or not args.tune_mode):
     # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0):
     #     # NOTE: we do an eval sanity check, if not in tune_mode
@@ -416,13 +461,12 @@ while True:
 
             if gstep_id >= args.n_iters:
                 print('* Final eval and save')
-                eval_step()
                 global_stop_time = datetime.now()
                 secs = (global_stop_time - global_start_time).total_seconds()
                 timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
                 timings_file.write(f"{secs / 60}\n")
                 if not args.tune_nosave:
-                    grid.save(ckpt_path)
+                    grid.save(ckpt_path, step_id=gstep_id)
                 exit(0)
 
     train_step()
@@ -472,7 +516,7 @@ while True:
 
     if gstep_id_base >= args.n_iters:
         print('* Final eval and save')
-        eval_step()
+        # eval_step()
         global_stop_time = datetime.now()
         secs = (global_stop_time - global_start_time).total_seconds()
         timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')

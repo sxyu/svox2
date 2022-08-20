@@ -376,6 +376,9 @@ def setup_conf():
     group.add_argument('--nokernel', action='store_true', default=False,
                         help='do not use cuda kernel to speed up training')
 
+    group.add_argument('--load_ckpt', action='store_true', default=False,
+                        help='resume training from ckpt in the given path if exists')
+
     args = parser.parse_args()
     maybe_merge_config_file(args)
 

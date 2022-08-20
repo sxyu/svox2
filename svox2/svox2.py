@@ -373,6 +373,7 @@ class SparseGrid(nn.Module):
         super().__init__()
         self.basis_type = basis_type
         self.backend = backend
+        self.step_id = 0
         if basis_type == BASIS_TYPE_SH:
             assert utils.isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
         assert (
@@ -917,7 +918,8 @@ class SparseGrid(nn.Module):
         randomize: bool = False,
         beta_loss: float = 0.0,
         sparsity_loss: float = 0.0,
-        return_raylen: bool = False
+        return_raylen: bool = False,
+        return_depth: bool = False
     ):
         """
         gradcheck version for sdf rendering
@@ -943,18 +945,42 @@ class SparseGrid(nn.Module):
 
         gsz = self._grid_size()
         gsz_cu = gsz.to(device=dirs.device)
-        t1 = (-0.5 - origins) * invdirs
-        t2 = (gsz_cu - 0.5 - origins) * invdirs
 
-        t = torch.min(t1, t2)
-        t[dirs == 0] = -1e9
-        t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
+        # find near/far per ray
+        # t1 = (-0.5 - origins) * invdirs
+        # t2 = (gsz_cu - 0.5 - origins) * invdirs
 
-        tmax = torch.max(t1, t2)
-        tmax[dirs == 0] = 1e9
-        tmax = torch.min(tmax, dim=-1).values
+        # t = torch.min(t1, t2)
+        # t[dirs == 0] = -1e9
+        # t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
+
+        # tmax = torch.max(t1, t2)
+        # tmax[dirs == 0] = 1e9
+        # tmax = torch.min(tmax, dim=-1).values
+
+        # ts_bd_1 = (gsz_cu*0 - origins) / dirs
+        # ts_bd_2 = (gsz_cu - origins) / dirs
+
+        ts_bd = torch.cat([(gsz_cu*0 - origins) / dirs, (gsz_cu-1 - origins) / dirs], axis=-1)
+        _ts_bd = torch.clone(ts_bd)
+        
+        # remove intersection in inverse directions
+        ts_bd.view(-1)[ts_bd.view(-1) < 0] = torch.nan
+        def within_voxel(pts, eps=1e-4):
+            return ((pts <= gsz_cu-1 + eps).all(axis=-1) & (pts >= 0. * gsz_cu - eps).all(axis=-1))
+
+        # remove intersections outside of voxel
+        for i in range(ts_bd.shape[1]):
+            ts_bd[~within_voxel(ts_bd[:, i, None] * dirs + origins), i] = torch.nan
+
+        t = torch.nan_to_num(ts_bd, torch.inf).min(axis=-1).values
+        tmax = torch.nan_to_num(ts_bd, -torch.inf).max(axis=-1).values
+        # for rays where t == tmax, meaning the camera origin is within voxel
+        t[t==tmax] = 0.
+
         if return_raylen:
             return tmax - t
+
         # TODO: implement more efficient way to find a set of voxels intersect with given rays
 
         # # method1: find intersections between rays and all voxel surfaces, then round them
@@ -982,35 +1008,18 @@ class SparseGrid(nn.Module):
 
         log_light_intensity = torch.zeros(B, device=origins.device)
         out_rgb = torch.zeros((B, 3), device=origins.device)
+        out_depth = torch.zeros(B, device=origins.device)
         good_indices = torch.arange(B, device=origins.device)
-        # last visited voxel for each ray
-        # preventing evaluation on the same voxel twice for the same ray
-        last_voxels = -1 * torch.ones((B, 3), device=origins.device)
+        sample_counts = torch.zeros(B, device=origins.device)
+        
 
         origins_ini = origins
         dirs_ini = dirs
 
-        # forward an initial step to reach voxel surface
-        pos = origins + t[:, None] * dirs
-
-        l = pos.to(torch.long)
-        l.clamp_min_(0)
-        l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
-        l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
-        l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
-
-        next_plane = l + dirs / torch.abs(dirs)
-        ada_steps = (next_plane - pos) / dirs
-        # replace nan with inf to exclude them in min
-        torch.nan_to_num_(ada_steps, torch.inf)
-        ada_steps = ada_steps.min(axis=-1).values
-        t += ada_steps
-
-        mask = (t <= tmax) & (ada_steps > 0)
+        mask = (t <= tmax)
         good_indices = good_indices[mask]
         origins = origins[mask]
         dirs = dirs[mask]
-        last_voxels = last_voxels[mask]
 
         #  invdirs = invdirs[mask]
         del invdirs
@@ -1018,33 +1027,42 @@ class SparseGrid(nn.Module):
         sh_mult = sh_mult[mask]
         tmax = tmax[mask]
 
+        pos = origins + t[:, None] * dirs
+        
+        # l give the voxels we are interested atm
+        l = (pos).to(torch.long) # always ensure round to lower integer
+        l.clamp_min_(0)
+        l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
+        l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
+        l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
+
 
         def global_id_to_current_id(global_id):
             return torch.arange(good_indices.shape[0])[good_indices == global_id]
 
         while good_indices.numel() > 0:
-            pos = origins + t[:, None] * dirs
-            # pos = pos.clamp_min_(0.0)
-            # pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
-            # pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
-            # pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
-            # _pos = torch.clone(pos)
-            #  print('pym', pos, log_light_intensity)
+            # pos = origins + t[:, None] * dirs
+            # # pos = pos.clamp_min_(0.0)
+            # # pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
+            # # pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
+            # # pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
+            # # _pos = torch.clone(pos)
+            # #  print('pym', pos, log_light_intensity)
 
-            l = (pos+1e-3).to(torch.long) # add a small number to prevent integer round down FIXME
-            l.clamp_min_(0)
-            l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
-            l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
-            l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
+            # l = (pos+1e-4).to(torch.long) # add a small number to prevent integer round down FIXME
+            # l.clamp_min_(0)
+            # l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0] - 2)
+            # l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1] - 2)
+            # l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2] - 2)
             # pos -= l
 
-            # stores ray ids that intersect with new voxels
-            new_voxel_ids = torch.arange(good_indices.numel(), device=origins.device)
-            new_voxel_ids = new_voxel_ids[(l!=last_voxels).any(axis=-1)] 
+            # # stores ray ids that intersect with new voxels
+            # new_voxel_ids = torch.arange(good_indices.numel(), device=origins.device)
+            # new_voxel_ids = new_voxel_ids[(l!=last_voxels).any(axis=-1)] 
 
             # BEGIN CRAZY TRILERP
             # only queries new voxels
-            lx, ly, lz = l[new_voxel_ids].unbind(-1)
+            lx, ly, lz = l.unbind(-1)
             links000 = self.links[lx, ly, lz]
             links001 = self.links[lx, ly, lz + 1]
             links010 = self.links[lx, ly + 1, lz]
@@ -1068,14 +1086,14 @@ class SparseGrid(nn.Module):
             avg_norm = torch.mean(torch.stack(list(map(lambda s: torch.abs(s), 
                 [sdf000, sdf001, sdf010, sdf011, sdf100, sdf101, sdf110, sdf111]))), axis=0)
 
-            sdf000 /= avg_norm
-            sdf001 /= avg_norm
-            sdf010 /= avg_norm
-            sdf011 /= avg_norm
-            sdf100 /= avg_norm
-            sdf101 /= avg_norm
-            sdf110 /= avg_norm
-            sdf111 /= avg_norm
+            sdf000 = sdf000 / avg_norm
+            sdf001 = sdf001 / avg_norm
+            sdf010 = sdf010 / avg_norm
+            sdf011 = sdf011 / avg_norm
+            sdf100 = sdf100 / avg_norm
+            sdf101 = sdf101 / avg_norm
+            sdf110 = sdf110 / avg_norm
+            sdf111 = sdf111 / avg_norm
 
             # find intersection between sdf surfaces and rays
 
@@ -1147,8 +1165,8 @@ class SparseGrid(nn.Module):
 
                 return NotImplementedError
 
-            ox, oy, oz = origins[new_voxel_ids][:, 0], origins[new_voxel_ids][:, 1], origins[new_voxel_ids][:, 2]
-            vx, vy, vz = dirs[new_voxel_ids][:, 0], dirs[new_voxel_ids][:, 1], dirs[new_voxel_ids][:, 2]
+            ox, oy, oz = origins.unbind(-1)
+            vx, vy, vz = dirs.unbind(-1)
 
             a00 = sdf000[:,0] * (1-oz+lz) + sdf001[:,0] * (oz-lz)
             a01 = sdf010[:,0] * (1-oz+lz) + sdf011[:,0] * (oz-lz)
@@ -1275,24 +1293,22 @@ class SparseGrid(nn.Module):
             # TODO: issue, the root can be very coarse!
 
             ts = ts[..., None]
-            samples = origins[new_voxel_ids, None, :] + ts * dirs[new_voxel_ids, None, :] # B, three intersections, xyz
+            samples = origins[:, None, :] + ts * dirs[:, None, :] # B, three intersections, xyz
 
             # filter out roots with negative t
             neg_roots = ts.view(-1) < 0
             samples.view(-1, 3)[neg_roots, :] = -1e3
 
             # find the intersection that is closes to voxel center
-            centers = (l[new_voxel_ids]+.5)[:,None,:]
+            centers = (l+.5)[:,None,:]
             sq_dists = torch.sum((samples - centers) ** 2,axis=-1)
             min_ids = torch.min(sq_dists,axis=-1).indices
             samples = samples[torch.arange(samples.shape[0]), min_ids, :]
             # note that the samples could still contain invalid coords -- when ray does not intersect with any surface!
 
-            # # remove negative t
-            # invalid_sample_ids = torch.arange(samples.shape[0])[(samples < 0).any(axis=-1)] 
             # remove all samples outside of the voxel
             invalid_sample_ids = torch.arange(samples.shape[0])[(
-                (samples < l[new_voxel_ids]).any(axis=-1) | (samples > l[new_voxel_ids]+1).any(axis=-1)
+                (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1)
                 )] 
             # TODO: too many seems to have no valid surface! Check!
 
@@ -1319,16 +1335,19 @@ class SparseGrid(nn.Module):
 
             
             # interpolate opacity
-            wa, wb = 1. - (samples - l[new_voxel_ids]), (samples - l[new_voxel_ids])
+            wa, wb = 1. - (samples - l), (samples - l)
             c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
             c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
             c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
             c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
             c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
             c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-            alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+            _alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+            # post sigmoid activation
+            _alpha = torch.sigmoid(_alpha)
 
-            # remove invalid samples
+            # remove invalid samples -- note this has to come after sigmoid
+            alpha = torch.clone(_alpha)
             alpha[invalid_sample_ids] = 0.
 
 
@@ -1349,35 +1368,50 @@ class SparseGrid(nn.Module):
             #     * delta_scale[good_indices]
             # ) # log(density * dist)
 
-            good_new_vox_ids = good_indices[new_voxel_ids]
             log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
 
             # assert not torch.isnan(log_att).any(), 'NaN detcted in log_att!'
 
-            weight = torch.exp(log_light_intensity[good_new_vox_ids]) * alpha[:,0]
+            weight = torch.exp(log_light_intensity[good_indices]) * alpha[:,0]
             # [B', 3, n_sh_coeffs]
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
             rgb = torch.clamp_min(
-                torch.sum(sh_mult[new_voxel_ids,:].unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
+                torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
                 0.0,
             )  # [B', 3]
             rgb = weight[:, None] * rgb[:, :3]
 
             # assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
 
-            out_rgb[good_new_vox_ids] += rgb
-            log_light_intensity[good_new_vox_ids] += log_att
-            # update last voxels
-            last_voxels = l
+            out_rgb[good_indices] += rgb
+            log_light_intensity[good_indices] += log_att
+            sample_counts[good_indices] += 1
+            # render depth -- find out t from valid samples
+            _ts = ((samples[:,0] - origins[:,0]) / dirs[:,0])
+            _ts[invalid_sample_ids] = 0 
+            out_depth[good_indices] += weight * _ts
 
             # TODO: find adaptive step size that reachs the next intersection between ray and voxel xyz plane
             next_plane = l + dirs / torch.abs(dirs)
+            # remove plane that are out side of bounds
+            next_plane.view(-1)[next_plane.view(-1)<0] = torch.nan
+            next_plane[:,0].view(-1)[next_plane[:,0].view(-1)>gsz_cu[0] - 2] = torch.nan
+            next_plane[:,1].view(-1)[next_plane[:,1].view(-1)>gsz_cu[1] - 2] = torch.nan
+            next_plane[:,2].view(-1)[next_plane[:,2].view(-1)>gsz_cu[2] - 2] = torch.nan
+            # next_plane = torch.clamp(next_plane, 0, gsz_cu[0] - 2)
             ada_steps = (next_plane - pos) / dirs
+            # remove nan and non-positive steps
+            ada_steps.view(-1)[ada_steps.view(-1) <= 0] = torch.inf
             torch.nan_to_num_(ada_steps, torch.inf)
-            ada_steps = ada_steps.min(axis=-1).values
-            t += ada_steps
+            ada_step = ada_steps.min(axis=-1).values # DOESN'T WORK YET!!!
+            t += ada_step
 
-            mask = (t <= tmax) & (ada_steps > 0)
+            # update l
+            # _l = torch.clone(l)
+            i0, i1 = torch.arange(l.shape[0]), ada_steps.min(axis=-1).indices
+            l[i0, i1] = next_plane[i0, i1].long()
+
+            mask = (t <= tmax) & (ada_step > 0)
             good_indices = good_indices[mask]
             origins = origins[mask]
             dirs = dirs[mask]
@@ -1385,7 +1419,10 @@ class SparseGrid(nn.Module):
             t = t[mask]
             sh_mult = sh_mult[mask]
             tmax = tmax[mask]
-            last_voxels = last_voxels[mask]
+
+            # update pos and l
+            l = l[mask]
+            pos = origins + t[:, None] * dirs
 
         if self.use_background:
             raise NotImplementedError
@@ -1476,6 +1513,8 @@ class SparseGrid(nn.Module):
                 torch.exp(log_light_intensity).unsqueeze(-1)
                 * self.opt.background_brightness
             )
+        if return_depth:
+            return out_rgb, out_depth
         return out_rgb
 
     def _volume_render_gradcheck_nvol_lerp(self, rays: Rays, return_raylen: bool=False):
@@ -1634,7 +1673,8 @@ class SparseGrid(nn.Module):
 
     def volume_render(
         self, rays: Rays, use_kernel: bool = True, randomize: bool = False,
-        return_raylen: bool=False
+        return_raylen: bool=False, 
+        # sdf_return_depth: bool=False
     ):
         """
         Standard volume rendering. See grid.opt.* (RenderOptions) for configs.
@@ -1748,7 +1788,8 @@ class SparseGrid(nn.Module):
     def volume_render_image(
         self, camera: Camera, use_kernel: bool = True, randomize: bool = False,
         batch_size : int = 5000,
-        return_raylen: bool=False
+        return_raylen: bool=False,
+        # sdf_return_depth: bool=False
     ):
         """
         Standard volume rendering (entire image version).
@@ -1783,6 +1824,29 @@ class SparseGrid(nn.Module):
             all_rgb_out = torch.cat(all_rgb_out, dim=0)
             return all_rgb_out.view(camera.height, camera.width, -1)
 
+            # # Manually generate rays for now
+            # rays = camera.gen_rays()
+            # all_rgb_out = []
+            # all_depth_out = []
+            # for batch_start in range(0, camera.height * camera.width, batch_size):
+            #     out = self.volume_render(rays[batch_start:batch_start+batch_size],
+            #                                       use_kernel=use_kernel,
+            #                                       randomize=randomize,
+            #                                       return_raylen=return_raylen,
+            #                                       sdf_return_depth=sdf_return_depth)
+            #     if sdf_return_depth and self.backend == 'sdf':
+            #         rgb_out_part, depth_out_part = out
+            #         all_depth_out.append(depth_out_part)
+            #     else:
+            #         rgb_out_part = out
+            #     all_rgb_out.append(rgb_out_part)
+
+            # all_rgb_out = torch.cat(all_rgb_out, dim=0)
+            # if sdf_return_depth and self.backend == 'sdf':
+            #     all_depth_out = torch.cat(all_depth_out, dim=0)
+            #     return all_rgb_out.view(camera.height, camera.width, -1), all_depth_out.view(camera.height, camera.width, -1)
+            # return all_rgb_out.view(camera.height, camera.width, -1)
+
     def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None):
         """
         Volumetric depth rendering for rays
@@ -1794,6 +1858,9 @@ class SparseGrid(nn.Module):
 
         :return: (N,)
         """
+        if self.backend == 'sdf':
+            out = self._sdf_render_gradcheck_lerp(rays, return_depth=True)
+            return out[1]
         if sigma_thresh is None:
             return _C.volume_render_expected_term(
                     self._to_cpp(),
@@ -2160,7 +2227,7 @@ class SparseGrid(nn.Module):
             roffset.to(device=points.device), points, rscaling.to(device=points.device)
         )
 
-    def save(self, path: str, compress: bool = False):
+    def save(self, path: str, compress: bool = False, step_id: int = 0):
         """
         Save to a path
         """
@@ -2171,9 +2238,10 @@ class SparseGrid(nn.Module):
             "links":self.links.cpu().numpy(),
             "density_data":self.density_data.data.cpu().numpy(),
             "sh_data":self.sh_data.data.cpu().numpy().astype(np.float16),
+            "step_id": step_id
         }
         if self.backend == 'sdf':
-            data['sdf_data'] = self.sdf_data.data.cpu().numpy(),
+            data['sdf_data'] = self.sdf_data.data.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -2192,7 +2260,7 @@ class SparseGrid(nn.Module):
         )
 
     @classmethod
-    def load(cls, path: str, device: Union[torch.device, str] = "cpu"):
+    def load(cls, path: str, device: Union[torch.device, str] = "cpu", backend: str = "svol"):
         """
         Load from path
         """
@@ -2205,6 +2273,8 @@ class SparseGrid(nn.Module):
         else:
             sh_data = z.f.sh_data
             density_data = z.f.density_data
+            if backend == 'sdf':
+                sdf_data = z.f.sdf_data
 
         if 'background_data' in z:
             background_data = z['background_data']
@@ -2227,15 +2297,23 @@ class SparseGrid(nn.Module):
             mlp_posenc_size=z['mlp_posenc_size'].item() if 'mlp_posenc_size' in z else 0,
             mlp_width=z['mlp_width'].item() if 'mlp_width' in z else 16,
             background_nlayers=0,
+            backend=backend
         )
+        if "step_id" in z.keys():
+            grid.step_id = z.f.step_id.item()
         if sh_data.dtype != np.float32:
             sh_data = sh_data.astype(np.float32)
         if density_data.dtype != np.float32:
             density_data = density_data.astype(np.float32)
+        if backend == 'sdf' and sdf_data.dtype != np.float32:
+            sdf_data = sdf_data.astype(np.float32)
         sh_data = torch.from_numpy(sh_data).to(device=device)
         density_data = torch.from_numpy(density_data).to(device=device)
         grid.sh_data = nn.Parameter(sh_data)
         grid.density_data = nn.Parameter(density_data)
+        if backend == 'sdf':
+            sdf_data = torch.from_numpy(sdf_data).to(device=device)
+            grid.sdf_data = nn.Parameter(sdf_data)
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.sh_data.size(0)
 
@@ -2262,7 +2340,7 @@ class SparseGrid(nn.Module):
         else:
             grid.background_data.data = grid.background_data.data.to(device=device)
 
-        if grid.links.is_cuda:
+        if grid.links.is_cuda and _C is not None:
             grid.accelerate()
         return grid
 

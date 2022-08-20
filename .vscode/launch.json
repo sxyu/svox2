@@ -71,7 +71,7 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "-t", "ckpt/debug_sdf",
+                "-t", "ckpt/sdf_debug",
                 "../data/nerf_synthetic/lego",
                 "-c", "configs/sdf_syn.json"
             ]

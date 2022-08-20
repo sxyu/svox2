@@ -9,7 +9,9 @@
     "n_iters": 10000,
     "nokernel": true,
     "step_size": 1.0,
-    "eval_every_iter": 100,
+    "eval_every_iter": 500,
     "print_every": 10,
-    "init_sigma": 0.01
+    "init_sigma": 0.01,
+    "load_ckpt": false,
+    "log_depth_map": true
 }
