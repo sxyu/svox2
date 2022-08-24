@@ -95,7 +95,8 @@ else:
                             mlp_width=args.mlp_width,
                             background_nlayers=args.background_nlayers,
                             background_reso=args.background_reso,
-                            backend=args.renderer_backend)
+                            backend=args.renderer_backend,
+                            sdf_init=args.sdf_init)
 
     # DC -> gray; mind the SH scaling!
     grid.sh_data.data[:] = 0.0
@@ -184,11 +185,13 @@ while True:
 
             # Standard set
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
-            N_IMGS_TO_EVAL = 2
+            N_IMGS_TO_EVAL = 10
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
             img_ids = range(0, dset_test.n_images, img_eval_interval)
+
+            # img_ids = [120]
 
             # Special 'very hard' specular + fuzz set
             #  img_ids = [2, 5, 7, 9, 21,
@@ -208,7 +211,15 @@ while True:
                                    width=dset_test.get_image_size(img_id)[1],
                                    height=dset_test.get_image_size(img_id)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
+                # cam = svox2.Camera(c2w,
+                #                    dset_test.intrins.get('fx', img_id) / 8,
+                #                    dset_test.intrins.get('fy', img_id) / 8,
+                #                    dset_test.intrins.get('cx', img_id) / 8,
+                #                    dset_test.intrins.get('cy', img_id) / 8,
+                #                    width=100,
+                #                    height=100,
+                #                    ndc_coeffs=dset_test.ndc_coeffs)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, batch_size=10000)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -233,9 +244,9 @@ while True:
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
                 psnr = -10.0 * math.log10(mse_num)
-                if math.isnan(psnr):
+                if math.isnan(psnr): #FIXME image_id 20 returns nan!
                     print('NAN PSNR', i, img_id, mse_num)
-                    assert False
+                    # assert False 
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
                 n_images_gen += 1
@@ -273,6 +284,8 @@ while True:
             print('eval stats:', stats_test)
 
             # log train imgs
+            img_eval_interval = dset.n_images // N_IMGS_TO_EVAL
+            img_ids = range(0, dset.n_images, img_eval_interval)
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset.c2w[img_id].to(device=device)
                 cam = svox2.Camera(c2w,
@@ -455,7 +468,7 @@ while True:
                     optim_basis_mlp.step()
                     optim_basis_mlp.zero_grad()
 
-            if (gstep_id % args.eval_every_iter) == 0 and gstep_id > 0:
+            if (gstep_id % args.eval_every_iter) == 0: # and gstep_id > 0:
                 eval_step(step_id=gstep_id)
                 gc.collect()
 

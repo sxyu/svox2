@@ -379,6 +379,8 @@ def setup_conf():
     group.add_argument('--load_ckpt', action='store_true', default=False,
                         help='resume training from ckpt in the given path if exists')
 
+    group.add_argument('--sdf_init', type=str, default=None)
+
     args = parser.parse_args()
     maybe_merge_config_file(args)
 

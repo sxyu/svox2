@@ -1,17 +1,19 @@
 {
-    "reso": "[[32, 32, 32]]",
+    "reso": "[[8, 8, 8]]",
     "upsamp_every": 1e20,
     "lr_sigma": 3e1,
     "lr_sh": 1e-2,
     "lambda_tv": 0,
     "lambda_tv_sh": 0,
     "renderer_backend": "sdf",
-    "n_iters": 10000,
+    "n_iters": 1,
     "nokernel": true,
     "step_size": 1.0,
-    "eval_every_iter": 500,
+    "eval_every_iter": 1000,
     "print_every": 10,
     "init_sigma": 0.01,
     "load_ckpt": false,
-    "log_depth_map": true
+    "log_depth_map": true,
+    "sdf_init": "sphere",
+    "nosphereinit": true
 }
