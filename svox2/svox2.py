@@ -1,3 +1,4 @@
+from ftplib import ftpcp
 from multiprocessing.util import sub_debug
 from .defs import *
 from . import utils
@@ -988,13 +989,14 @@ class SparseGrid(nn.Module):
         sparsity_loss: float = 0.0,
         return_raylen: bool = False,
         return_depth: bool = False,
-        numerical_solution: bool = False # no gradient flow!
+        numerical_solution: bool = False, # no gradient flow!
+        dtype = torch.double 
     ):
         """
         gradcheck version for sdf rendering
         """
-        origins = self.world2grid(rays.origins)
-        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True)
+        origins = self.world2grid(rays.origins).to(dtype)
+        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
         viewdirs = dirs
         B = dirs.size(0)
         assert origins.size(0) == B
@@ -1012,8 +1014,8 @@ class SparseGrid(nn.Module):
 
         invdirs = 1.0 / dirs
 
-        gsz = self._grid_size()
-        gsz_cu = gsz.to(device=dirs.device)
+        gsz = self._grid_size().to(dtype)
+        gsz_cu = gsz.to(device=dirs.device).to(dtype)
 
         # find near/far per ray
         # t1 = (-0.5 - origins) * invdirs
@@ -1064,8 +1066,8 @@ class SparseGrid(nn.Module):
             Floor the given tensor
             if the tensor contains int, reduce the element by 1
             '''
-            ft = torch.floor(tensor).long()
-            eq_mask = torch.isclose(ft.float(), tensor, atol=atol)
+            ft = torch.floor(tensor)
+            eq_mask = torch.isclose(ft, tensor, atol=atol)
             # eq_mask = torch.abs(ft - tensor) <= eps
             ft[eq_mask] = ft[eq_mask] - 1
             return ft
@@ -1075,8 +1077,8 @@ class SparseGrid(nn.Module):
             Ceil the given tensor
             if the tensor contains int, increase the element by 1
             '''
-            ft = torch.ceil(tensor).long()
-            eq_mask = torch.isclose(ft.float(), tensor, atol=atol)
+            ft = torch.ceil(tensor)
+            eq_mask = torch.isclose(ft, tensor, atol=atol)
             # eq_mask = torch.abs(ft - tensor) <= eps
             ft[eq_mask] = ft[eq_mask] + 1
             return ft
@@ -1088,8 +1090,8 @@ class SparseGrid(nn.Module):
             next_plane = torch.clone(pos)
             for i in range(pos.shape[1]):
                 dir_mask = dirs[:,i] >= 0
-                next_plane[dir_mask, i] = ceil_int(next_plane[dir_mask, i]).float()
-                next_plane[~dir_mask, i] = floor_int(next_plane[~dir_mask, i]).float()
+                next_plane[dir_mask, i] = ceil_int(next_plane[dir_mask, i])
+                next_plane[~dir_mask, i] = floor_int(next_plane[~dir_mask, i])
             # torch.clamp_(next_plane, 0., gsz_cu-1.)
             return next_plane
 
@@ -1250,8 +1252,8 @@ class SparseGrid(nn.Module):
             
             # mask for valid voxels
             vvm = (l <= gsz_cu-2).all(axis=-1) & (l >= 0).all(axis=-1)
-            if not vvm.all():
-                print('out of bound due to numerical issues')
+            # if not vvm.all():
+            #     print('out of bound due to numerical issues')
             lx, ly, lz = l[vvm].unbind(-1)
             links000[vvm] = self.links[lx, ly, lz]
             links001[vvm] = self.links[lx, ly, lz + 1]
@@ -1358,18 +1360,18 @@ class SparseGrid(nn.Module):
 
                 return NotImplementedError
 
-            ox, oy, oz = origins.unbind(-1)
-            vx, vy, vz = dirs.unbind(-1)
+            ox, oy, oz = origins.to(dtype).unbind(-1)
+            vx, vy, vz = dirs.to(dtype).unbind(-1)
 
-            a00 = sdf000[:,0] * (1-oz+lz) + sdf001[:,0] * (oz-lz)
-            a01 = sdf010[:,0] * (1-oz+lz) + sdf011[:,0] * (oz-lz)
-            a10 = sdf100[:,0] * (1-oz+lz) + sdf101[:,0] * (oz-lz)
-            a11 = sdf110[:,0] * (1-oz+lz) + sdf111[:,0] * (oz-lz)
+            a00 = sdf000[:,0].to(dtype) * (1-oz+lz) + sdf001[:,0].to(dtype) * (oz-lz)
+            a01 = sdf010[:,0].to(dtype) * (1-oz+lz) + sdf011[:,0].to(dtype) * (oz-lz)
+            a10 = sdf100[:,0].to(dtype) * (1-oz+lz) + sdf101[:,0].to(dtype) * (oz-lz)
+            a11 = sdf110[:,0].to(dtype) * (1-oz+lz) + sdf111[:,0].to(dtype) * (oz-lz)
 
-            b00 = -sdf000[:,0] + sdf001[:,0]
-            b01 = -sdf010[:,0] + sdf011[:,0]
-            b10 = -sdf100[:,0] + sdf101[:,0]
-            b11 = -sdf110[:,0] + sdf111[:,0]
+            b00 = -sdf000[:,0].to(dtype) + sdf001[:,0].to(dtype)
+            b01 = -sdf010[:,0].to(dtype) + sdf011[:,0].to(dtype)
+            b10 = -sdf100[:,0].to(dtype) + sdf101[:,0].to(dtype)
+            b11 = -sdf110[:,0].to(dtype) + sdf111[:,0].to(dtype)
 
             c0 = a00*(1-oy+ly) + a01*(oy-ly)
             c1 = a10*(1-oy+ly) + a11*(oy-ly)
@@ -1403,51 +1405,49 @@ class SparseGrid(nn.Module):
                 # analyical solution for f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3 = 0
                 # https://github.com/shril/CubicEquationSolver/blob/master/CubicEquationSolver.py
 
-                a = f3 / f3
-                b = f2 / f3
-                c = f1 / f3
-                d = f0 / f3
-                ts = torch.ones([a.numel(), 3]).to(device=dirs.device) * -1 # negative roots are considered no roots and are filtered out later
+                # negative roots are considered no roots and are filtered out later
+                ts = torch.ones([f0.numel(), 3]).to(dtype).to(device=dirs.device) * -1 
     
                 # assert not torch.isnan(a[vvm]).any(), 'cubic coefficients normalization failed, exact 0 in cubic term'
                 # FIXME: shouldn't happen!
 
+                # check for trivial a and b -- reduce to linear or polynomial solutions
+                tri_a_mask = f3 == 0.
+                tri_ab_mask = tri_a_mask & (f2 == 0.) & (~(f1 == 0.)) # if f1, f2, f3 all 0, then no solution
 
-                # # check for trivial a and b -- reduce to linear or polynomial solutions
-                # MIN_VALUE = 1e-4 # TODO: check whether this threshold is ok
-                # tri_a_mask = torch.abs(a) < MIN_VALUE 
-                # tri_ab_mask = tri_a_mask & (torch.abs(b) < MIN_VALUE)
+                ########### Linear Roots ###########
+                if ts[tri_ab_mask].numel() > 0:
+                    ts[tri_ab_mask, 0] = (-f0[tri_ab_mask] * 1.0) / f1[tri_ab_mask]
 
-                # # ########### Linear Roots ###########
-                # # ts[tri_ab_mask, 0] = (-d[tri_ab_mask] * 1.0) / c[tri_ab_mask]
+                ########### Quadratic Roots ###########
+                quad_mask = tri_a_mask & (~tri_ab_mask) & (~(f1 == 0.))
+                if ts[quad_mask].numel() > 0:
+                    _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
+                    D = _c**2 - 4.0 * _b * _d
 
-                # ########### Quadratic Roots ###########
-                # # TODO: refine quaratic mask to exclud linear case
-                # _b, _c, _d = b[tri_a_mask], c[tri_a_mask], d[tri_a_mask]
-                # D = _c**2 - 4.0 * _b * _d
+                    D_mask = D >+ 0 # two real roots
+                    sqrt_D = torch.sqrt(D[D_mask])
+                    ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
+                    ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
+                    ts[ids, 1] = (-_c[D_mask] - sqrt_D) / (2.0 * _b[D_mask])
 
-                # D_mask = D > 0 # two unique roots
-                # sqrt_D = torch.sqrt(D[D_mask])
-                # ids = torch.arange(ts.shape[0])[tri_a_mask][D_mask]
-                # ts[ids, 0] = ((-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask]))
-                # ts[ids, 1] = (-_c[D_mask] - sqrt_D) / (2.0 * _b[D_mask])
-
-                # D_mask = D == 0 # one unique roots
-                # sqrt_D = torch.sqrt(D[D_mask])
-                # ids = torch.arange(ts.shape[0])[tri_a_mask][D_mask]
-                # ts[ids, 0] = ((-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask]))
+                    # D_mask = D == 0 # one unique roots
+                    # sqrt_D = torch.sqrt(D[D_mask])
+                    # ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
+                    # ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
 
                 # otherwise, has no real roots
 
                 ########### Cubic Roots ###########
 
-                # # clip a to prevent it being too close to 0 TODO: this causes large errors!
-                # eps = 1e-4
-                # a[a>=0] = torch.clamp_min_(a[a>=0], eps)
-                # a[a<0] = torch.clamp_max_(a[a<0], -eps)
+                cubic_mask = (~tri_a_mask) & (~tri_ab_mask)
+                # cubic_mask = ~torch.isnan(a)
 
-                # cubic_mask = (~tri_a_mask) & (~tri_ab_mask)
-                cubic_mask = ~torch.isnan(a)
+                # normalize 
+                a = f3 / f3
+                b = f2 / f3
+                c = f1 / f3
+                d = f0 / f3
 
                 # TODO: remove voxels with invalid SDFs as they can cause numerical issues
 
@@ -1502,13 +1502,13 @@ class SparseGrid(nn.Module):
                 # ts[_mask, 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
 
 
-                # assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots, possbily due to small coefficients'
-                # assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
+                assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots, possbily due to small coefficients'
+                assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
 
                 def check_solution(i,j):
                     return ts[i,j]**3 * a[i] + ts[i,j]**2 * b[i] + ts[i,j] * c[i] + d[i]
 
-            # TODO: issue, the root can be very coarse!
+            # TODO: issue, the root can be coarse!
 
             ts = ts[..., None]
             samples = origins[:, None, :] + ts * dirs[:, None, :] # B, three intersections, xyz
@@ -1518,6 +1518,7 @@ class SparseGrid(nn.Module):
             samples.view(-1, 3)[neg_roots, :] = -1e3
 
             # find the intersection that is closest to voxel center
+            # FIXME it is possible to have more than one intersections per voxel, need to deal with that!
             centers = (l+.5)[:,None,:]
             sq_dists = torch.sum((samples - centers) ** 2,axis=-1)
             min_ids = torch.min(sq_dists,axis=-1).indices
@@ -1525,9 +1526,9 @@ class SparseGrid(nn.Module):
             # note that the samples could still contain invalid coords -- when ray does not intersect with any surface!
 
             # remove all samples outside of the voxel
-            invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1)
+            invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
             invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
-            # TODO: too many seems to have no valid surface! Check!
+            
 
             # interpolate opacity
             wa, wb = 1. - (samples - l), (samples - l)
@@ -1577,8 +1578,8 @@ class SparseGrid(nn.Module):
             log_light_intensity[good_indices] += log_att
 
             sample_counts[good_indices[~invalid_sample_mask]] += 1
-            for i_iter, i_all in enumerate(good_indices):
-                intersect_vox[i_all].append(l[i_iter].cpu().detach().numpy().tolist())
+            # for i_iter, i_all in enumerate(good_indices):
+            #     intersect_vox[i_all].append(l[i_iter].cpu().detach().numpy().tolist())
             # render depth -- find out t from valid samples
             _ts = ((samples[:,0] - origins[:,0]) / dirs[:,0])
             _ts[invalid_sample_ids] = 0 

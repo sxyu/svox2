@@ -8,3 +8,5 @@ data/
 .eggs/
 build/
 svox2.egg-info/
+
+kaolin/

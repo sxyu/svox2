@@ -184,8 +184,8 @@ while True:
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
             # Standard set
-            N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
-            N_IMGS_TO_EVAL = 10
+            # N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
+            N_IMGS_TO_EVAL = args.n_eval
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
@@ -234,7 +234,8 @@ while True:
                     if args.log_depth_map:
                         depth_img = grid.volume_render_depth_image(cam,
                                     args.log_depth_map_use_thresh if
-                                    args.log_depth_map_use_thresh else None
+                                    args.log_depth_map_use_thresh else None,
+                                    batch_size=10000
                                 )
                         depth_img = viridis_cmap(depth_img.cpu())
                         summary_writer.add_image(f'test/depth_map_{img_id:04d}',
@@ -244,9 +245,9 @@ while True:
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
                 psnr = -10.0 * math.log10(mse_num)
-                if math.isnan(psnr): #FIXME image_id 20 returns nan!
+                if math.isnan(psnr):
                     print('NAN PSNR', i, img_id, mse_num)
-                    # assert False 
+                    assert False 
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
                 n_images_gen += 1
@@ -296,7 +297,7 @@ while True:
                                    width=dset.get_image_size(img_id)[1],
                                    height=dset.get_image_size(img_id)[0],
                                    ndc_coeffs=dset.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, batch_size=10000)
                 rgb_gt_test = dset.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -311,7 +312,8 @@ while True:
                     if args.log_depth_map:
                         depth_img = grid.volume_render_depth_image(cam,
                                     args.log_depth_map_use_thresh if
-                                    args.log_depth_map_use_thresh else None
+                                    args.log_depth_map_use_thresh else None,
+                                    batch_size=10000
                                 )
                         depth_img = viridis_cmap(depth_img.cpu())
                         summary_writer.add_image(f'train/depth_map_{img_id:04d}',

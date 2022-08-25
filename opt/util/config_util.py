@@ -370,6 +370,8 @@ def setup_conf():
 
     group.add_argument('--n_train', type=int, default=None, help='Number of training images. Defaults to use all avaiable.')
 
+    group.add_argument('--n_eval', type=int, default=1, help='Number of images to be evaluated and logged')
+
     group.add_argument('--nosphereinit', action='store_true', default=False,
                         help='do not start with sphere bounds (please do not use for 360)')
 
