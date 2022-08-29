@@ -26,9 +26,9 @@ grid = svox2.SparseGrid(
                      device=device,
                      background_nlayers=0,
                      basis_type=svox2.BASIS_TYPE_SH,
-                     backend="sdf",
-                     geometry_init='sphere')
-grid.opt.backend = 'sdf'
+                     backend="plane",
+                     geometry_init='random')
+grid.opt.backend = 'plane'
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
 grid.opt.background_brightness = 1.0
@@ -85,10 +85,10 @@ with Timing("ours_backward"):
     s.backward()
 grid_sh_grad_s = grid.sh_data.grad.clone().cpu()
 grid_density_grad_s = grid.density_data.grad.clone().cpu()
-grid_sdf_grad_s = grid.sdf_data.grad.clone().cpu()
+grid_plane_grad_s = grid.plane_data.grad.clone().cpu()
 grid.sh_data.grad = None
 grid.density_data.grad = None
-grid.sdf_data.grad = None
+grid.plane_data.grad = None
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
     grid_basis_grad_s = grid.basis_data.grad.clone().cpu()
     grid.basis_data.grad = None
@@ -104,7 +104,7 @@ if ENABLE_TORCH_CHECK:
         s.backward()
     grid_sh_grad_t = grid.sh_data.grad.clone().cpu() if grid.sh_data.grad is not None else torch.zeros_like(grid_sh_grad_s)
     grid_density_grad_t = grid.density_data.grad.clone().cpu() if grid.density_data.grad is not None else torch.zeros_like(grid_density_grad_s)
-    grid_sdf_grad_t = grid.sdf_data.grad.clone().cpu() if grid.sdf_data.grad is not None else torch.zeros_like(grid_sdf_grad_s)
+    grid_plane_grad_t = grid.plane_data.grad.clone().cpu() if grid.plane_data.grad is not None else torch.zeros_like(grid_plane_grad_s)
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         grid_basis_grad_t = grid.basis_data.grad.clone().cpu()
     if grid.use_background:
@@ -112,7 +112,7 @@ if ENABLE_TORCH_CHECK:
 
     E = torch.abs(grid_sh_grad_s-grid_sh_grad_t)
     Ed = torch.abs(grid_density_grad_s-grid_density_grad_t)
-    Esdf = torch.abs(grid_sdf_grad_s-grid_sdf_grad_t)
+    Eplane = torch.abs(grid_plane_grad_s-grid_plane_grad_t)
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         Eb = torch.abs(grid_basis_grad_s-grid_basis_grad_t)
     if grid.use_background:
@@ -122,8 +122,8 @@ if ENABLE_TORCH_CHECK:
     print(' mean\n', E.mean())
     print('err_density_grad\n', Ed.max())
     print(' mean\n', Ed.mean())
-    print('err_sdf_grad\n', Esdf.max())
-    print(' mean\n', Esdf.mean())
+    print('err_plane_grad\n', Eplane.max())
+    print(' mean\n', Eplane.mean())
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         print('err_basis_grad\n', Eb.max())
         print(' mean\n', Eb.mean())

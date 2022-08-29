@@ -32,7 +32,7 @@ class RenderOptions:
     :param stop_thresh: float
     """
 
-    backend: str = "sdf"  # One of cuvol, svox1, nvol, sdf
+    backend: str = "sdf"  # One of cuvol, svox1, nvol, sdf, plane
 
     background_brightness: float = 1.0  # [0, 1], the background color black-white
 
@@ -374,7 +374,7 @@ class SparseGrid(nn.Module):
         background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
         backend: str = "svox", # svox -- plenoxel volume rendering, sdf -- ours
-        sdf_init: str = 'sphere' # methods used to init sdf data
+        geometry_init: str = 'sphere' # methods used to init sdf data
     ):
         super().__init__()
         self.basis_type = basis_type
@@ -536,19 +536,14 @@ class SparseGrid(nn.Module):
 
         if backend == 'sdf':
             # use density data as alpha values
-            # initialize with small non-zero alpha values
             self.density_data = nn.Parameter(
-                torch.rand(self.capacity, 1, dtype=torch.float32, device=device) * .1
+                torch.zeros(self.capacity, 1, dtype=torch.float32, device=device) * .1
             ) # note that it is overritten
-            # TODO: better initialization of SDF values?
 
-            # sdf_init = None
-
-            if sdf_init == 'sphere':
+            # geometry_init = None
+            if geometry_init == 'sphere':
                 # method 1: initialize with distance to grid center, then reduce each vertices by the mean from the 8?
-                self.sdf_data = nn.Parameter(
-                    torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
-                )
+                sdf_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
                 coords = torch.stack(coords).view(3, -1).T
                 # grid_center = (torch.tensor(reso) - 1.) / 2
@@ -560,8 +555,7 @@ class SparseGrid(nn.Module):
                 dists = rs[:, None] - sphere_rs[None, :]
 
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
-                with torch.no_grad(): 
-                    self.sdf_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices]
+                sdf_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices]
 
 
                 # floors = torch.floor(rs - 0.5)
@@ -572,50 +566,69 @@ class SparseGrid(nn.Module):
 
                 # # fetch links
                 # links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
-                # with torch.no_grad(): 
-                #     # self.sdf_data[links[pos_ids].long(), 0] = rs[pos_ids]
-                #     # self.sdf_data[links[neg_ids].long(), 0] = rs[neg_ids] * -1.
-                #     self.sdf_data[links[pos_ids].long(), 0] = rs[pos_ids] - (floors[pos_ids] + 0.5)
-                #     self.sdf_data[links[neg_ids].long(), 0] = rs[neg_ids] - (floors[neg_ids] + 1.5)
+                #     # sdf_data[links[pos_ids].long(), 0] = rs[pos_ids]
+                #     # sdf_data[links[neg_ids].long(), 0] = rs[neg_ids] * -1.
+                #     sdf_data[links[pos_ids].long(), 0] = rs[pos_ids] - (floors[pos_ids] + 0.5)
+                #     sdf_data[links[neg_ids].long(), 0] = rs[neg_ids] - (floors[neg_ids] + 1.5)
 
 
-            elif sdf_init == 'outwards':
+            elif geometry_init == 'outwards':
                 # method 2: init as random surface facing outwards
-                self.sdf_data = nn.Parameter(
-                    torch.rand(self.capacity, 1, dtype=torch.float32, device=device)
-                )
+                sdf_data = torch.rand(self.capacity, 1, dtype=torch.float32, device=device)
                 grid_center = torch.tensor(reso) / 2
 
                 ids = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
                 ids = torch.stack(ids).view(3, -1).T
 
-                with torch.no_grad(): # check!
-                    abs_max_axis = torch.abs(ids- grid_center.long()).max(axis=-1).indices
-                    for axis_id in range(len(reso)):
-                        # find list of coordinates where the i-th axis is maximum
-                        coords = ids[abs_max_axis == axis_id]
-                        # list of coords where sdf values need to be negated
-                        neg_coords = coords[coords[:,axis_id] % 2 == 0]
+                abs_max_axis = torch.abs(ids- grid_center.long()).max(axis=-1).indices
+                for axis_id in range(len(reso)):
+                    # find list of coordinates where the i-th axis is maximum
+                    coords = ids[abs_max_axis == axis_id]
+                    # list of coords where sdf values need to be negated
+                    neg_coords = coords[coords[:,axis_id] % 2 == 0]
 
-                        # fech link ids
-                        links = self.links[neg_coords[:, 0], neg_coords[:, 1], neg_coords[:, 2]]
-                        # set surface to face outwards
-                        self.sdf_data[links.long()] *= -1
+                    # fech link ids
+                    links = self.links[neg_coords[:, 0], neg_coords[:, 1], neg_coords[:, 2]]
+                    # set surface to face outwards
+                    sdf_data[links.long()] *= -1
+
+            elif geometry_init == 'plane':
+                # method 3: simple plane with fixed driection
+                sdf_data = torch.rand(self.capacity, 1, dtype=torch.float32, device=device) * 0.1 + 1
+                sdf_data[self.links[np.arange(1,reso[0],2),:,:].view(-1).long()] *= -1.
+            else:
+                raise NotImplementedError(f'Geometry initialization [{geometry_init}] is not supported for grid [{backend}]')
+
+            self.sdf_data = nn.Parameter(sdf_data)
+        
+        elif backend == 'plane':
+            # use density data as alpha values
+            self.density_data = nn.Parameter(
+                torch.zeros(self.capacity, 1, dtype=torch.float32, device=device) * .1
+            )
+
+            if geometry_init == 'random':
+                plane_data = torch.rand(self.capacity, 4, dtype=torch.float32, device=device)
+
+                # modify d to initialize all vertices to have planes located exactly on them
+                # ax + by + cz + d = 0
+                coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
+                coords = torch.stack(coords).view(3, -1).T
+                links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
+                plane_data[links.long(), 3] = -torch.sum(coords.to(device) * plane_data[links.long(), :3], axis=-1)
+
 
             else:
-                # method 3: simple plane with fixed driection
-                self.sdf_data = nn.Parameter(
-                    torch.rand(self.capacity, 1, dtype=torch.float32, device=device) * 0.1 + 1
-                )
-                with torch.no_grad():
-                    self.sdf_data[self.links[np.arange(1,reso[0],2),:,:].view(-1).long()] *= -1.
+                raise NotImplementedError(f'Geometry initialization [{geometry_init}] is not supported for grid [{backend}]')
+
+            self.plane_data = nn.Parameter(plane_data)
 
         self.opt = RenderOptions() # set up outside of initializer
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_background_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
-        self.sdf_rms: Optional[torch.Tensor] = None
+        self.geo_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
         self.background_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
@@ -651,9 +664,6 @@ class SparseGrid(nn.Module):
         results_sigma = torch.zeros(
             (links.size(0), 1), device=links.device, dtype=torch.float32
         )
-        results_sdf = torch.zeros(
-            (links.size(0), 1), device=links.device, dtype=torch.float32
-        )
         results_sh = torch.zeros(
             (links.size(0), self.sh_data.size(1)),
             device=links.device,
@@ -664,8 +674,18 @@ class SparseGrid(nn.Module):
         results_sigma[mask] = self.density_data[idxs]
         results_sh[mask] = self.sh_data[idxs]
         if self.backend == 'sdf':
+            results_sdf = torch.zeros(
+                (links.size(0), 1), device=links.device, dtype=torch.float32
+            )
             results_sdf[mask] = self.sdf_data[idxs]
             return results_sigma, results_sh, results_sdf
+        elif self.backend == 'plane':
+            result_plane = -torch.ones(
+                (links.size(0), 4), device=links.device, dtype=torch.float32
+            )
+            result_plane[mask] = self.plane_data[idxs]
+            return results_sigma, results_sh, result_plane
+
         return results_sigma, results_sh
 
     def sample(self, points: torch.Tensor,
@@ -690,7 +710,7 @@ class SparseGrid(nn.Module):
 
         :return: (density, color)
         """
-        if self.backend == 'sdf':
+        if self.backend == 'sdf' or self.backend == 'plane':
             raise NotImplementedError
 
         if use_kernel and self.links.is_cuda and _C is not None:
@@ -981,6 +1001,81 @@ class SparseGrid(nn.Module):
             )
         return out_rgb
 
+    def within_grid(self, pts, atol=1e-6): # FIXME eps needed?
+        '''
+        Check whether the given pts is within the voxel grid
+        '''
+        gsz_cu = self._grid_size().to(pts.dtype).to(device=pts.device)
+        return (((pts <= gsz_cu-1.) | (torch.isclose(pts, gsz_cu-1., atol=atol))).all(axis=-1) & \
+                ((pts >= gsz_cu*0.) | (torch.isclose(pts, gsz_cu*0., atol=atol))).all(axis=-1))
+
+
+    def find_next_intersection(self, t, origins, dirs):
+        '''
+        Find the next intersecting t with voxel planes
+        '''
+        def floor_int(tensor, atol=1e-6):
+            '''
+            Floor the given tensor
+            if the tensor contains int, reduce the element by 1
+            '''
+            ft = torch.floor(tensor)
+            eq_mask = torch.isclose(ft, tensor, atol=atol)
+            # eq_mask = torch.abs(ft - tensor) <= eps
+            ft[eq_mask] = ft[eq_mask] - 1
+            return ft
+
+        def ceil_int(tensor, atol=1e-6):
+            '''
+            Ceil the given tensor
+            if the tensor contains int, increase the element by 1
+            '''
+            ft = torch.ceil(tensor)
+            eq_mask = torch.isclose(ft, tensor, atol=atol)
+            # eq_mask = torch.abs(ft - tensor) <= eps
+            ft[eq_mask] = ft[eq_mask] + 1
+            return ft
+
+        def find_next_plane(pos, dirs):
+            '''
+            Use current pos and dirs to find axis of next planes to intersect
+            '''
+            next_plane = torch.clone(pos)
+            for i in range(pos.shape[1]):
+                dir_mask = dirs[:,i] >= 0
+                next_plane[dir_mask, i] = ceil_int(next_plane[dir_mask, i])
+                next_plane[~dir_mask, i] = floor_int(next_plane[~dir_mask, i])
+            # torch.clamp_(next_plane, 0., gsz_cu-1.)
+            return next_plane
+        # current pos
+        pos = origins + t[:, None] * dirs
+
+        # find next plane for intersections
+        next_plane = find_next_plane(pos, dirs)
+        # find adaptive step size that reachs the next intersection between ray and voxel xyz plane
+        ada_steps = (next_plane - pos) / dirs
+        # remove nan and non-positive steps
+        ada_steps.view(-1)[ada_steps.view(-1) <= 0] = torch.inf
+        torch.nan_to_num_(ada_steps, torch.inf)
+        ada_step = ada_steps.min(axis=-1).values
+        next_t = t + ada_step
+
+        # check whether intersection goes outside of voxel
+        next_pos = origins + next_t[:, None] * dirs
+        next_t[~self.within_grid(next_pos)] = torch.nan
+
+        return next_t
+    
+
+    def find_intersect_voxels(self, t, next_t, origins, dirs):
+        '''
+        Use two ray-plane intersections to find the voxel that ray passes through
+        '''
+        t_mid = (t + next_t) / 2
+        pos_mid = origins + t_mid[:, None] * dirs
+        return torch.floor(pos_mid).long()
+
+
     def _sdf_render_gradcheck_lerp(
         self,
         rays: Rays,
@@ -1058,76 +1153,6 @@ class SparseGrid(nn.Module):
 
         # method2: adaptive step size for each ray
 
-        def within_voxel(pts, atol=1e-6): # FIXME eps needed?
-            return (((pts <= gsz_cu-1.) | (torch.isclose(pts, gsz_cu-1., atol=atol))).all(axis=-1) & \
-                    ((pts >= gsz_cu*0.) | (torch.isclose(pts, gsz_cu*0., atol=atol))).all(axis=-1))
-
-        def floor_int(tensor, atol=1e-6):
-            '''
-            Floor the given tensor
-            if the tensor contains int, reduce the element by 1
-            '''
-            ft = torch.floor(tensor)
-            eq_mask = torch.isclose(ft, tensor, atol=atol)
-            # eq_mask = torch.abs(ft - tensor) <= eps
-            ft[eq_mask] = ft[eq_mask] - 1
-            return ft
-
-        def ceil_int(tensor, atol=1e-6):
-            '''
-            Ceil the given tensor
-            if the tensor contains int, increase the element by 1
-            '''
-            ft = torch.ceil(tensor)
-            eq_mask = torch.isclose(ft, tensor, atol=atol)
-            # eq_mask = torch.abs(ft - tensor) <= eps
-            ft[eq_mask] = ft[eq_mask] + 1
-            return ft
-
-        def find_next_plane(pos, dirs):
-            '''
-            Use current pos and dirs to find axis of next planes to intersect
-            '''
-            next_plane = torch.clone(pos)
-            for i in range(pos.shape[1]):
-                dir_mask = dirs[:,i] >= 0
-                next_plane[dir_mask, i] = ceil_int(next_plane[dir_mask, i])
-                next_plane[~dir_mask, i] = floor_int(next_plane[~dir_mask, i])
-            # torch.clamp_(next_plane, 0., gsz_cu-1.)
-            return next_plane
-
-        def find_next_intersection(t, origins, dirs):
-            '''
-            Find the next intersecting t with voxel planes
-            '''
-            # current pos
-            pos = origins + t[:, None] * dirs
-
-            # find next plane for intersections
-            next_plane = find_next_plane(pos, dirs)
-            # find adaptive step size that reachs the next intersection between ray and voxel xyz plane
-            ada_steps = (next_plane - pos) / dirs
-            # remove nan and non-positive steps
-            ada_steps.view(-1)[ada_steps.view(-1) <= 0] = torch.inf
-            torch.nan_to_num_(ada_steps, torch.inf)
-            ada_step = ada_steps.min(axis=-1).values
-            next_t = t + ada_step
-
-            # check whether intersection goes outside of voxel
-            next_pos = origins + next_t[:, None] * dirs
-            next_t[~within_voxel(next_pos)] = torch.nan
-
-            return next_t
-
-        def find_intersect_voxel(t, next_t, origins, dirs):
-            '''
-            Use two ray-plane intersections to find the voxel that ray passes through
-            '''
-            t_mid = (t + next_t) / 2
-            pos_mid = origins + t_mid[:, None] * dirs
-            return torch.floor(pos_mid).long()
-
-
         # debug helpers:
 
         def pos():
@@ -1191,12 +1216,12 @@ class SparseGrid(nn.Module):
 
         # remove intersections outside of voxel
         for i in range(ts_bd.shape[1]):
-            ts_bd[~within_voxel(ts_bd[:, i, None] * dirs + origins), i] = torch.nan
+            ts_bd[~self.within_grid(ts_bd[:, i, None] * dirs + origins), i] = torch.nan
 
         t = torch.nan_to_num(ts_bd, torch.inf).min(axis=-1).values
         tmax = torch.nan_to_num(ts_bd, -torch.inf).max(axis=-1).values
         # for cameras within voxel grids, t_near = 0
-        t[within_voxel(origins)] = 0.
+        t[self.within_grid(origins)] = 0.
 
         if return_raylen:
             return tmax - t
@@ -1212,8 +1237,8 @@ class SparseGrid(nn.Module):
         del invdirs
         
         while good_indices.numel() > 0:
-            next_t = find_next_intersection(t, origins, dirs)
-            l = find_intersect_voxel(t, next_t, origins, dirs)
+            next_t = self.find_next_intersection(t, origins, dirs)
+            l = self.find_intersect_voxels(t, next_t, origins, dirs)
 
             mask = ~torch.isnan(next_t)
             good_indices = good_indices[mask]
@@ -1280,71 +1305,71 @@ class SparseGrid(nn.Module):
         ################## Simplifying Trlinear Interpolation Function ########################
         def trilinear_simplify():
         ################## Finishing Trlinear Interpolation Function ########################
-                '''
-                Math for simplyfing trilinear interpolation (with syntax highlighting)
-                This function shouldn't be called
-                '''
-                _t = None # _t is the exact depth we want to calculate
-                ox, oy, oz = origins[new_voxel_ids][:, :1], origins[new_voxel_ids][:, 1:2], origins[new_voxel_ids][:, 2:]
-                vx, vy, vz = dirs[new_voxel_ids][:, :1], dirs[new_voxel_ids][:, 1:2], dirs[new_voxel_ids][:, 2:]
-                wx = ox + _t * vx - lx
-                wy = oy + _t * vy - ly
-                wz = oz + _t * vz - lz
+            '''
+            Math for simplyfing trilinear interpolation (with syntax highlighting)
+            This function shouldn't be called
+            '''
+            _t = None # _t is the exact depth we want to calculate
+            ox, oy, oz = origins[new_voxel_ids][:, :1], origins[new_voxel_ids][:, 1:2], origins[new_voxel_ids][:, 2:]
+            vx, vy, vz = dirs[new_voxel_ids][:, :1], dirs[new_voxel_ids][:, 1:2], dirs[new_voxel_ids][:, 2:]
+            wx = ox + _t * vx - lx
+            wy = oy + _t * vy - ly
+            wz = oz + _t * vz - lz
 
-                sdf = ((sdf000 * (1.-wz) + sdf001 * (wz)) * (1.-wy) + (sdf010 * (1.-wz) + sdf011 * (wz)) * (wy)) * (1.-wx) + \
-                      ((sdf100 * (1.-wz) + sdf101 * (wz)) * (1.-wy) + (sdf110 * (1.-wz) + sdf111 * (wz)) * (wy)) * (wx)
+            sdf = ((sdf000 * (1.-wz) + sdf001 * (wz)) * (1.-wy) + (sdf010 * (1.-wz) + sdf011 * (wz)) * (wy)) * (1.-wx) + \
+                    ((sdf100 * (1.-wz) + sdf101 * (wz)) * (1.-wy) + (sdf110 * (1.-wz) + sdf111 * (wz)) * (wy)) * (wx)
 
-                # substituite wz
+            # substituite wz
 
-                sdf = ((sdf000 * (1-oz) + sdf001 * (oz) + _t * vz * (-sdf000 + sdf001)) * (1.-wy) + (sdf010 * (1-oz) + sdf011 * (oz) + _t * vz * (-sdf010 + sdf011)) * (wy)) * (1.-wx) + \
-                      ((sdf100 * (1-oz) + sdf101 * (oz) + _t * vz * (-sdf100 + sdf101)) * (1.-wy) + (sdf110 * (1-oz) + sdf111 * (oz) + _t * vz * (-sdf110 + sdf111)) * (wy)) * (wx)
-                
-                a00 = sdf000 * (1-oz+lz) + sdf001 * (oz-lz)
-                a01 = sdf010 * (1-oz+lz) + sdf011 * (oz-lz)
-                a10 = sdf100 * (1-oz+lz) + sdf101 * (oz-lz)
-                a11 = sdf110 * (1-oz+lz) + sdf111 * (oz-lz)
+            sdf = ((sdf000 * (1-oz) + sdf001 * (oz) + _t * vz * (-sdf000 + sdf001)) * (1.-wy) + (sdf010 * (1-oz) + sdf011 * (oz) + _t * vz * (-sdf010 + sdf011)) * (wy)) * (1.-wx) + \
+                    ((sdf100 * (1-oz) + sdf101 * (oz) + _t * vz * (-sdf100 + sdf101)) * (1.-wy) + (sdf110 * (1-oz) + sdf111 * (oz) + _t * vz * (-sdf110 + sdf111)) * (wy)) * (wx)
+            
+            a00 = sdf000 * (1-oz+lz) + sdf001 * (oz-lz)
+            a01 = sdf010 * (1-oz+lz) + sdf011 * (oz-lz)
+            a10 = sdf100 * (1-oz+lz) + sdf101 * (oz-lz)
+            a11 = sdf110 * (1-oz+lz) + sdf111 * (oz-lz)
 
-                b00 = -sdf000 + sdf001
-                b01 = -sdf010 + sdf011
-                b10 = -sdf100 + sdf101
-                b11 = -sdf110 + sdf111
+            b00 = -sdf000 + sdf001
+            b01 = -sdf010 + sdf011
+            b10 = -sdf100 + sdf101
+            b11 = -sdf110 + sdf111
 
-                sdf = ((a00 + _t * vz * b00) * (1.-wy) + (a01 + _t * vz * b01) * (wy)) * (1.-wx) + \
-                      ((a10 + _t * vz * b10) * (1.-wy) + (a11 + _t * vz * b11) * (wy)) * (wx)
+            sdf = ((a00 + _t * vz * b00) * (1.-wy) + (a01 + _t * vz * b01) * (wy)) * (1.-wx) + \
+                    ((a10 + _t * vz * b10) * (1.-wy) + (a11 + _t * vz * b11) * (wy)) * (wx)
 
-                # substitute wy
+            # substitute wy
 
-                sdf = ((a00*(1-oy+ly) - _t * (a00*vy - vz*b00*(1-oy+ly)) - (_t**2) * vy*vz*b00) + (a01*(oy-ly) + _t * (a01*vy + vz*b01*(oy-ly)) + (_t**2) * (vy*vz*b01))) * (1.-wx) + \
-                      ((a10*(1-oy+ly) - _t * (a10*vy - vz*b10*(1-oy+ly)) - (_t**2) * vy*vz*b10) + (a11*(oy-ly) + _t * (a11*vy + vz*b11*(oy-ly)) + (_t**2) * (vy*vz*b11))) * (wx)
+            sdf = ((a00*(1-oy+ly) - _t * (a00*vy - vz*b00*(1-oy+ly)) - (_t**2) * vy*vz*b00) + (a01*(oy-ly) + _t * (a01*vy + vz*b01*(oy-ly)) + (_t**2) * (vy*vz*b01))) * (1.-wx) + \
+                    ((a10*(1-oy+ly) - _t * (a10*vy - vz*b10*(1-oy+ly)) - (_t**2) * vy*vz*b10) + (a11*(oy-ly) + _t * (a11*vy + vz*b11*(oy-ly)) + (_t**2) * (vy*vz*b11))) * (wx)
 
 
-                c0 = a00*(1-oy+ly) + a01*(oy-ly)
-                c1 = a10*(1-oy+ly) + a11*(oy-ly)
+            c0 = a00*(1-oy+ly) + a01*(oy-ly)
+            c1 = a10*(1-oy+ly) + a11*(oy-ly)
 
-                d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
-                d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
+            d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
+            d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
 
-                e0 = -vy*vz*b00 + vy*vz*b01
-                e1 = -vy*vz*b10 + vy*vz*b11
+            e0 = -vy*vz*b00 + vy*vz*b01
+            e1 = -vy*vz*b10 + vy*vz*b11
 
-                sdf = (c0 + _t*d0 + (_t**2)*e0) * (1.-wx) + \
-                      (c1 + _t*d1 + (_t**2)*e1) * (wx)
+            sdf = (c0 + _t*d0 + (_t**2)*e0) * (1.-wx) + \
+                    (c1 + _t*d1 + (_t**2)*e1) * (wx)
 
-                # substitute wz
+            # substitute wz
 
-                sdf = (c0*(1-ox+lx) + _t*(-c0*vx + d0*(1-ox+lx)) + (_t**2)*(-d0*vx+e0*(1-ox+lx)) + (_t**3)*(-e0*vx)) + \
-                      (c1*(ox-lx  ) + _t*( c1*vx + d1*(ox-lx  )) + (_t**2)*( d1*vx+e1*(ox-lx  )) + (_t**3)*( e1*vx) )
+            sdf = (c0*(1-ox+lx) + _t*(-c0*vx + d0*(1-ox+lx)) + (_t**2)*(-d0*vx+e0*(1-ox+lx)) + (_t**3)*(-e0*vx)) + \
+                    (c1*(ox-lx  ) + _t*( c1*vx + d1*(ox-lx  )) + (_t**2)*( d1*vx+e1*(ox-lx  )) + (_t**3)*( e1*vx) )
 
-                # final cubic form
+            # final cubic form
 
-                f0 = c0*(1-ox+lx) + c1*(ox-lx)
-                f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
-                f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
-                f3 = -e0*vx + e1*vx
+            f0 = c0*(1-ox+lx) + c1*(ox-lx)
+            f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
+            f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
+            f3 = -e0*vx + e1*vx
 
-                sdf = f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3
+            sdf = f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3
 
-                return NotImplementedError
+            return NotImplementedError
 
 
         ox, oy, oz = origins[voxel_mask].to(dtype).unbind(-1)
@@ -1681,6 +1706,411 @@ class SparseGrid(nn.Module):
             return out_rgb, out_depth
         return out_rgb
 
+
+    def _plane_render_gradcheck_lerp(
+        self,
+        rays: Rays,
+        rgb_gt: torch.Tensor = None,
+        randomize: bool = False,
+        beta_loss: float = 0.0,
+        sparsity_loss: float = 0.0,
+        return_raylen: bool = False,
+        return_depth: bool = False,
+        numerical_solution: bool = False, # no gradient flow!
+        dtype = torch.double 
+    ):
+        """
+        gradcheck version for sdf rendering
+        """
+        origins = self.world2grid(rays.origins).to(dtype)
+        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
+        viewdirs = dirs
+        B = dirs.size(0)
+        assert origins.size(0) == B
+        gsz = self._grid_size()
+        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
+        delta_scale = 1.0 / dirs.norm(dim=1)
+        dirs *= delta_scale.unsqueeze(-1)
+
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            sh_mult = self._eval_learned_bases(viewdirs)
+        elif self.basis_type == BASIS_TYPE_MLP:
+            sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
+        else:
+            sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
+
+        invdirs = 1.0 / dirs
+
+        gsz = self._grid_size().to(dtype)
+        gsz_cu = gsz.to(device=dirs.device).to(dtype)
+
+        # find near/far per ray
+        # t1 = (-0.5 - origins) * invdirs
+        # t2 = (gsz_cu - 0.5 - origins) * invdirs
+
+        # t = torch.min(t1, t2)
+        # t[dirs == 0] = -1e9
+        # t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
+
+        # tmax = torch.max(t1, t2)
+        # tmax[dirs == 0] = 1e9
+        # tmax = torch.min(tmax, dim=-1).values
+
+        # ts_bd_1 = (gsz_cu*0 - origins) / dirs
+        # ts_bd_2 = (gsz_cu - origins) / dirs
+
+        # TODO: implement more efficient way to find a set of voxels intersect with given rays
+
+        # # method1: find intersections between rays and all voxel surfaces, then round them
+        # ray_ends = origins + tmax[:, None] * dirs
+        # ray_starts = origins + t[:, None] * dirs
+
+        # # maximum number of samples, could just use sum(reso)
+        # ray_ends = ray_ends.clamp(0, self.links.shape[0]-1)
+        # ray_starts = ray_starts.clamp(0, self.links.shape[0]-1)
+        # sample_num = torch.sum(
+        #     torch.abs(ray_ends.long() - ray_starts.long())
+        #     , axis=-1).max()
+
+        # voxels = torch.ones([B, sample_num, 0]) * -1.
+        # # ignore intersection at voxel edges for now -- it can create repetitive samples!
+        # # ts where ray intersect with x-plane
+        # ts_sect_x = torch.stack([
+        #     torch.arange(
+        #         ray_starts[i,0].long(), ray_ends[i,0].long(), 
+        #         -1 if ray_starts[i,0].long() > ray_ends[i,0].long() else 1
+        #         ) for i in range(B)]) # too slow!
+        
+
+        # method2: adaptive step size for each ray
+
+
+
+
+        # debug helpers:
+
+        def pos():
+            return origins + t[:, None] * dirs
+
+        def next_pos():
+            return origins + find_next_intersection(t, origins, dirs)[:, None] * dirs
+
+        def global_id_to_current_id(global_id):
+            return torch.arange(good_indices.shape[0])[good_indices == global_id]
+
+        def save_rays():
+            cache = {
+                'origins': origins_ini.cpu().detach().numpy(),
+                'dirs': dirs_ini.cpu().detach().numpy()
+            }
+            np.save('rays.npy', cache)
+
+        def index(tensor, ele):
+            return torch.arange(tensor.shape[0])[tensor==ele]
+
+        def save_vis_cache():
+            '''
+            Save parameters for visualization
+            '''
+            cache = {
+                'origins': origins.cpu().detach().numpy(),
+                'dirs': dirs.cpu().detach().numpy(),
+                'sdf000': sdf000.cpu().detach().numpy(),
+                'sdf001': sdf001.cpu().detach().numpy(),
+                'sdf010': sdf010.cpu().detach().numpy(),
+                'sdf011': sdf011.cpu().detach().numpy(),
+                'sdf100': sdf100.cpu().detach().numpy(),
+                'sdf101': sdf101.cpu().detach().numpy(),
+                'sdf110': sdf110.cpu().detach().numpy(),
+                'sdf111': sdf111.cpu().detach().numpy(),
+                'l': l.cpu().detach().numpy(),
+                't': t.cpu().detach().numpy(),
+            }
+
+            np.save('vis_cache.npy', cache)
+
+        ts_bd = torch.cat([(gsz_cu*0 - origins) / dirs, (gsz_cu-1 - origins) / dirs], axis=-1)
+        
+        # remove intersection in inverse directions
+        ts_bd.view(-1)[ts_bd.view(-1) < 0] = torch.nan
+
+        # remove intersections outside of voxel
+        for i in range(ts_bd.shape[1]):
+            ts_bd[~self.within_grid(ts_bd[:, i, None] * dirs + origins), i] = torch.nan
+
+        t = torch.nan_to_num(ts_bd, torch.inf).min(axis=-1).values
+        tmax = torch.nan_to_num(ts_bd, -torch.inf).max(axis=-1).values
+        # for cameras within voxel grids, t_near = 0
+        t[self.within_grid(origins)] = 0.
+
+        if return_raylen:
+            return tmax - t
+
+        origins_ini = origins
+        dirs_ini = dirs
+
+        good_indices = torch.arange(B, device=origins.device)
+        # record a list of intersecting voxels
+        voxels = torch.ones((B, torch.sum(gsz_cu).long(), 3), device=origins.device, dtype=torch.long) * -1
+        voxels_i = torch.zeros(B, device=origins.device, dtype=torch.long)
+
+        del invdirs
+        
+        while good_indices.numel() > 0:
+            next_t = self.find_next_intersection(t, origins, dirs)
+            l = self.find_intersect_voxels(t, next_t, origins, dirs)
+
+            mask = ~torch.isnan(next_t)
+            good_indices = good_indices[mask]
+            # invalid l can appear due to rounding error
+            valid_l_mask = (l[mask] <= gsz_cu-2).all(axis=-1) & (l[mask] >= 0).all(axis=-1)
+            
+            voxels[good_indices[valid_l_mask], voxels_i[good_indices[valid_l_mask]], :] = l[mask][valid_l_mask]
+            voxels_i[good_indices[valid_l_mask]] += 1
+            origins = origins[mask]
+            dirs = dirs[mask]
+            t = next_t[mask]
+            # tmax = tmax[mask]
+
+        # re-arrange voxels into a batch of samples
+        VV = voxels_i.sum() # total number of valid voxels
+        MV = voxels_i.max() # number of max voxels per ray
+        origins = origins_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
+        dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
+        sh_mult = sh_mult[:, None, :].repeat([1, MV, 1]).reshape(-1,9)
+
+        voxel_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
+        # origins = origins[select_mask]
+        # dirs = dirs[select_mask]
+        # l = voxels[:, :MV, :][select_mask]
+        B_l = voxels[:, :MV, :].reshape(-1, 3)
+
+        assert origins.shape[0] == B * MV 
+
+        ###### find intersections within each voxel ######
+
+        l = B_l[voxel_mask] # [VV]
+        lx, ly, lz = l.unbind(-1) 
+        links000 = self.links[lx, ly, lz]
+        links001 = self.links[lx, ly, lz + 1]
+        links010 = self.links[lx, ly + 1, lz]
+        links011 = self.links[lx, ly + 1, lz + 1]
+        links100 = self.links[lx + 1, ly, lz]
+        links101 = self.links[lx + 1, ly, lz + 1]
+        links110 = self.links[lx + 1, ly + 1, lz]
+        links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+        alpha000, rgb000, plane000 = self._fetch_links(links000)
+        alpha001, rgb001, plane001 = self._fetch_links(links001)
+        alpha010, rgb010, plane010 = self._fetch_links(links010)
+        alpha011, rgb011, plane011 = self._fetch_links(links011)
+        alpha100, rgb100, plane100 = self._fetch_links(links100)
+        alpha101, rgb101, plane101 = self._fetch_links(links101)
+        alpha110, rgb110, plane110 = self._fetch_links(links110)
+        alpha111, rgb111, plane111 = self._fetch_links(links111)
+
+
+        # avg_norm = torch.mean(torch.stack(list(map(lambda s: torch.abs(s), 
+        #     [sdf000, sdf001, sdf010, sdf011, sdf100, sdf101, sdf110, sdf111]))), axis=0)
+
+        # sdf000 = sdf000 / avg_norm
+        # sdf001 = sdf001 / avg_norm
+        # sdf010 = sdf010 / avg_norm
+        # sdf011 = sdf011 / avg_norm
+        # sdf100 = sdf100 / avg_norm
+        # sdf101 = sdf101 / avg_norm
+        # sdf110 = sdf110 / avg_norm
+        # sdf111 = sdf111 / avg_norm
+
+
+        # plane: ax + by + cz + d = 0
+        a, b, c, d = torch.mean(torch.stack(
+            [plane000, plane001, plane010, plane011, plane100, plane101, plane110, plane111]
+            ), axis=0).to(dtype).unbind(-1)
+
+        # a, b, c, d = plane000.to(dtype).unbind(-1)
+
+        ox, oy, oz = origins[voxel_mask].to(dtype).unbind(-1)
+        vx, vy, vz = dirs[voxel_mask].to(dtype).unbind(-1)
+
+        ts = -(a*ox + b*oy + c*oz + d) / (a*vx+b*vy+c*vz)
+
+        ts = ts[..., None]
+        samples = origins[voxel_mask, :] + ts * dirs[voxel_mask, :] # B, three intersections, xyz
+
+        # remove all samples outside of the voxel
+        invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+        invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
+        
+        # TODO only interpolate for valid samples to save computation
+        # interpolate opacity
+        wa, wb = 1. - (samples - l), (samples - l)
+        c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
+        c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
+        c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
+        c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
+        c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+        c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+        _alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+        # post sigmoid activation
+        _alpha = torch.sigmoid(_alpha)
+
+        # remove invalid samples -- note this has to come after sigmoid
+        alpha = torch.clone(_alpha)
+        alpha[invalid_sample_ids] = 0.
+
+
+        # interpolate rgb
+        c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+        c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+        c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+        c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+        c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+        c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+        rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+        # END CRAZY TRILERP
+
+        B_rgb = torch.zeros((B*MV, 3), device=origins.device)
+        B_alpha = torch.zeros(B*MV, device=origins.device)
+
+        rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
+        B_rgb[voxel_mask,:] = torch.clamp_min(
+            torch.sum(sh_mult[voxel_mask, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
+            0.0,
+        )  # [VV, 3]
+
+        # log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
+        # TODO check if clamp is needed
+        B_alpha[voxel_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
+
+        assert not torch.isnan(B_alpha).any(), 'NaN detcted in log_att!'
+
+        B_rgb = B_rgb.reshape(B, MV, 3)
+        B_alpha = B_alpha.reshape(B, MV)
+
+        # TODO check if it makes sense!
+        B_weights = B_alpha * torch.cumprod(
+            torch.cat([torch.ones((B_alpha.shape[0], 1)).to(B_alpha.device), 1.-B_alpha + 1e-10], -1), -1
+            )[:, :-1] # [B, MV, 3]
+        
+        out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
+
+        # weight = torch.exp(log_light_intensity[good_indices]) * alpha[:,0]
+        # [B', 3, n_sh_coeffs]
+        # rgb = weight[:, None] * rgb[:, :3]
+
+        # assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
+
+        # out_rgb[good_indices] += rgb
+        # log_light_intensity[good_indices] += log_att
+
+
+        if self.use_background:
+            raise NotImplementedError
+            # Render the MSI background model
+            csi = utils.ConcentricSpheresIntersector(
+                    gsz_cu,
+                    origins_ini,
+                    dirs_ini,
+                    delta_scale)
+            inner_radius = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1) + 1e-3
+            inner_radius = inner_radius.clamp_min(1.0)
+            _, t_last = csi.intersect(inner_radius)
+            n_steps = int(self.background_nlayers / self.opt.step_size) + 2
+            layer_scale = (self.background_nlayers - 1) / (n_steps + 1)
+
+            def fetch_bg_link(lx, ly, lz):
+                results = torch.zeros([lx.shape[0], self.background_data.size(-1)],
+                                        device=lx.device)
+                lnk = self.background_links[lx, ly]
+                mask = lnk >= 0
+                results[mask] = self.background_data[lnk[mask].long(), lz[mask]]
+                return results
+
+            for i in range(n_steps):
+                r : float = n_steps / (n_steps - i - 0.5)
+                normalized_inv_radius = min((i + 1) * layer_scale, self.background_nlayers - 1)
+                layerid = min(int(normalized_inv_radius), self.background_nlayers - 2);
+                interp_wt = normalized_inv_radius - layerid;
+
+                active_mask, t = csi.intersect(r)
+                active_mask = active_mask & (r >= inner_radius)
+                if active_mask.count_nonzero() == 0:
+                    continue
+                t_sub = t[active_mask]
+                t_mid_sub = (t_sub + t_last[active_mask]) * 0.5
+                sphpos = csi.origins[active_mask] + \
+                         t_mid_sub.unsqueeze(-1) * csi.dirs[active_mask]
+                invr_mid = 1.0 / torch.norm(sphpos, dim=-1)
+                sphpos *= invr_mid.unsqueeze(-1)
+
+                xy = utils.xyz2equirect(sphpos, self.background_links.size(1))
+                z = torch.clamp((1.0 - invr_mid) * self.background_nlayers - 0.5, 0.0,
+                               self.background_nlayers - 1);
+                points = torch.cat([xy, z.unsqueeze(-1)], dim=-1)
+                l = points.to(torch.long)
+                l[..., 0].clamp_max_(self.background_links.size(0) - 1)
+                l[..., 1].clamp_max_(self.background_links.size(1) - 1)
+                l[..., 2].clamp_max_(self.background_nlayers - 2)
+
+                wb = points - l
+                wa = 1.0 - wb
+                lx, ly, lz = l.unbind(-1)
+                lnx = (lx + 1) % self.background_links.size(0)
+                lny = (ly + 1) % self.background_links.size(1)
+                lnz = lz + 1
+
+                v000 = fetch_bg_link(lx, ly, lz)
+                v001 = fetch_bg_link(lx, ly, lnz)
+                v010 = fetch_bg_link(lx, lny, lz)
+                v011 = fetch_bg_link(lx, lny, lnz)
+                v100 = fetch_bg_link(lnx, ly, lz)
+                v101 = fetch_bg_link(lnx, ly, lnz)
+                v110 = fetch_bg_link(lnx, lny, lz)
+                v111 = fetch_bg_link(lnx, lny, lnz)
+
+                c00 = v000 * wa[:, 2:] + v001 * wb[:, 2:]
+                c01 = v010 * wa[:, 2:] + v011 * wb[:, 2:]
+                c10 = v100 * wa[:, 2:] + v101 * wb[:, 2:]
+                c11 = v110 * wa[:, 2:] + v111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                rgba = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * (
+                            t_sub - t_last[active_mask]
+                        )
+                weight = torch.exp(log_light_intensity[active_mask]) * (
+                    1.0 - torch.exp(log_att)
+                )
+                rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
+                out_rgb[active_mask] += rgb * weight[:, None]
+                log_light_intensity[active_mask] += log_att
+                t_last[active_mask] = t[active_mask]
+
+        # Add background color
+        if self.opt.background_brightness:
+            out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
+            # out_rgb += (
+            #     torch.exp(log_light_intensity).unsqueeze(-1)
+            #     * self.opt.background_brightness
+            # )
+        if return_depth:
+            # render depth -- find out t from valid samples
+            _ts = ((samples[:,0] - origins[voxel_mask][:,0]) / dirs[voxel_mask][:,0])
+            _ts[invalid_sample_ids] = 0 
+
+            B_ts = torch.zeros(B*MV, device=origins.device)
+            B_ts[voxel_mask] = _ts.to(B_ts.dtype) # [VV]
+            B_ts = B_ts.reshape(B, MV)
+
+            out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
+
+            return out_rgb, out_depth
+        return out_rgb
+
+
     def _volume_render_gradcheck_nvol_lerp(self, rays: Rays, return_raylen: bool=False):
         """
         trilerp gradcheck version
@@ -1870,6 +2300,8 @@ class SparseGrid(nn.Module):
                 return self._volume_render_gradcheck_nvol_lerp(rays, return_raylen=return_raylen)
             elif self.opt.backend == 'sdf':
                 return self._sdf_render_gradcheck_lerp(rays, return_raylen=return_raylen)
+            elif self.opt.backend == 'plane':
+                return self._plane_render_gradcheck_lerp(rays, return_raylen=return_raylen)
             else:
                 return self._volume_render_gradcheck_lerp(rays, return_raylen=return_raylen)
 
@@ -1901,7 +2333,7 @@ class SparseGrid(nn.Module):
         :return: (N, 3), predicted RGB
         """
 
-        if self.backend == 'sdf':
+        if self.backend == 'sdf' or self.backend == 'plane':
             raise NotImplementedError
         assert (
             _C is not None and self.sh_data.is_cuda
@@ -1988,29 +2420,6 @@ class SparseGrid(nn.Module):
             all_rgb_out = torch.cat(all_rgb_out, dim=0)
             return all_rgb_out.view(camera.height, camera.width, -1)
 
-            # # Manually generate rays for now
-            # rays = camera.gen_rays()
-            # all_rgb_out = []
-            # all_depth_out = []
-            # for batch_start in range(0, camera.height * camera.width, batch_size):
-            #     out = self.volume_render(rays[batch_start:batch_start+batch_size],
-            #                                       use_kernel=use_kernel,
-            #                                       randomize=randomize,
-            #                                       return_raylen=return_raylen,
-            #                                       sdf_return_depth=sdf_return_depth)
-            #     if sdf_return_depth and self.backend == 'sdf':
-            #         rgb_out_part, depth_out_part = out
-            #         all_depth_out.append(depth_out_part)
-            #     else:
-            #         rgb_out_part = out
-            #     all_rgb_out.append(rgb_out_part)
-
-            # all_rgb_out = torch.cat(all_rgb_out, dim=0)
-            # if sdf_return_depth and self.backend == 'sdf':
-            #     all_depth_out = torch.cat(all_depth_out, dim=0)
-            #     return all_rgb_out.view(camera.height, camera.width, -1), all_depth_out.view(camera.height, camera.width, -1)
-            # return all_rgb_out.view(camera.height, camera.width, -1)
-
     def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None):
         """
         Volumetric depth rendering for rays
@@ -2024,6 +2433,9 @@ class SparseGrid(nn.Module):
         """
         if self.backend == 'sdf':
             out = self._sdf_render_gradcheck_lerp(rays, return_depth=True)
+            return out[1]
+        elif self.backend == 'plane':
+            out = self._plane_render_gradcheck_lerp(rays, return_depth=True)
             return out[1]
         if sigma_thresh is None:
             return _C.volume_render_expected_term(
@@ -2170,6 +2582,8 @@ class SparseGrid(nn.Module):
             self.density_data.grad = None
             if self.backend == 'sdf':
                 self.sdf_data.grad = None
+            elif self.backend == 'plane':
+                self.plane_data.grad = None
             self.sh_data.grad = None
             self.sparse_grad_indexer = None
             self.sparse_sh_grad_indexer = None
@@ -2258,6 +2672,8 @@ class SparseGrid(nn.Module):
             del self.density_data
             if self.backend == 'sdf':
                 del self.sdf_data
+            elif self.backend == 'plane':
+                del self.plane_sdf_data
             del self.sh_data
             del all_sample_vals_sh
 
@@ -2282,7 +2698,7 @@ class SparseGrid(nn.Module):
             print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
             print('links', init_links.shape, init_links.dtype)
             self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
-            if self.backend == 'sdf':
+            if self.backend == 'sdf' or self.backend == 'plane':
                 raise NotImplementedError
 
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
@@ -2406,6 +2822,8 @@ class SparseGrid(nn.Module):
         }
         if self.backend == 'sdf':
             data['sdf_data'] = self.sdf_data.data.cpu().numpy()
+        elif self.backend == 'plane':
+            data['plane_data'] = self.plane_data.data.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -2452,6 +2870,8 @@ class SparseGrid(nn.Module):
             backend = z.f.backend.item()
             if backend == 'sdf':
                 sdf_data = z.f.sdf_data
+            elif backend == 'plane':
+                plane_data = z.f.plane_data
 
         if 'background_data' in z:
             background_data = z['background_data']
@@ -2484,6 +2904,8 @@ class SparseGrid(nn.Module):
             density_data = density_data.astype(np.float32)
         if backend == 'sdf' and sdf_data.dtype != np.float32:
             sdf_data = sdf_data.astype(np.float32)
+        elif backend == 'plane' and plane_data.dtype != np.float32:
+            plane_data = plane_data.astype(np.float32)
         sh_data = torch.from_numpy(sh_data).to(device=device)
         density_data = torch.from_numpy(density_data).to(device=device)
         grid.sh_data = nn.Parameter(sh_data)
@@ -2491,6 +2913,9 @@ class SparseGrid(nn.Module):
         if backend == 'sdf':
             sdf_data = torch.from_numpy(sdf_data).to(device=device)
             grid.sdf_data = nn.Parameter(sdf_data)
+        if backend == 'plane':
+            plane_data = torch.from_numpy(plane_data).to(device=device)
+            grid.plane_data = nn.Parameter(plane_data)
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.sh_data.size(0)
 
@@ -2585,7 +3010,7 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for total variation"
         assert not logalpha, "No longer supported"
 
-        if self.backend == 'sdf':
+        if self.backend == 'sdf' or self.backend == 'plane':
             raise NotImplementedError
 
         return _TotalVariationFunction.apply(
@@ -2640,7 +3065,7 @@ class SparseGrid(nn.Module):
         [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
         """
-        if self.backend == 'sdf':
+        if self.backend == 'sdf' or self.backend == 'plane':
             raise NotImplementedError
 
         assert (
@@ -2911,27 +3336,35 @@ class SparseGrid(nn.Module):
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
 
-    def optim_sdf_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+    def optim_geo_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
                              optim : str='rmsprop'):
         """
         Execute RMSprop or sgd step on density
         """
         assert (
-            _C is not None and self.sdf_data.is_cuda
+            _C is not None
         ), "CUDA extension is currently required for optimizers"
+
+        if self.backend == 'sdf':
+            geo_data = self.sdf_data
+        elif self.backend == 'plane':
+            geo_data = self.plane_data
+        else:
+            # No geometry data used!
+            return
 
         indexer = self._maybe_convert_sparse_grad_indexer()
         if optim == 'rmsprop':
             if (
-                self.sdf_rms is None
-                or self.sdf_rms.shape != self.sdf_data.shape
+                self.geo_rms is None
+                or self.geo_rms.shape != geo_data.shape
             ):
-                del self.sdf_rms
-                self.sdf_rms = torch.zeros_like(self.sdf_data.data) # FIXME init?
+                del self.geo_rms
+                self.geo_rms = torch.zeros_like(geo_data.data) # FIXME init?
             _C.rmsprop_step(
-                self.sdf_data.data,
-                self.sdf_rms,
-                self.sdf_data.grad,
+                geo_data.data,
+                self.geo_rms,
+                geo_data.grad,
                 indexer,
                 beta,
                 lr,
@@ -2941,8 +3374,8 @@ class SparseGrid(nn.Module):
             )
         elif optim == 'sgd':
             _C.sgd_step(
-                self.sdf_data.data,
-                self.sdf_data.grad,
+                geo_data.data,
+                geo_data.grad,
                 indexer,
                 lr,
                 lr
@@ -3082,6 +3515,8 @@ class SparseGrid(nn.Module):
         gspec.density_data = self.density_data
         if self.backend == 'sdf':
             gspec.sdf_data = self.sdf_data
+        elif self.backend == 'plane':
+            gspec.plane_data = self.plane_data
         gspec.sh_data = self.sh_data
         gspec.links = self.links
         if grid_coords:

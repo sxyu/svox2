@@ -3,7 +3,7 @@
     "renderer_backend": "sdf",
     "reso": "[[64, 64, 64]]",
     "init_sigma": 0.001,
-    "sdf_init": "sphere",
+    "geometry_init": "sphere",
     "nosphereinit": true,
 
     "upsamp_every": 1e20,

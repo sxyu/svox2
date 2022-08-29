@@ -79,7 +79,7 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          default=1.0,
                          help="Brightness of the infinite background")
     group.add_argument('--renderer_backend', '-B',
-                         choices=['cuvol', 'svox1', 'nvol', 'sdf'],
+                         choices=['cuvol', 'svox1', 'nvol', 'sdf', 'plane'],
                          default='sdf',
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',
@@ -227,13 +227,13 @@ def setup_train_conf():
     group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
 
-    group.add_argument('--sdf_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
-    group.add_argument('--lr_sdf', type=float, default=3e1, help='SGD/rmsprop lr for sdf')
-    group.add_argument('--lr_sdf_final', type=float, default=5e-2)
-    group.add_argument('--lr_sdf_decay_steps', type=lambda x: int(float(x)), default=250000)
-    group.add_argument('--lr_sdf_delay_steps', type=lambda x: int(float(x)), default=15000,
+    group.add_argument('--geo_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
+    group.add_argument('--lr_geo', type=float, default=3e1, help='SGD/rmsprop lr for geometry')
+    group.add_argument('--lr_geo_final', type=float, default=5e-2)
+    group.add_argument('--lr_geo_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_geo_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
-    group.add_argument('--lr_sdf_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+    group.add_argument('--lr_geo_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
 
     group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
@@ -393,7 +393,7 @@ def setup_train_conf():
     group.add_argument('--load_ckpt', action='store_true', default=False,
                         help='resume training from ckpt in the given path if exists')
 
-    group.add_argument('--sdf_init', type=str, default=None)
+    group.add_argument('--geometry_init', type=str, default=None)
 
     args = parser.parse_args()
     # maybe_merge_config_file(args)

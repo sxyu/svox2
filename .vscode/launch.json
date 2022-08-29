@@ -63,6 +63,14 @@
             "justMyCode": false
         },
         {
+            "name": "test plane py",
+            "type": "python",
+            "request": "launch",
+            "program": "test/test_render_gradcheck_plane.py",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
             "name": "opt sdf py",
             "type": "python",
             "request": "launch",
@@ -74,6 +82,20 @@
                 "-t", "ckpt/sdf_debug",
                 "../data/nerf_synthetic/lego",
                 "-c", "configs/sdf_syn.yaml"
+            ]
+        },
+        {
+            "name": "opt plane py",
+            "type": "python",
+            "request": "launch",
+            "program": "opt.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "/home/tw554/plenoxels/opt",
+            "args": [
+                "-t", "ckpt/plane_debug",
+                "../data/nerf_synthetic/lego",
+                "-c", "configs/plane_syn.yaml"
             ]
         },
         {

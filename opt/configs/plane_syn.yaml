@@ -1,0 +1,23 @@
+nokernel = True
+renderer_backend = "plane"
+geometry_init = "random"
+reso = [[8,8,8]]
+init_sigma = 0.001
+nosphereinit = True
+
+upsamp_every = 1e10
+
+lr_sigma = 1e-2
+lr_sigma_final = 1e-4 
+lr_geo = 3e1
+lr_sh = 1e-2
+lambda_tv = 0
+lambda_tv_sh = 0
+
+n_iters = 10
+print_every = 1
+eval_every_iter = 1
+n_eval = 1
+load_ckpt = False
+log_depth_map = True
+
