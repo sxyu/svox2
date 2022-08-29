@@ -221,6 +221,15 @@ def setup_conf():
     group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
 
+    group.add_argument('--sdf_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
+    group.add_argument('--lr_sdf', type=float, default=3e1, help='SGD/rmsprop lr for sdf')
+    group.add_argument('--lr_sdf_final', type=float, default=5e-2)
+    group.add_argument('--lr_sdf_decay_steps', type=int, default=250000)
+    group.add_argument('--lr_sdf_delay_steps', type=int, default=15000,
+                    help="Reverse cosine steps (0 means disable)")
+    group.add_argument('--lr_sdf_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+
+
     group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
     group.add_argument('--lr_sh', type=float, default=
                         1e-2,

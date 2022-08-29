@@ -1,5 +1,6 @@
 from ftplib import ftpcp
 from multiprocessing.util import sub_debug
+from tkinter.tix import MAX
 from .defs import *
 from . import utils
 import torch
@@ -980,7 +981,7 @@ class SparseGrid(nn.Module):
             )
         return out_rgb
 
-    def _sdf_render_gradcheck_lerp(
+    def _sdf_render_gradcheck_lerp_backup(
         self,
         rays: Rays,
         rgb_gt: torch.Tensor = None,
@@ -1695,6 +1696,695 @@ class SparseGrid(nn.Module):
                 * self.opt.background_brightness
             )
         if return_depth:
+            return out_rgb, out_depth
+        return out_rgb
+
+
+    def _sdf_render_gradcheck_lerp(
+        self,
+        rays: Rays,
+        rgb_gt: torch.Tensor = None,
+        randomize: bool = False,
+        beta_loss: float = 0.0,
+        sparsity_loss: float = 0.0,
+        return_raylen: bool = False,
+        return_depth: bool = False,
+        numerical_solution: bool = False, # no gradient flow!
+        dtype = torch.double 
+    ):
+        """
+        gradcheck version for sdf rendering
+        """
+        origins = self.world2grid(rays.origins).to(dtype)
+        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
+        viewdirs = dirs
+        B = dirs.size(0)
+        assert origins.size(0) == B
+        gsz = self._grid_size()
+        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
+        delta_scale = 1.0 / dirs.norm(dim=1)
+        dirs *= delta_scale.unsqueeze(-1)
+
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            sh_mult = self._eval_learned_bases(viewdirs)
+        elif self.basis_type == BASIS_TYPE_MLP:
+            sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
+        else:
+            sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
+
+        invdirs = 1.0 / dirs
+
+        gsz = self._grid_size().to(dtype)
+        gsz_cu = gsz.to(device=dirs.device).to(dtype)
+
+        # find near/far per ray
+        # t1 = (-0.5 - origins) * invdirs
+        # t2 = (gsz_cu - 0.5 - origins) * invdirs
+
+        # t = torch.min(t1, t2)
+        # t[dirs == 0] = -1e9
+        # t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
+
+        # tmax = torch.max(t1, t2)
+        # tmax[dirs == 0] = 1e9
+        # tmax = torch.min(tmax, dim=-1).values
+
+        # ts_bd_1 = (gsz_cu*0 - origins) / dirs
+        # ts_bd_2 = (gsz_cu - origins) / dirs
+
+        # TODO: implement more efficient way to find a set of voxels intersect with given rays
+
+        # # method1: find intersections between rays and all voxel surfaces, then round them
+        # ray_ends = origins + tmax[:, None] * dirs
+        # ray_starts = origins + t[:, None] * dirs
+
+        # # maximum number of samples, could just use sum(reso)
+        # ray_ends = ray_ends.clamp(0, self.links.shape[0]-1)
+        # ray_starts = ray_starts.clamp(0, self.links.shape[0]-1)
+        # sample_num = torch.sum(
+        #     torch.abs(ray_ends.long() - ray_starts.long())
+        #     , axis=-1).max()
+
+        # voxels = torch.ones([B, sample_num, 0]) * -1.
+        # # ignore intersection at voxel edges for now -- it can create repetitive samples!
+        # # ts where ray intersect with x-plane
+        # ts_sect_x = torch.stack([
+        #     torch.arange(
+        #         ray_starts[i,0].long(), ray_ends[i,0].long(), 
+        #         -1 if ray_starts[i,0].long() > ray_ends[i,0].long() else 1
+        #         ) for i in range(B)]) # too slow!
+        
+
+        # method2: adaptive step size for each ray
+
+        def within_voxel(pts, atol=1e-6): # FIXME eps needed?
+            return (((pts <= gsz_cu-1.) | (torch.isclose(pts, gsz_cu-1., atol=atol))).all(axis=-1) & \
+                    ((pts >= gsz_cu*0.) | (torch.isclose(pts, gsz_cu*0., atol=atol))).all(axis=-1))
+
+        def floor_int(tensor, atol=1e-6):
+            '''
+            Floor the given tensor
+            if the tensor contains int, reduce the element by 1
+            '''
+            ft = torch.floor(tensor)
+            eq_mask = torch.isclose(ft, tensor, atol=atol)
+            # eq_mask = torch.abs(ft - tensor) <= eps
+            ft[eq_mask] = ft[eq_mask] - 1
+            return ft
+
+        def ceil_int(tensor, atol=1e-6):
+            '''
+            Ceil the given tensor
+            if the tensor contains int, increase the element by 1
+            '''
+            ft = torch.ceil(tensor)
+            eq_mask = torch.isclose(ft, tensor, atol=atol)
+            # eq_mask = torch.abs(ft - tensor) <= eps
+            ft[eq_mask] = ft[eq_mask] + 1
+            return ft
+
+        def find_next_plane(pos, dirs):
+            '''
+            Use current pos and dirs to find axis of next planes to intersect
+            '''
+            next_plane = torch.clone(pos)
+            for i in range(pos.shape[1]):
+                dir_mask = dirs[:,i] >= 0
+                next_plane[dir_mask, i] = ceil_int(next_plane[dir_mask, i])
+                next_plane[~dir_mask, i] = floor_int(next_plane[~dir_mask, i])
+            # torch.clamp_(next_plane, 0., gsz_cu-1.)
+            return next_plane
+
+        def find_next_intersection(t, origins, dirs):
+            '''
+            Find the next intersecting t with voxel planes
+            '''
+            # current pos
+            pos = origins + t[:, None] * dirs
+
+            # find next plane for intersections
+            next_plane = find_next_plane(pos, dirs)
+            # find adaptive step size that reachs the next intersection between ray and voxel xyz plane
+            ada_steps = (next_plane - pos) / dirs
+            # remove nan and non-positive steps
+            ada_steps.view(-1)[ada_steps.view(-1) <= 0] = torch.inf
+            torch.nan_to_num_(ada_steps, torch.inf)
+            ada_step = ada_steps.min(axis=-1).values
+            next_t = t + ada_step
+
+            # check whether intersection goes outside of voxel
+            next_pos = origins + next_t[:, None] * dirs
+            next_t[~within_voxel(next_pos)] = torch.nan
+
+            return next_t
+
+        def find_intersect_voxel(t, next_t, origins, dirs):
+            '''
+            Use two ray-plane intersections to find the voxel that ray passes through
+            '''
+            t_mid = (t + next_t) / 2
+            pos_mid = origins + t_mid[:, None] * dirs
+            return torch.floor(pos_mid).long()
+
+
+        # debug helpers:
+
+        def pos():
+            return origins + t[:, None] * dirs
+
+        def next_pos():
+            return origins + find_next_intersection(t, origins, dirs)[:, None] * dirs
+
+        def global_id_to_current_id(global_id):
+            return torch.arange(good_indices.shape[0])[good_indices == global_id]
+
+        def save_rays():
+            cache = {
+                'origins': origins_ini.cpu().detach().numpy(),
+                'dirs': dirs_ini.cpu().detach().numpy()
+            }
+            np.save('rays.npy', cache)
+
+        def index(tensor, ele):
+            return torch.arange(tensor.shape[0])[tensor==ele]
+
+        def save_vis_cache():
+            '''
+            Save parameters for visualization
+            '''
+            cache = {
+                'origins': origins.cpu().detach().numpy(),
+                'dirs': dirs.cpu().detach().numpy(),
+                'sdf000': sdf000.cpu().detach().numpy(),
+                'sdf001': sdf001.cpu().detach().numpy(),
+                'sdf010': sdf010.cpu().detach().numpy(),
+                'sdf011': sdf011.cpu().detach().numpy(),
+                'sdf100': sdf100.cpu().detach().numpy(),
+                'sdf101': sdf101.cpu().detach().numpy(),
+                'sdf110': sdf110.cpu().detach().numpy(),
+                'sdf111': sdf111.cpu().detach().numpy(),
+                'l': l.cpu().detach().numpy(),
+                't': t.cpu().detach().numpy(),
+            }
+
+            np.save('vis_cache.npy', cache)
+
+        def check_sdf(samples): 
+            # interpolate sdfs to check solutions
+            wa, wb = 1. - (samples - l), (samples - l)
+            c00 = sdf000 * wa[:, 2:] + sdf001 * wb[:, 2:]
+            c01 = sdf010 * wa[:, 2:] + sdf011 * wb[:, 2:]
+            c10 = sdf100 * wa[:, 2:] + sdf101 * wb[:, 2:]
+            c11 = sdf110 * wa[:, 2:] + sdf111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            sdfs = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+            return sdfs
+
+
+        ts_bd = torch.cat([(gsz_cu*0 - origins) / dirs, (gsz_cu-1 - origins) / dirs], axis=-1)
+        
+        # remove intersection in inverse directions
+        ts_bd.view(-1)[ts_bd.view(-1) < 0] = torch.nan
+
+        # remove intersections outside of voxel
+        for i in range(ts_bd.shape[1]):
+            ts_bd[~within_voxel(ts_bd[:, i, None] * dirs + origins), i] = torch.nan
+
+        t = torch.nan_to_num(ts_bd, torch.inf).min(axis=-1).values
+        tmax = torch.nan_to_num(ts_bd, -torch.inf).max(axis=-1).values
+        # for cameras within voxel grids, t_near = 0
+        t[within_voxel(origins)] = 0.
+
+        if return_raylen:
+            return tmax - t
+
+        origins_ini = origins
+        dirs_ini = dirs
+
+        good_indices = torch.arange(B, device=origins.device)
+        # record a list of intersecting voxels
+        voxels = torch.ones((B, torch.sum(gsz_cu).long(), 3), device=origins.device, dtype=torch.long) * -1
+        voxels_i = torch.zeros(B, device=origins.device, dtype=torch.long)
+
+        del invdirs
+        
+        while good_indices.numel() > 0:
+            next_t = find_next_intersection(t, origins, dirs)
+            l = find_intersect_voxel(t, next_t, origins, dirs)
+
+            mask = ~torch.isnan(next_t)
+            good_indices = good_indices[mask]
+            # invalid l can appear due to rounding error
+            valid_l_mask = (l[mask] <= gsz_cu-2).all(axis=-1) & (l[mask] >= 0).all(axis=-1)
+            
+            voxels[good_indices[valid_l_mask], voxels_i[good_indices[valid_l_mask]], :] = l[mask][valid_l_mask]
+            voxels_i[good_indices[valid_l_mask]] += 1
+            origins = origins[mask]
+            dirs = dirs[mask]
+            t = next_t[mask]
+            # tmax = tmax[mask]
+
+        # re-arrange voxels into a batch of samples
+        VV = voxels_i.sum() # total number of valid voxels
+        MV = voxels_i.max() # number of max voxels per ray
+        origins = origins_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
+        dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
+        sh_mult = sh_mult[:, None, :].repeat([1, MV, 1]).reshape(-1,9)
+
+        voxel_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
+        # origins = origins[select_mask]
+        # dirs = dirs[select_mask]
+        # l = voxels[:, :MV, :][select_mask]
+        B_l = voxels[:, :MV, :].reshape(-1, 3)
+
+        assert origins.shape[0] == B * MV 
+
+        ###### find intersections within each voxel ######
+
+        l = B_l[voxel_mask] # [VV]
+        lx, ly, lz = l.unbind(-1) 
+        links000 = self.links[lx, ly, lz]
+        links001 = self.links[lx, ly, lz + 1]
+        links010 = self.links[lx, ly + 1, lz]
+        links011 = self.links[lx, ly + 1, lz + 1]
+        links100 = self.links[lx + 1, ly, lz]
+        links101 = self.links[lx + 1, ly, lz + 1]
+        links110 = self.links[lx + 1, ly + 1, lz]
+        links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+        alpha000, rgb000, sdf000 = self._fetch_links(links000)
+        alpha001, rgb001, sdf001 = self._fetch_links(links001)
+        alpha010, rgb010, sdf010 = self._fetch_links(links010)
+        alpha011, rgb011, sdf011 = self._fetch_links(links011)
+        alpha100, rgb100, sdf100 = self._fetch_links(links100)
+        alpha101, rgb101, sdf101 = self._fetch_links(links101)
+        alpha110, rgb110, sdf110 = self._fetch_links(links110)
+        alpha111, rgb111, sdf111 = self._fetch_links(links111)
+
+
+        ################## Simplifying Trlinear Interpolation Function ########################
+        def trilinear_simplify():
+        ################## Finishing Trlinear Interpolation Function ########################
+                '''
+                Math for simplyfing trilinear interpolation (with syntax highlighting)
+                This function shouldn't be called
+                '''
+                _t = None # _t is the exact depth we want to calculate
+                ox, oy, oz = origins[new_voxel_ids][:, :1], origins[new_voxel_ids][:, 1:2], origins[new_voxel_ids][:, 2:]
+                vx, vy, vz = dirs[new_voxel_ids][:, :1], dirs[new_voxel_ids][:, 1:2], dirs[new_voxel_ids][:, 2:]
+                wx = ox + _t * vx - lx
+                wy = oy + _t * vy - ly
+                wz = oz + _t * vz - lz
+
+                sdf = ((sdf000 * (1.-wz) + sdf001 * (wz)) * (1.-wy) + (sdf010 * (1.-wz) + sdf011 * (wz)) * (wy)) * (1.-wx) + \
+                      ((sdf100 * (1.-wz) + sdf101 * (wz)) * (1.-wy) + (sdf110 * (1.-wz) + sdf111 * (wz)) * (wy)) * (wx)
+
+                # substituite wz
+
+                sdf = ((sdf000 * (1-oz) + sdf001 * (oz) + _t * vz * (-sdf000 + sdf001)) * (1.-wy) + (sdf010 * (1-oz) + sdf011 * (oz) + _t * vz * (-sdf010 + sdf011)) * (wy)) * (1.-wx) + \
+                      ((sdf100 * (1-oz) + sdf101 * (oz) + _t * vz * (-sdf100 + sdf101)) * (1.-wy) + (sdf110 * (1-oz) + sdf111 * (oz) + _t * vz * (-sdf110 + sdf111)) * (wy)) * (wx)
+                
+                a00 = sdf000 * (1-oz+lz) + sdf001 * (oz-lz)
+                a01 = sdf010 * (1-oz+lz) + sdf011 * (oz-lz)
+                a10 = sdf100 * (1-oz+lz) + sdf101 * (oz-lz)
+                a11 = sdf110 * (1-oz+lz) + sdf111 * (oz-lz)
+
+                b00 = -sdf000 + sdf001
+                b01 = -sdf010 + sdf011
+                b10 = -sdf100 + sdf101
+                b11 = -sdf110 + sdf111
+
+                sdf = ((a00 + _t * vz * b00) * (1.-wy) + (a01 + _t * vz * b01) * (wy)) * (1.-wx) + \
+                      ((a10 + _t * vz * b10) * (1.-wy) + (a11 + _t * vz * b11) * (wy)) * (wx)
+
+                # substitute wy
+
+                sdf = ((a00*(1-oy+ly) - _t * (a00*vy - vz*b00*(1-oy+ly)) - (_t**2) * vy*vz*b00) + (a01*(oy-ly) + _t * (a01*vy + vz*b01*(oy-ly)) + (_t**2) * (vy*vz*b01))) * (1.-wx) + \
+                      ((a10*(1-oy+ly) - _t * (a10*vy - vz*b10*(1-oy+ly)) - (_t**2) * vy*vz*b10) + (a11*(oy-ly) + _t * (a11*vy + vz*b11*(oy-ly)) + (_t**2) * (vy*vz*b11))) * (wx)
+
+
+                c0 = a00*(1-oy+ly) + a01*(oy-ly)
+                c1 = a10*(1-oy+ly) + a11*(oy-ly)
+
+                d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
+                d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
+
+                e0 = -vy*vz*b00 + vy*vz*b01
+                e1 = -vy*vz*b10 + vy*vz*b11
+
+                sdf = (c0 + _t*d0 + (_t**2)*e0) * (1.-wx) + \
+                      (c1 + _t*d1 + (_t**2)*e1) * (wx)
+
+                # substitute wz
+
+                sdf = (c0*(1-ox+lx) + _t*(-c0*vx + d0*(1-ox+lx)) + (_t**2)*(-d0*vx+e0*(1-ox+lx)) + (_t**3)*(-e0*vx)) + \
+                      (c1*(ox-lx  ) + _t*( c1*vx + d1*(ox-lx  )) + (_t**2)*( d1*vx+e1*(ox-lx  )) + (_t**3)*( e1*vx) )
+
+                # final cubic form
+
+                f0 = c0*(1-ox+lx) + c1*(ox-lx)
+                f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
+                f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
+                f3 = -e0*vx + e1*vx
+
+                sdf = f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3
+
+                return NotImplementedError
+
+
+        ox, oy, oz = origins[voxel_mask].to(dtype).unbind(-1)
+        vx, vy, vz = dirs[voxel_mask].to(dtype).unbind(-1)
+
+        a00 = sdf000[:,0].to(dtype) * (1-oz+lz) + sdf001[:,0].to(dtype) * (oz-lz)
+        a01 = sdf010[:,0].to(dtype) * (1-oz+lz) + sdf011[:,0].to(dtype) * (oz-lz)
+        a10 = sdf100[:,0].to(dtype) * (1-oz+lz) + sdf101[:,0].to(dtype) * (oz-lz)
+        a11 = sdf110[:,0].to(dtype) * (1-oz+lz) + sdf111[:,0].to(dtype) * (oz-lz)
+
+        b00 = -sdf000[:,0].to(dtype) + sdf001[:,0].to(dtype)
+        b01 = -sdf010[:,0].to(dtype) + sdf011[:,0].to(dtype)
+        b10 = -sdf100[:,0].to(dtype) + sdf101[:,0].to(dtype)
+        b11 = -sdf110[:,0].to(dtype) + sdf111[:,0].to(dtype)
+
+        c0 = a00*(1-oy+ly) + a01*(oy-ly)
+        c1 = a10*(1-oy+ly) + a11*(oy-ly)
+
+        d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
+        d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
+
+        e0 = -vy*vz*b00 + vy*vz*b01
+        e1 = -vy*vz*b10 + vy*vz*b11
+
+        f0 = c0*(1-ox+lx) + c1*(ox-lx)
+        f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
+        f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
+        f3 = -e0*vx + e1*vx
+
+        if numerical_solution: # TODO use Aesara instead https://aesara.readthedocs.io/en/latest/
+            print('using slow numerical solver for cubic functions!')
+            print('no gradient is enabled at the moment!')
+            ts = torch.ones([f0.numel(), 3]).to(device=dirs.device) * -1
+            for i in range(f0.shape[0]):
+                x = Symbol('x')
+                a_np = f3.cpu().detach().numpy() 
+                b_np = f2.cpu().detach().numpy()
+                c_np = f1.cpu().detach().numpy()
+                d_np = f0.cpu().detach().numpy()
+                solutions = sympy.solveset(a_np[i] * x**3 + b_np[i] * x**2 + c_np[i] * x + d_np[i], x, domain=sympy.S.Reals)
+                solutions = torch.tensor(list(solutions),dtype=torch.float32).to(device=dirs.device)
+                ts[i, :solutions.shape[0]] = solutions
+        else:
+
+            # analyical solution for f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3 = 0
+            # https://github.com/shril/CubicEquationSolver/blob/master/CubicEquationSolver.py
+
+            # negative roots are considered no roots and are filtered out later
+            ts = torch.ones([f0.numel(), 3]).to(dtype).to(device=dirs.device) * -1 # [VV, 3]
+
+            # check for trivial a and b -- reduce to linear or polynomial solutions
+            tri_a_mask = f3 == 0.
+            tri_ab_mask = tri_a_mask & (f2 == 0.) & (~(f1 == 0.)) # if f1, f2, f3 all 0, then no solution
+
+            ########### Linear Roots ###########
+            if ts[tri_ab_mask].numel() > 0:
+                ts[tri_ab_mask, 0] = (-f0[tri_ab_mask] * 1.0) / f1[tri_ab_mask]
+
+            ########### Quadratic Roots ###########
+            quad_mask = tri_a_mask & (~tri_ab_mask) & (~(f1 == 0.))
+            if ts[quad_mask].numel() > 0:
+                _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
+                D = _c**2 - 4.0 * _b * _d
+
+                D_mask = D >+ 0 # two real roots
+                sqrt_D = torch.sqrt(D[D_mask])
+                ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
+                ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
+                ts[ids, 1] = (-_c[D_mask] - sqrt_D) / (2.0 * _b[D_mask])
+
+                # D_mask = D == 0 # one unique roots
+                # sqrt_D = torch.sqrt(D[D_mask])
+                # ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
+                # ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
+
+            # otherwise, has no real roots
+
+            ########### Cubic Roots ###########
+
+            cubic_mask = (~tri_a_mask) & (~tri_ab_mask)
+            # cubic_mask = ~torch.isnan(a)
+
+            # normalize 
+            a = f3 / f3
+            b = f2 / f3
+            c = f1 / f3
+            d = f0 / f3
+
+            # TODO: remove voxels with invalid SDFs as they can cause numerical issues
+
+            def cond_cbrt(x, eps=1e-6):
+                '''
+                Compute cubic root of x based on sign
+                '''
+                ret = torch.zeros_like(x)
+                ret[x >= 0] = torch.pow(torch.clamp_min_(x[x >= 0], eps), 1/3.)
+                ret[x < 0] = torch.pow(torch.clamp_min_(-x[x < 0], eps), 1/3.) * -1
+                return ret
+
+            f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
+            g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
+            h = ((g**2.) / 4. + (f**3.) / 27.)
+
+            # h = torch.clamp_max_(h, 1e10) # might need to clamp min as well
+            # h = torch.clamp(h, -1e12, 1e12) 
+
+            # all three roots are real and equal
+            _mask = ((f == 0) & (g == 0) & (h == 0)) & cubic_mask
+            ts[_mask, 0] = cond_cbrt(d[_mask]/a[_mask])
+
+            # all three roots are real 
+            _mask = (h <= 0) & (~((f == 0) & (g == 0) & (h == 0))) & cubic_mask
+            _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+            
+            _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
+            _j = _i ** (1 / 3.)                      
+            _k = torch.acos(-(_g / (2 * _i)))              
+            _L = _j * -1                              
+            _M = torch.cos(_k / 3.)       
+            _N = np.sqrt(3) * torch.sin(_k / 3.)    
+            _P = (_b / (3. * _a)) * -1                
+
+            ts[_mask, 0] = 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
+            ts[_mask, 1] = _L * (_M + _N) + _P
+            ts[_mask, 2] = _L * (_M - _N) + _P
+
+            # only one root is real
+            _mask = (h > 0) & cubic_mask
+            _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+
+            _R = -(_g / 2.) + torch.sqrt(_h)    
+            _S = cond_cbrt(_R)
+
+            _T = -(_g / 2.) - torch.sqrt(_h)
+            _U = cond_cbrt(_T)
+
+            ts[_mask, 0] = (_S + _U) - (_b / (3. * _a))
+            # ts[_mask, 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
+            # ts[_mask, 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
+
+
+            assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots, possbily due to small coefficients'
+            assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
+
+            def check_solution(i,j):
+                return ts[i,j]**3 * a[i] + ts[i,j]**2 * b[i] + ts[i,j] * c[i] + d[i]
+
+        # TODO: issue, the root can be coarse!
+
+        ts = ts[..., None]
+        samples = origins[voxel_mask, None, :] + ts * dirs[voxel_mask, None, :] # B, three intersections, xyz
+
+        # filter out roots with negative t
+        neg_roots = ts.view(-1) < 0
+        samples.view(-1, 3)[neg_roots, :] = -1e9 # FIXME better way
+
+        # find the intersection that is closest to voxel center
+        # FIXME it is possible to have more than one intersections per voxel, need to deal with that!
+        centers = (l+.5)[:,None,:]
+        sq_dists = torch.sum((samples - centers) ** 2,axis=-1)
+        min_ids = torch.min(sq_dists,axis=-1).indices
+        samples = samples[torch.arange(samples.shape[0]), min_ids, :]
+        # note that the samples could still contain invalid coords -- when ray does not intersect with any surface!
+
+        # remove all samples outside of the voxel
+        invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+        invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
+        
+        # TODO only interpolate for valid samples to save computation
+        # interpolate opacity
+        wa, wb = 1. - (samples - l), (samples - l)
+        c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
+        c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
+        c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
+        c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
+        c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+        c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+        _alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+        # post sigmoid activation
+        _alpha = torch.sigmoid(_alpha)
+
+        # remove invalid samples -- note this has to come after sigmoid
+        alpha = torch.clone(_alpha)
+        alpha[invalid_sample_ids] = 0.
+
+
+        # interpolate rgb
+        c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+        c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+        c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+        c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+        c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+        c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+        rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+        # END CRAZY TRILERP
+
+        B_rgb = torch.zeros((B*MV, 3), device=origins.device)
+        B_alpha = torch.zeros(B*MV, device=origins.device)
+
+        rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
+        B_rgb[voxel_mask,:] = torch.clamp_min(
+            torch.sum(sh_mult[voxel_mask, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
+            0.0,
+        )  # [VV, 3]
+
+        # log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
+        # TODO check if clamp is needed
+        B_alpha[voxel_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
+
+        assert not torch.isnan(B_alpha).any(), 'NaN detcted in log_att!'
+
+        B_rgb = B_rgb.reshape(B, MV, 3)
+        B_alpha = B_alpha.reshape(B, MV)
+
+        # TODO check if it makes sense!
+        B_weights = B_alpha * torch.cumprod(
+            torch.cat([torch.ones((B_alpha.shape[0], 1)).to(B_alpha.device), 1.-B_alpha + 1e-10], -1), -1
+            )[:, :-1] # [B, MV, 3]
+        
+        out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
+
+        # weight = torch.exp(log_light_intensity[good_indices]) * alpha[:,0]
+        # [B', 3, n_sh_coeffs]
+        # rgb = weight[:, None] * rgb[:, :3]
+
+        # assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
+
+        # out_rgb[good_indices] += rgb
+        # log_light_intensity[good_indices] += log_att
+
+
+        if self.use_background:
+            raise NotImplementedError
+            # Render the MSI background model
+            csi = utils.ConcentricSpheresIntersector(
+                    gsz_cu,
+                    origins_ini,
+                    dirs_ini,
+                    delta_scale)
+            inner_radius = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1) + 1e-3
+            inner_radius = inner_radius.clamp_min(1.0)
+            _, t_last = csi.intersect(inner_radius)
+            n_steps = int(self.background_nlayers / self.opt.step_size) + 2
+            layer_scale = (self.background_nlayers - 1) / (n_steps + 1)
+
+            def fetch_bg_link(lx, ly, lz):
+                results = torch.zeros([lx.shape[0], self.background_data.size(-1)],
+                                        device=lx.device)
+                lnk = self.background_links[lx, ly]
+                mask = lnk >= 0
+                results[mask] = self.background_data[lnk[mask].long(), lz[mask]]
+                return results
+
+            for i in range(n_steps):
+                r : float = n_steps / (n_steps - i - 0.5)
+                normalized_inv_radius = min((i + 1) * layer_scale, self.background_nlayers - 1)
+                layerid = min(int(normalized_inv_radius), self.background_nlayers - 2);
+                interp_wt = normalized_inv_radius - layerid;
+
+                active_mask, t = csi.intersect(r)
+                active_mask = active_mask & (r >= inner_radius)
+                if active_mask.count_nonzero() == 0:
+                    continue
+                t_sub = t[active_mask]
+                t_mid_sub = (t_sub + t_last[active_mask]) * 0.5
+                sphpos = csi.origins[active_mask] + \
+                         t_mid_sub.unsqueeze(-1) * csi.dirs[active_mask]
+                invr_mid = 1.0 / torch.norm(sphpos, dim=-1)
+                sphpos *= invr_mid.unsqueeze(-1)
+
+                xy = utils.xyz2equirect(sphpos, self.background_links.size(1))
+                z = torch.clamp((1.0 - invr_mid) * self.background_nlayers - 0.5, 0.0,
+                               self.background_nlayers - 1);
+                points = torch.cat([xy, z.unsqueeze(-1)], dim=-1)
+                l = points.to(torch.long)
+                l[..., 0].clamp_max_(self.background_links.size(0) - 1)
+                l[..., 1].clamp_max_(self.background_links.size(1) - 1)
+                l[..., 2].clamp_max_(self.background_nlayers - 2)
+
+                wb = points - l
+                wa = 1.0 - wb
+                lx, ly, lz = l.unbind(-1)
+                lnx = (lx + 1) % self.background_links.size(0)
+                lny = (ly + 1) % self.background_links.size(1)
+                lnz = lz + 1
+
+                v000 = fetch_bg_link(lx, ly, lz)
+                v001 = fetch_bg_link(lx, ly, lnz)
+                v010 = fetch_bg_link(lx, lny, lz)
+                v011 = fetch_bg_link(lx, lny, lnz)
+                v100 = fetch_bg_link(lnx, ly, lz)
+                v101 = fetch_bg_link(lnx, ly, lnz)
+                v110 = fetch_bg_link(lnx, lny, lz)
+                v111 = fetch_bg_link(lnx, lny, lnz)
+
+                c00 = v000 * wa[:, 2:] + v001 * wb[:, 2:]
+                c01 = v010 * wa[:, 2:] + v011 * wb[:, 2:]
+                c10 = v100 * wa[:, 2:] + v101 * wb[:, 2:]
+                c11 = v110 * wa[:, 2:] + v111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                rgba = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * (
+                            t_sub - t_last[active_mask]
+                        )
+                weight = torch.exp(log_light_intensity[active_mask]) * (
+                    1.0 - torch.exp(log_att)
+                )
+                rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
+                out_rgb[active_mask] += rgb * weight[:, None]
+                log_light_intensity[active_mask] += log_att
+                t_last[active_mask] = t[active_mask]
+
+        # Add background color
+        if self.opt.background_brightness:
+            out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
+            # out_rgb += (
+            #     torch.exp(log_light_intensity).unsqueeze(-1)
+            #     * self.opt.background_brightness
+            # )
+        if return_depth:
+            # render depth -- find out t from valid samples
+            _ts = ((samples[:,0] - origins[voxel_mask][:,0]) / dirs[voxel_mask][:,0])
+            _ts[invalid_sample_ids] = 0 
+
+            B_ts = torch.zeros(B*MV, device=origins.device)
+            B_ts[voxel_mask] = _ts.to(B_ts.dtype) # [VV]
+            B_ts = B_ts.reshape(B, MV)
+
+            out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
+
             return out_rgb, out_depth
         return out_rgb
 
