@@ -10,10 +10,10 @@ data_set_root should contain directories like images/, pose/
 import os
 import os.path as osp
 from typing import NamedTuple, List
-import argparse
+import configargparse
 import random
 
-parser = argparse.ArgumentParser("Automatic dataset splitting")
+parser = configargparse.ArgumentParser("Automatic dataset splitting")
 parser.add_argument('root_dir', type=str, help="COLMAP dataset root dir")
 parser.add_argument('--every', type=int, default=16, help="Every x images used for testing")
 parser.add_argument('--dry_run', action='store_true', help="Dry run, prints renames without modifying any files")

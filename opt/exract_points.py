@@ -5,7 +5,7 @@ import torch
 import svox2
 import svox2.utils
 import math
-import argparse
+import configargparse
 import numpy as np
 import os
 from os import path
@@ -16,7 +16,7 @@ from util import config_util
 import imageio
 import cv2
 from tqdm import tqdm
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
 
 config_util.define_common_args(parser)

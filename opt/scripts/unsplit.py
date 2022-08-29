@@ -6,9 +6,9 @@ import os
 import os.path as osp
 import click
 from typing import NamedTuple, List
-import argparse
+import configargparse
 
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument('root_dir', type=str, help="COLMAP dataset root dir")
 parser.add_argument('--dry_run', action='store_true', help="Dry run, prints renames without modifying any files")
 parser.add_argument('--yes', '-y', action='store_true', help="Answer yes")

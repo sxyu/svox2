@@ -13,9 +13,10 @@
 # DATA_DIR="../data/nerf_synthetic/materials"
 # CONFIG="./configs/syn.json"
 
-EXP_NAME="sdf_lego_sphere_64_1e_2"
+EXP_NAME="sdf_lego_sphere_8_re"
+# EXP_NAME="sdf_lego_sphere_8"
 DATA_DIR="../data/nerf_synthetic/lego"
-CONFIG="./configs/sdf_syn.json"
+CONFIG="./configs/sdf_syn.yaml"
 
 
 CKPT_DIR=ckpt/$EXP_NAME
@@ -26,4 +27,6 @@ echo DATA_DIR $DATA_DIR
 echo CONFIG $CONFIG
 
 python opt.py -t $CKPT_DIR $DATA_DIR -c $CONFIG
+
+python render_imgs_circle.py $CKPT_DIR $DATA_DIR
 

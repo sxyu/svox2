@@ -1,5 +1,5 @@
 import json
-import argparse
+import configargparse
 import os
 from os import path
 import glob
@@ -8,7 +8,7 @@ import cv2
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation
 
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument('data_dir', type=str)
 parser.add_argument('--every', type=int, default=15)
 parser.add_argument('--factor', type=int, default=2, help='downsample')

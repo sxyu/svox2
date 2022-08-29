@@ -33,7 +33,7 @@ import os
 import collections
 import numpy as np
 import struct
-import argparse
+import configargparse
 
 
 CameraModel = collections.namedtuple(
@@ -478,7 +478,7 @@ def rotmat2qvec(R):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Read and write COLMAP binary and text models")
+    parser = configargparse.ArgumentParser(description="Read and write COLMAP binary and text models")
     parser.add_argument("--input_model", help="path to input model folder")
     parser.add_argument("--input_format", choices=[".bin", ".txt"],
                         help="input model format", default="")

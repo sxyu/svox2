@@ -26,6 +26,8 @@ import cv2
 from util.dataset import datasets
 from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
 from util import config_util
+import gin
+import ast
 
 from warnings import warn
 from datetime import datetime
@@ -36,7 +38,19 @@ from typing import NamedTuple, Optional, Union
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-args = config_util.setup_conf()
+# parser = argparse.ArgumentParser()
+# parser.add_argument('--train_dir', '-t', type=str, default='ckpt',
+#                     help='checkpoint and logging directory')
+# parser.add_argument('--gin-config', '-c',
+#                         type=str,
+#                         default=None,
+#                         help="Config yaml file (will override args)")
+
+
+# FLAGS = parser.parse_args()
+# args = config_util.setup_train_conf(FLAGS)
+
+args = config_util.setup_train_conf()
 USE_KERNEL = not args.nokernel
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
@@ -46,13 +60,20 @@ assert args.lr_basis_final <= args.lr_basis, "lr_basis must be >= lr_basis_final
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
-reso_list = json.loads(args.reso)
+# reso_list = json.loads(args.reso)
+reso_list = [ast.literal_eval(args.reso[i]) for i in range(len(args.reso))]
 reso_id = 0
 
-with open(path.join(args.train_dir, 'args.json'), 'w') as f:
-    json.dump(args.__dict__, f, indent=2)
-    # Changed name to prevent errors
-    shutil.copyfile(__file__, path.join(args.train_dir, 'opt_frozen.py'))
+# with open(path.join(args.train_dir, 'args.json'), 'w') as f:
+#     json.dump(args.__dict__, f, indent=2)
+    # # Changed name to prevent errors
+    # shutil.copyfile(__file__, path.join(args.train_dir, 'opt_frozen.py'))
+
+with open(path.join(args.train_dir, 'args.yaml'), 'w') as file:
+    for arg in sorted(vars(args)):
+        attr = getattr(args, arg)
+        file.write('{} = {}\n'.format(arg, attr))
+shutil.copyfile(args.config, path.join(args.train_dir, 'config.yaml'))
 
 torch.manual_seed(20200823)
 np.random.seed(20200823)

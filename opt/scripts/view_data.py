@@ -14,7 +14,7 @@ sys.path.append(path.join(DIR_PATH, ".."))
 import warnings
 import numpy as np
 import math
-from argparse import ArgumentParser
+from configargparse import ArgumentParser
 from nerfvis import Scene  # pip install nerfvis
 from scipy.spatial.transform import Rotation
 

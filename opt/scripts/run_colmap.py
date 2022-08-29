@@ -9,7 +9,7 @@ import cv2
 import moviepy
 import moviepy.editor
 import numpy
-import argparse
+import configargparse
 import os
 import random
 import shutil
@@ -377,7 +377,7 @@ def preprocess(vid_root, args):
 if __name__ == '__main__':
     # method expects a folder of videos, each one has an image sequence in "frames"
 
-    parser = argparse.ArgumentParser(description='Run COLMAP baseline')
+    parser = configargparse.ArgumentParser(description='Run COLMAP baseline')
     parser.add_argument(
         'vids', type=str, nargs='+', help='path to root with frames folder')
     parser.add_argument('--colmap-root', type=str, default='/home/sxyu/builds/colmap',

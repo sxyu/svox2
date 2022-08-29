@@ -11,10 +11,10 @@ from os import path
 from glob import glob
 import imageio
 import math
-import argparse
+import configargparse
 import torch
 
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument('render_dir', type=str)
 parser.add_argument('--crop', type=float, default=1.0, help='center crop')
 config_util.define_common_args(parser)

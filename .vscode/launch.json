@@ -73,7 +73,20 @@
             "args": [
                 "-t", "ckpt/sdf_debug",
                 "../data/nerf_synthetic/lego",
-                "-c", "configs/sdf_syn.json"
+                "-c", "configs/sdf_syn.yaml"
+            ]
+        },
+        {
+            "name": "render sdf py",
+            "type": "python",
+            "request": "launch",
+            "program": "render_imgs_circle.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "/home/tw554/plenoxels/opt",
+            "args": [
+                "ckpt/sdf_lego_sphere_8",
+                "../data/nerf_synthetic/lego"
             ]
         },
         {

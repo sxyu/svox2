@@ -5,7 +5,7 @@ import torch
 import svox2
 import svox2.utils
 import math
-import argparse
+import configargparse
 import numpy as np
 import os
 from os import path
@@ -16,7 +16,7 @@ from util import config_util
 import imageio
 import cv2
 from tqdm import tqdm
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
 
 config_util.define_common_args(parser)
@@ -28,7 +28,7 @@ parser.add_argument('--traj_type',
                     help="Render a spiral (doubles length, using 2 elevations), or just a cirle")
 parser.add_argument('--fps',
                     type=int,
-                    default=30,
+                    default=2,
                     help="FPS of video")
 parser.add_argument(
                 "--width", "-W", type=float, default=None, help="Rendering image width (only if not --traj)"
@@ -37,7 +37,7 @@ parser.add_argument(
                     "--height", "-H", type=float, default=None, help="Rendering image height (only if not --traj)"
                             )
 parser.add_argument(
-	"--num_views", "-N", type=int, default=600,
+	"--num_views", "-N", type=int, default=10,
     help="Number of frames to render"
 )
 
@@ -45,7 +45,7 @@ parser.add_argument(
 parser.add_argument(
     "--offset", type=str, default="0,0,0", help="Center point to rotate around (only if not --traj)"
 )
-parser.add_argument("--radius", type=float, default=0.85, help="Radius of orbit (only if not --traj)")
+parser.add_argument("--radius", type=float, default=2.0, help="Radius of orbit (only if not --traj)")
 parser.add_argument(
     "--elevation",
     type=float,
@@ -95,7 +95,9 @@ parser.add_argument('--blackbg',
                     help="Force a black BG (behind BG model) color; useful for debugging 'clouds'")
 
 args = parser.parse_args()
-config_util.maybe_merge_config_file(args, allow_invalid=True)
+USE_KERNEL = not args.nokernel
+USE_KERNEL = False
+# config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 
 
@@ -163,7 +165,8 @@ if args.crop != 1.0:
 if args.vert_shift != 0.0:
     render_out_path += f'_vshift{args.vert_shift}'
 
-grid = svox2.SparseGrid.load(args.ckpt, device=device)
+grid = svox2.SparseGrid.load(args.ckpt, device=device, backend=args.renderer_backend)
+grid.backend = args.renderer_backend
 print(grid.center, grid.radius)
 
 # DEBUG
@@ -231,7 +234,7 @@ with torch.no_grad():
                            w, h,
                            ndc_coeffs=(-1.0, -1.0))
         torch.cuda.synchronize()
-        im = grid.volume_render_image(cam, use_kernel=True)
+        im = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
         torch.cuda.synchronize()
         im.clamp_(0.0, 1.0)
 

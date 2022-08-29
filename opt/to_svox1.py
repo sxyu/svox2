@@ -1,12 +1,12 @@
 import svox2
 import svox
 import math
-import argparse
+import configargparse
 from os import path
 from tqdm import tqdm
 import torch
 
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
 args = parser.parse_args()
 

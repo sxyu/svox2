@@ -1,14 +1,14 @@
 import torch
-import argparse
+import configargparse
 from util.dataset import datasets
 import json
 
 
-def define_common_args(parser : argparse.ArgumentParser):
+def define_common_args(parser : configargparse.ArgumentParser):
     parser.add_argument('data_dir', type=str)
 
-    parser.add_argument('--config', '-c',
-                         type=str,
+    parser.add_argument('--config', '-c', 
+                         is_config_file=True,
                          default=None,
                          help="Config yaml file (will override args)")
 
@@ -80,7 +80,7 @@ def define_common_args(parser : argparse.ArgumentParser):
                          help="Brightness of the infinite background")
     group.add_argument('--renderer_backend', '-B',
                          choices=['cuvol', 'svox1', 'nvol', 'sdf'],
-                         default='cuvol',
+                         default='sdf',
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',
                          type=float,
@@ -109,6 +109,9 @@ def define_common_args(parser : argparse.ArgumentParser):
                          default=False,
                          help="Last sample has +1e9 density (used for LLFF)")
 
+    group.add_argument('--nokernel', action='store_true', default=False,
+                        help='do not use cuda kernel to speed up training')
+
 
 def build_data_options(args):
     """
@@ -133,6 +136,7 @@ def maybe_merge_config_file(args, allow_invalid=False):
     """
     Load json config file if specified and merge the arguments
     """
+    raise NotImplementedError('No Longer Used!')
     if args.config is not None:
         with open(args.config, "r") as config_file:
             configs = json.load(config_file)
@@ -157,27 +161,29 @@ def setup_render_opts(opt, args):
     opt.use_spheric_clip = args.use_spheric_clip
 
 
-def setup_conf():
-    parser = argparse.ArgumentParser()
-    define_common_args(parser)
+def setup_train_conf():
+    # gin_configs = FLAGS.gin_configs
 
+    # print('*** Loading Gin configs from: %s', str(gin_configs))
+    parser = configargparse.ArgumentParser()
+    define_common_args(parser)
 
     group = parser.add_argument_group("general")
     group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                         help='checkpoint and logging directory')
 
     group.add_argument('--reso',
-                            type=str,
-                            default=
-                            "[[256, 256, 256], [512, 512, 512]]",
+                            # type=str,
+                            nargs="+",
+                            default=[[256, 256, 256], [512, 512, 512]],
                         help='List of grid resolution (will be evaled as json);'
                                 'resamples to the next one every upsamp_every iters, then ' +
                                 'stays at the last one; ' +
                                 'should be a list where each item is a list of 3 ints or an int')
-    group.add_argument('--upsamp_every', type=int, default=
+    group.add_argument('--upsamp_every', type=lambda x: int(float(x)), default=
                         3 * 12800,
                         help='upsample the grid every x iters')
-    group.add_argument('--init_iters', type=int, default=
+    group.add_argument('--init_iters', type=lambda x: int(float(x)), default=
                         0,
                         help='do not upsample for first x iters')
     group.add_argument('--upsample_density_add', type=float, default=
@@ -203,8 +209,8 @@ def setup_conf():
 
 
     group = parser.add_argument_group("optimization")
-    group.add_argument('--n_iters', type=int, default=10 * 12800, help='total number of iters to optimize for')
-    group.add_argument('--batch_size', type=int, default=
+    group.add_argument('--n_iters', type=lambda x: int(float(x)), default=10 * 12800, help='total number of iters to optimize for')
+    group.add_argument('--batch_size', type=lambda x: int(float(x)), default=
                         5000,
                         #100000,
                         #  2000,
@@ -215,8 +221,8 @@ def setup_conf():
     group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
     group.add_argument('--lr_sigma', type=float, default=3e1, help='SGD/rmsprop lr for sigma')
     group.add_argument('--lr_sigma_final', type=float, default=5e-2)
-    group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-    group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
+    group.add_argument('--lr_sigma_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_sigma_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
@@ -224,8 +230,8 @@ def setup_conf():
     group.add_argument('--sdf_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
     group.add_argument('--lr_sdf', type=float, default=3e1, help='SGD/rmsprop lr for sdf')
     group.add_argument('--lr_sdf_final', type=float, default=5e-2)
-    group.add_argument('--lr_sdf_decay_steps', type=int, default=250000)
-    group.add_argument('--lr_sdf_delay_steps', type=int, default=15000,
+    group.add_argument('--lr_sdf_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_sdf_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_sdf_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
@@ -238,11 +244,11 @@ def setup_conf():
                         default=
                         5e-6
                         )
-    group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
-    group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
+    group.add_argument('--lr_sh_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_sh_delay_steps', type=lambda x: int(float(x)), default=0, help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 
-    group.add_argument('--lr_fg_begin_step', type=int, default=0, help="Foreground begins training at given step number")
+    group.add_argument('--lr_fg_begin_step', type=lambda x: int(float(x)), default=0, help="Foreground begins training at given step number")
 
     # BG LRs
     group.add_argument('--bg_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Background optimizer")
@@ -250,16 +256,16 @@ def setup_conf():
                         help='SGD/rmsprop lr for background')
     group.add_argument('--lr_sigma_bg_final', type=float, default=3e-3,
                         help='SGD/rmsprop lr for background')
-    group.add_argument('--lr_sigma_bg_decay_steps', type=int, default=250000)
-    group.add_argument('--lr_sigma_bg_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
+    group.add_argument('--lr_sigma_bg_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_sigma_bg_delay_steps', type=lambda x: int(float(x)), default=0, help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_sigma_bg_delay_mult', type=float, default=1e-2)
 
     group.add_argument('--lr_color_bg', type=float, default=1e-1,
                         help='SGD/rmsprop lr for background')
     group.add_argument('--lr_color_bg_final', type=float, default=5e-6,#1e-4,
                         help='SGD/rmsprop lr for background')
-    group.add_argument('--lr_color_bg_decay_steps', type=int, default=250000)
-    group.add_argument('--lr_color_bg_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
+    group.add_argument('--lr_color_bg_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_color_bg_delay_steps', type=lambda x: int(float(x)), default=0, help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_color_bg_delay_mult', type=float, default=1e-2)
     # END BG LRs
 
@@ -271,20 +277,20 @@ def setup_conf():
                         default=
                         1e-6
                         )
-    group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
-    group.add_argument('--lr_basis_delay_steps', type=int, default=0,#15000,
+    group.add_argument('--lr_basis_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_basis_delay_steps', type=lambda x: int(float(x)), default=0,#15000,
                     help="Reverse cosine steps (0 means disable)")
-    group.add_argument('--lr_basis_begin_step', type=int, default=0)#4 * 12800)
+    group.add_argument('--lr_basis_begin_step', type=lambda x: int(float(x)), default=0)#4 * 12800)
     group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
 
     group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
-    group.add_argument('--print_every', type=int, default=20, help='print every iterations')
-    group.add_argument('--save_every', type=int, default=5,
+    group.add_argument('--print_every', type=lambda x: int(float(x)), default=20, help='print every iterations')
+    group.add_argument('--save_every', type=lambda x: int(float(x)), default=5,
                     help='save every x epochs')
-    group.add_argument('--eval_every', type=int, default=1,
+    group.add_argument('--eval_every', type=lambda x: int(float(x)), default=1,
                     help='evaluate every x epochs')
-    group.add_argument('--eval_every_iter', type=int, default=100,
+    group.add_argument('--eval_every_iter', type=lambda x: int(float(x)), default=100,
                     help='evaluate every x iterations')
 
     group.add_argument('--init_sigma', type=float,
@@ -316,7 +322,7 @@ def setup_conf():
     group.add_argument('--background_density_thresh', type=float,
                         default=1.0+1e-9,
                     help='Background sigma threshold for sparsification')
-    group.add_argument('--max_grid_elements', type=int,
+    group.add_argument('--max_grid_elements', type=lambda x: int(float(x)),
                         default=44_000_000,
                     help='Max items to store after upsampling '
                             '(the number here is given for 22GB memory)')
@@ -377,15 +383,12 @@ def setup_conf():
 
     group.add_argument('--lr_decay', action='store_true', default=True)
 
-    group.add_argument('--n_train', type=int, default=None, help='Number of training images. Defaults to use all avaiable.')
+    group.add_argument('--n_train', type=lambda x: int(float(x)), default=None, help='Number of training images. Defaults to use all avaiable.')
 
-    group.add_argument('--n_eval', type=int, default=1, help='Number of images to be evaluated and logged')
+    group.add_argument('--n_eval', type=lambda x: int(float(x)), default=1, help='Number of images to be evaluated and logged')
 
     group.add_argument('--nosphereinit', action='store_true', default=False,
                         help='do not start with sphere bounds (please do not use for 360)')
-
-    group.add_argument('--nokernel', action='store_true', default=False,
-                        help='do not use cuda kernel to speed up training')
 
     group.add_argument('--load_ckpt', action='store_true', default=False,
                         help='resume training from ckpt in the given path if exists')
@@ -393,6 +396,6 @@ def setup_conf():
     group.add_argument('--sdf_init', type=str, default=None)
 
     args = parser.parse_args()
-    maybe_merge_config_file(args)
+    # maybe_merge_config_file(args)
 
     return args

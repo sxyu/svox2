@@ -53,7 +53,7 @@ import os.path as osp
 import numpy as np
 import struct
 import collections
-import argparse
+import configargparse
 import shutil
 
 CameraModel = collections.namedtuple(
@@ -233,7 +233,7 @@ def read_colmap_sparse(sparse_path):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = configargparse.ArgumentParser()
     parser.add_argument(
         "sparse_dir",
         type=str,

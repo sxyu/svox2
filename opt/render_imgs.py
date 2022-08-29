@@ -5,7 +5,7 @@ import torch
 import svox2
 import svox2.utils
 import math
-import argparse
+import configargparse
 import numpy as np
 import os
 from os import path
@@ -16,7 +16,7 @@ from util import config_util
 import imageio
 import cv2
 from tqdm import tqdm
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument('ckpt', type=str)
 
 config_util.define_common_args(parser)
@@ -76,7 +76,7 @@ parser.add_argument('--ray_len',
                     help="Render the ray lengths")
 
 args = parser.parse_args()
-config_util.maybe_merge_config_file(args, allow_invalid=True)
+# config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 
 if args.timing:

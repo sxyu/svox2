@@ -7,7 +7,7 @@ import random
 from multiprocessing import Process, Queue
 import os
 from os import path, listdir
-import argparse
+import configargparse
 import json
 import subprocess
 import sys
@@ -18,7 +18,7 @@ from datetime import datetime
 import numpy as np
 from glob import glob
 
-parser = argparse.ArgumentParser()
+parser = configargparse.ArgumentParser()
 parser.add_argument("task_json", type=str)
 parser.add_argument("--gpus", "-g", type=str, required=True,
                             help="space delimited GPU id list (global id in nvidia-smi, "
