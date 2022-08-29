@@ -100,7 +100,8 @@ ckpt_npz = path.join(args.train_dir, 'ckpt.npz')
 
 if path.isfile(ckpt_npz) and args.load_ckpt:
     print(f'Resume from ckpt at {ckpt_npz}!')
-    grid = svox2.SparseGrid.load(ckpt_npz, device=device, backend=args.renderer_backend)
+    grid = svox2.SparseGrid.load(ckpt_npz, device=device)
+    assert args.renderer_backend == grid.backend, "Loaded ckpt incompatible with given configs"
     gstep_id_base = grid.step_id
 else:
     grid = svox2.SparseGrid(reso=reso_list[reso_id],
@@ -137,6 +138,7 @@ else:
 
     gstep_id_base = 0
 
+grid.save('./ckpt.npz')
 optim_basis_mlp = None
 
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE and not (path.isfile(ckpt_npz) and args.load_ckpt):
