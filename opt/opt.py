@@ -353,7 +353,7 @@ while True:
 
     def train_step():
         print('Train step')
-        pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
+        pbar = tqdm(enumerate(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
@@ -516,6 +516,10 @@ while True:
                 if not args.tune_nosave:
                     grid.save(ckpt_path, step_id=gstep_id)
                 exit(0)
+            
+            if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode:
+                print('Saving', ckpt_path)
+                grid.save(ckpt_path)
 
     train_step()
     gc.collect()

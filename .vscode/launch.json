@@ -79,7 +79,7 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "-t", "ckpt/sdf_debug",
+                "-t", "ckpt/sdf_lego_sphere_64_tanh_2",
                 "../data/nerf_synthetic/lego",
                 "-c", "configs/sdf_syn.yaml"
             ]
@@ -93,7 +93,7 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "-t", "ckpt/plane_debug",
+                "-t", "ckpt/plane_iso_debug",
                 "../data/nerf_synthetic/lego",
                 "-c", "configs/plane_syn.yaml"
             ]

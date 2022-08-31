@@ -165,7 +165,7 @@ if args.crop != 1.0:
 if args.vert_shift != 0.0:
     render_out_path += f'_vshift{args.vert_shift}'
 
-grid = svox2.SparseGrid.load(args.ckpt, device=device, backend=args.renderer_backend)
+grid = svox2.SparseGrid.load(args.ckpt, device=device)
 args.renderer_backend = grid.backend
 print(grid.center, grid.radius)
 

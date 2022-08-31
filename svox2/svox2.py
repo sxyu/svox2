@@ -616,6 +616,7 @@ class SparseGrid(nn.Module):
                 coords = torch.stack(coords).view(3, -1).T
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
                 plane_data[links.long(), 3] = -torch.sum(coords.to(device) * plane_data[links.long(), :3], axis=-1)
+                # plane_data[links.long(), 3] = -torch.sum((coords.to(device) + 0.5) * plane_data[links.long(), :3], axis=-1)
 
 
             else:
@@ -1302,6 +1303,15 @@ class SparseGrid(nn.Module):
         # sdf110 = sdf110 / avg_norm
         # sdf111 = sdf111 / avg_norm
 
+        sdf000 = torch.tanh(sdf000)
+        sdf001 = torch.tanh(sdf001)
+        sdf010 = torch.tanh(sdf010)
+        sdf011 = torch.tanh(sdf011)
+        sdf100 = torch.tanh(sdf100)
+        sdf101 = torch.tanh(sdf101)
+        sdf110 = torch.tanh(sdf110)
+        sdf111 = torch.tanh(sdf111)
+
         ################## Simplifying Trlinear Interpolation Function ########################
         def trilinear_simplify():
         ################## Finishing Trlinear Interpolation Function ########################
@@ -1439,11 +1449,6 @@ class SparseGrid(nn.Module):
                 ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
                 ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
                 ts[ids, 1] = (-_c[D_mask] - sqrt_D) / (2.0 * _b[D_mask])
-
-                # D_mask = D == 0 # one unique roots
-                # sqrt_D = torch.sqrt(D[D_mask])
-                # ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
-                # ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
 
             # otherwise, has no real roots
 

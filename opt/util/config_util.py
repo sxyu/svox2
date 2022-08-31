@@ -286,8 +286,8 @@ def setup_train_conf():
     group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
     group.add_argument('--print_every', type=lambda x: int(float(x)), default=20, help='print every iterations')
-    group.add_argument('--save_every', type=lambda x: int(float(x)), default=5,
-                    help='save every x epochs')
+    group.add_argument('--save_every', type=lambda x: int(float(x)), default=10000,
+                    help='save every x iterations')
     group.add_argument('--eval_every', type=lambda x: int(float(x)), default=1,
                     help='evaluate every x epochs')
     group.add_argument('--eval_every_iter', type=lambda x: int(float(x)), default=100,
