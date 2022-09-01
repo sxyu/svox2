@@ -1,7 +1,7 @@
 nokernel = True
 renderer_backend = "plane"
 geometry_init = "random"
-reso = [[64,64,64]]
+reso = [[128,128,128]]
 init_sigma = 0.01
 nosphereinit = True
 
@@ -16,7 +16,7 @@ lambda_tv_sh = 0
 
 n_iters = 100000
 print_every = 1
-eval_every_iter = 10000
+eval_every_iter = 5000
 n_eval = 1
 load_ckpt = False
 log_depth_map = True

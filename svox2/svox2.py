@@ -1699,10 +1699,8 @@ class SparseGrid(nn.Module):
         # Add background color
         if self.opt.background_brightness:
             out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
-            # out_rgb += (
-            #     torch.exp(log_light_intensity).unsqueeze(-1)
-            #     * self.opt.background_brightness
-            # )
+
+        out = {'rgb': out_rgb}
         if return_depth:
             # render depth -- find out t from valid samples
             _ts = ((samples[:,0] - origins[voxel_mask][:,0]) / dirs[voxel_mask][:,0])
@@ -1713,9 +1711,9 @@ class SparseGrid(nn.Module):
             B_ts = B_ts.reshape(B, MV)
 
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
+            out['depth'] = out_depth
 
-            return out_rgb, out_depth
-        return out_rgb
+        return out
 
 
     def _plane_render_gradcheck_lerp(
@@ -1730,6 +1728,7 @@ class SparseGrid(nn.Module):
         numerical_solution: bool = False, # no gradient flow!
         dtype = torch.double,
         allow_outside: bool = False, # allow intersections outside of voxel
+        return_outside_loss: bool = False
     ):
         """
         gradcheck version for sdf rendering
@@ -1755,47 +1754,6 @@ class SparseGrid(nn.Module):
 
         gsz = self._grid_size().to(dtype)
         gsz_cu = gsz.to(device=dirs.device).to(dtype)
-
-        # find near/far per ray
-        # t1 = (-0.5 - origins) * invdirs
-        # t2 = (gsz_cu - 0.5 - origins) * invdirs
-
-        # t = torch.min(t1, t2)
-        # t[dirs == 0] = -1e9
-        # t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
-
-        # tmax = torch.max(t1, t2)
-        # tmax[dirs == 0] = 1e9
-        # tmax = torch.min(tmax, dim=-1).values
-
-        # ts_bd_1 = (gsz_cu*0 - origins) / dirs
-        # ts_bd_2 = (gsz_cu - origins) / dirs
-
-        # TODO: implement more efficient way to find a set of voxels intersect with given rays
-
-        # # method1: find intersections between rays and all voxel surfaces, then round them
-        # ray_ends = origins + tmax[:, None] * dirs
-        # ray_starts = origins + t[:, None] * dirs
-
-        # # maximum number of samples, could just use sum(reso)
-        # ray_ends = ray_ends.clamp(0, self.links.shape[0]-1)
-        # ray_starts = ray_starts.clamp(0, self.links.shape[0]-1)
-        # sample_num = torch.sum(
-        #     torch.abs(ray_ends.long() - ray_starts.long())
-        #     , axis=-1).max()
-
-        # voxels = torch.ones([B, sample_num, 0]) * -1.
-        # # ignore intersection at voxel edges for now -- it can create repetitive samples!
-        # # ts where ray intersect with x-plane
-        # ts_sect_x = torch.stack([
-        #     torch.arange(
-        #         ray_starts[i,0].long(), ray_ends[i,0].long(), 
-        #         -1 if ray_starts[i,0].long() > ray_ends[i,0].long() else 1
-        #         ) for i in range(B)]) # too slow!
-        
-
-        # method2: adaptive step size for each ray
-
 
         # debug helpers:
 
@@ -1923,20 +1881,6 @@ class SparseGrid(nn.Module):
         alpha110, rgb110, plane110 = self._fetch_links(links110)
         alpha111, rgb111, plane111 = self._fetch_links(links111)
 
-
-        # avg_norm = torch.mean(torch.stack(list(map(lambda s: torch.abs(s), 
-        #     [sdf000, sdf001, sdf010, sdf011, sdf100, sdf101, sdf110, sdf111]))), axis=0)
-
-        # sdf000 = sdf000 / avg_norm
-        # sdf001 = sdf001 / avg_norm
-        # sdf010 = sdf010 / avg_norm
-        # sdf011 = sdf011 / avg_norm
-        # sdf100 = sdf100 / avg_norm
-        # sdf101 = sdf101 / avg_norm
-        # sdf110 = sdf110 / avg_norm
-        # sdf111 = sdf111 / avg_norm
-
-
         # plane: ax + by + cz + d = 0
         a, b, c, d = torch.mean(torch.stack(
             [plane000, plane001, plane010, plane011, plane100, plane101, plane110, plane111]
@@ -1958,9 +1902,9 @@ class SparseGrid(nn.Module):
         ts = ts[..., None]
         samples = origins[voxel_mask, :] + ts * dirs[voxel_mask, :] # B, three intersections, xyz
 
-
         if allow_outside:
-            invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
+            # invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
+            invalid_sample_mask = (torch.isnan(samples)).any(axis=-1)
         else:
             # remove all samples outside of the voxel
             invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
@@ -2022,14 +1966,6 @@ class SparseGrid(nn.Module):
         
         out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
 
-        # weight = torch.exp(log_light_intensity[good_indices]) * alpha[:,0]
-        # [B', 3, n_sh_coeffs]
-        # rgb = weight[:, None] * rgb[:, :3]
-
-        # assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
-
-        # out_rgb[good_indices] += rgb
-        # log_light_intensity[good_indices] += log_att
 
 
         if self.use_background:
@@ -2118,10 +2054,22 @@ class SparseGrid(nn.Module):
         # Add background color
         if self.opt.background_brightness:
             out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
-            # out_rgb += (
-            #     torch.exp(log_light_intensity).unsqueeze(-1)
-            #     * self.opt.background_brightness
-            # )
+
+        out = {'rgb': out_rgb}
+
+        if return_outside_loss and allow_outside:
+            # calculate outside loss to encourage the intersection to stay within the voxel
+            # https://math.stackexchange.com/questions/2133217/minimal-distance-to-a-cube-in-2d-and-3d-from-a-point-lying-outside
+            
+            # shift voxel to have corners at -.5, +.5
+            shift_samples = samples - l -.5
+            dists = torch.zeros_like(samples[:,0])
+            outside_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) & (~torch.isnan(samples).any(axis=-1))
+            dists[outside_mask] = torch.sqrt(torch.sum(torch.clamp_min(torch.abs(shift_samples[outside_mask]) - .5, 0)**2, axis=-1))
+            outside_loss = torch.sum(dists * alpha[:,0]) / torch.count_nonzero(dists)
+
+            out['outside_loss'] = outside_loss
+
         if return_depth:
             # render depth -- find out t from valid samples
             _ts = ((samples[:,0] - origins[voxel_mask][:,0]) / dirs[voxel_mask][:,0])
@@ -2133,8 +2081,9 @@ class SparseGrid(nn.Module):
 
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
 
-            return out_rgb, out_depth
-        return out_rgb
+            out['depth'] = out_depth
+
+        return out
 
 
     def _volume_render_gradcheck_nvol_lerp(self, rays: Rays, return_raylen: bool=False):
@@ -2294,7 +2243,7 @@ class SparseGrid(nn.Module):
 
     def volume_render(
         self, rays: Rays, use_kernel: bool = True, randomize: bool = False,
-        return_raylen: bool=False, 
+        return_raylen: bool=False, **kwargs
         # sdf_return_depth: bool=False
     ):
         """
@@ -2311,7 +2260,7 @@ class SparseGrid(nn.Module):
             assert rays.is_cuda
             basis_data = self._eval_basis_mlp(rays.dirs) if self.basis_type == BASIS_TYPE_MLP \
                                                          else None
-            return _VolumeRenderFunction.apply(
+            return {'rgb':  _VolumeRenderFunction.apply(
                 self.density_data,
                 self.sh_data,
                 basis_data,
@@ -2320,17 +2269,17 @@ class SparseGrid(nn.Module):
                 rays._to_cpp(),
                 self.opt._to_cpp(randomize=randomize),
                 self.opt.backend,
-            )
+            )}
         else:
             warn("Using slow volume rendering, should only be used for debugging")
             if self.opt.backend == 'nvol':
-                return self._volume_render_gradcheck_nvol_lerp(rays, return_raylen=return_raylen)
+                return {'rgb': self._volume_render_gradcheck_nvol_lerp(rays, return_raylen=return_raylen)}
             elif self.opt.backend == 'sdf':
-                return self._sdf_render_gradcheck_lerp(rays, return_raylen=return_raylen)
+                return self._sdf_render_gradcheck_lerp(rays, return_raylen=return_raylen, **kwargs)
             elif self.opt.backend == 'plane':
-                return self._plane_render_gradcheck_lerp(rays, return_raylen=return_raylen)
+                return self._plane_render_gradcheck_lerp(rays, return_raylen=return_raylen, **kwargs)
             else:
-                return self._volume_render_gradcheck_lerp(rays, return_raylen=return_raylen)
+                return {'rgb': self._volume_render_gradcheck_lerp(rays, return_raylen=return_raylen)}
 
 
     def volume_render_fused(
@@ -2442,7 +2391,7 @@ class SparseGrid(nn.Module):
                 rgb_out_part = self.volume_render(rays[batch_start:batch_start+batch_size],
                                                   use_kernel=use_kernel,
                                                   randomize=randomize,
-                                                  return_raylen=return_raylen)
+                                                  return_raylen=return_raylen)['rgb']
                 all_rgb_out.append(rgb_out_part)
 
             all_rgb_out = torch.cat(all_rgb_out, dim=0)
@@ -2462,10 +2411,10 @@ class SparseGrid(nn.Module):
         """
         if self.backend == 'sdf':
             out = self._sdf_render_gradcheck_lerp(rays, return_depth=True)
-            return out[1]
+            return out['depth']
         elif self.backend == 'plane':
-            out = self._plane_render_gradcheck_lerp(rays, return_depth=True)
-            return out[1]
+            out = self._plane_render_gradcheck_lerp(rays, return_depth=True, return_outside_loss=False)
+            return out['depth']
         if sigma_thresh is None:
             return _C.volume_render_expected_term(
                     self._to_cpp(),

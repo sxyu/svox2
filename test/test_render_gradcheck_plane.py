@@ -76,8 +76,8 @@ rgb_gt = torch.zeros((origins.size(0), 3), device=device, dtype=dtype)
 #  sampt = grid.volume_render(grid, origins, dirs, use_kernel=False)
 
 with Timing("ours"):
-    samps = grid.volume_render(rays, use_kernel=False)
-s = F.mse_loss(samps, rgb_gt)
+    samps, outside_loss = grid.volume_render(rays, use_kernel=False, allow_outside=True, return_outside_loss=True)
+s = F.mse_loss(samps, rgb_gt) + outside_loss
 
 print(s)
 print('bkwd..')
@@ -98,7 +98,8 @@ if grid.use_background:
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
-        sampt = grid.volume_render(rays, use_kernel=False)
+        sampt, outside_loss = grid.volume_render(rays, use_kernel=False, allow_outside=True, return_outside_loss=True)
+    # s = F.mse_loss(sampt, rgb_gt) + outside_loss
     s = F.mse_loss(sampt, rgb_gt)
     with Timing("torch_backward"):
         s.backward()

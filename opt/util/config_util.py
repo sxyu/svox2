@@ -335,6 +335,7 @@ def setup_train_conf():
 
 
     group = parser.add_argument_group("losses")
+    group.add_argument('--lambda_outside_loss', type=float, default=1e-3)
     # Foreground TV
     group.add_argument('--lambda_tv', type=float, default=1e-5)
     group.add_argument('--tv_sparsity', type=float, default=0.01)

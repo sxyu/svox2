@@ -1,7 +1,7 @@
 #/bin/bash
 
 
-EXP_NAME="plane_lego_t64_h"
+EXP_NAME="plane_lego_128_th"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/plane_syn.yaml"
 

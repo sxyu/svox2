@@ -386,25 +386,27 @@ while True:
             #  with Timing("volrend_fused"):
             if not USE_KERNEL:
                 if args.renderer_backend == 'sdf':
-                    rgb_pred = grid._sdf_render_gradcheck_lerp(rays, rgb_gt,
+                    out = grid._sdf_render_gradcheck_lerp(rays, rgb_gt,
                             beta_loss=args.lambda_beta,
                             sparsity_loss=args.lambda_sparsity,
                             randomize=args.enable_random)
                 elif args.renderer_backend == 'plane':
-                    rgb_pred = grid._plane_render_gradcheck_lerp(rays, rgb_gt,
+                    out = grid._plane_render_gradcheck_lerp(rays, rgb_gt,
                             beta_loss=args.lambda_beta,
                             sparsity_loss=args.lambda_sparsity,
                             randomize=args.enable_random)
                 else:
                     raise NotImplementedError
             else:
-                rgb_pred = grid.volume_render_fused(rays, rgb_gt,
+                out = grid.volume_render_fused(rays, rgb_gt,
                         beta_loss=args.lambda_beta,
                         sparsity_loss=args.lambda_sparsity,
                         randomize=args.enable_random)
 
             #  with Timing("loss_comp"):
-            mse = F.mse_loss(rgb_gt, rgb_pred)
+            mse = F.mse_loss(rgb_gt, out['rgb'])
+            loss = mse
+
 
             # Stats
             mse_num : float = mse.detach().item()
@@ -412,6 +414,10 @@ while True:
             stats['mse'] += mse_num
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
+
+            if 'outside_loss' in out:
+                loss += args.lambda_outside_loss * out['ouside_loss']
+                stats['ouside_loss'] = (args.lambda_outside_loss * out['ouside_loss']).detach().item()
 
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
