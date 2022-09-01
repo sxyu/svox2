@@ -99,11 +99,13 @@ global_start_time = datetime.now()
 ckpt_npz = path.join(args.train_dir, 'ckpt.npz')
 
 if path.isfile(ckpt_npz) and args.load_ckpt:
-    print(f'Resume from ckpt at {ckpt_npz}!')
+    print('#####################################################')
+    print(f'Resume from ckpt at {ckpt_npz}')
+    print('#####################################################')
     grid = svox2.SparseGrid.load(ckpt_npz, device=device)
     assert args.renderer_backend == grid.backend, "Loaded ckpt incompatible with given configs"
     gstep_id_base = grid.step_id
-else:
+else: 
     grid = svox2.SparseGrid(reso=reso_list[reso_id],
                             center=dset.scene_center,
                             radius=dset.scene_radius,
@@ -122,7 +124,11 @@ else:
 
     # DC -> gray; mind the SH scaling!
     grid.sh_data.data[:] = 0.0
-    grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
+    if args.renderer_backend in ['sdf', 'plane']:
+        grid.density_data.data[:] = -1e8 if args.lr_fg_begin_step > 0 else torch.logit(torch.tensor(args.init_sigma))
+    else:
+        grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
+
 
     if grid.use_background:
         grid.background_data.data[..., -1] = args.init_sigma_bg
@@ -400,9 +406,6 @@ while True:
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
-            if not USE_KERNEL:
-                mse.backward()
-
             # Stats
             mse_num : float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
@@ -489,6 +492,15 @@ while True:
             #  print('nz density', torch.count_nonzero(grid.sparse_grad_indexer).item(),
             #        ' sh', torch.count_nonzero(grid.sparse_sh_grad_indexer).item())
 
+            if not USE_KERNEL:
+                loss = mse
+
+                if grid.backend == 'plane':
+                    # TODO add outside loss to encourage the plane to stay within its voxel
+                    pass
+
+                loss.backward()
+
             # Manual SGD/rmsprop step
             if gstep_id >= args.lr_fg_begin_step:
                 grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
@@ -517,7 +529,7 @@ while True:
                     grid.save(ckpt_path, step_id=gstep_id)
                 exit(0)
             
-            if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode:
+            if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode and gstep_id > 0:
                 print('Saving', ckpt_path)
                 grid.save(ckpt_path)
 

@@ -374,7 +374,7 @@ class SparseGrid(nn.Module):
         background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
         backend: str = "svox", # svox -- plenoxel volume rendering, sdf -- ours
-        geometry_init: str = 'sphere' # methods used to init sdf data
+        geometry_init: str = None # methods used to init sdf data
     ):
         super().__init__()
         self.basis_type = basis_type
@@ -541,7 +541,7 @@ class SparseGrid(nn.Module):
             ) # note that it is overritten
 
             # geometry_init = None
-            if geometry_init == 'sphere':
+            if geometry_init == 'sphere' or geometry_init is None:
                 # method 1: initialize with distance to grid center, then reduce each vertices by the mean from the 8?
                 sdf_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
@@ -607,7 +607,7 @@ class SparseGrid(nn.Module):
                 torch.zeros(self.capacity, 1, dtype=torch.float32, device=device) * .1
             )
 
-            if geometry_init == 'random':
+            if geometry_init == 'random' or geometry_init is None:
                 plane_data = torch.rand(self.capacity, 4, dtype=torch.float32, device=device)
 
                 # modify d to initialize all vertices to have planes located exactly on them
@@ -1087,7 +1087,8 @@ class SparseGrid(nn.Module):
         return_raylen: bool = False,
         return_depth: bool = False,
         numerical_solution: bool = False, # no gradient flow!
-        dtype = torch.double 
+        dtype = torch.double,
+        allow_outside: bool = False, # allow intersections outside of voxel
     ):
         """
         gradcheck version for sdf rendering
@@ -1303,14 +1304,14 @@ class SparseGrid(nn.Module):
         # sdf110 = sdf110 / avg_norm
         # sdf111 = sdf111 / avg_norm
 
-        sdf000 = torch.tanh(sdf000)
-        sdf001 = torch.tanh(sdf001)
-        sdf010 = torch.tanh(sdf010)
-        sdf011 = torch.tanh(sdf011)
-        sdf100 = torch.tanh(sdf100)
-        sdf101 = torch.tanh(sdf101)
-        sdf110 = torch.tanh(sdf110)
-        sdf111 = torch.tanh(sdf111)
+        # sdf000 = torch.tanh(sdf000)
+        # sdf001 = torch.tanh(sdf001)
+        # sdf010 = torch.tanh(sdf010)
+        # sdf011 = torch.tanh(sdf011)
+        # sdf100 = torch.tanh(sdf100)
+        # sdf101 = torch.tanh(sdf101)
+        # sdf110 = torch.tanh(sdf110)
+        # sdf111 = torch.tanh(sdf111)
 
         ################## Simplifying Trlinear Interpolation Function ########################
         def trilinear_simplify():
@@ -1539,13 +1540,19 @@ class SparseGrid(nn.Module):
         samples = samples[torch.arange(samples.shape[0]), min_ids, :]
         # note that the samples could still contain invalid coords -- when ray does not intersect with any surface!
 
-        # remove all samples outside of the voxel
-        invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+        if allow_outside:
+            invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
+        else:
+            # remove all samples outside of the voxel
+            invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
         invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
         
         # TODO only interpolate for valid samples to save computation
         # interpolate opacity
         wa, wb = 1. - (samples - l), (samples - l)
+        if allow_outside:
+            torch.clamp_(wa, 0., 1.)
+            torch.clamp_(wb, 0., 1.)
         c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
         c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
         c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
@@ -1582,10 +1589,9 @@ class SparseGrid(nn.Module):
         )  # [VV, 3]
 
         # log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
-        # TODO check if clamp is needed
         B_alpha[voxel_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
 
-        assert not torch.isnan(B_alpha).any(), 'NaN detcted in log_att!'
+        assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
 
         B_rgb = B_rgb.reshape(B, MV, 3)
         B_alpha = B_alpha.reshape(B, MV)
@@ -1722,7 +1728,8 @@ class SparseGrid(nn.Module):
         return_raylen: bool = False,
         return_depth: bool = False,
         numerical_solution: bool = False, # no gradient flow!
-        dtype = torch.double 
+        dtype = torch.double,
+        allow_outside: bool = False, # allow intersections outside of voxel
     ):
         """
         gradcheck version for sdf rendering
@@ -1788,8 +1795,6 @@ class SparseGrid(nn.Module):
         
 
         # method2: adaptive step size for each ray
-
-
 
 
         # debug helpers:
@@ -1879,6 +1884,10 @@ class SparseGrid(nn.Module):
 
         # re-arrange voxels into a batch of samples
         VV = voxels_i.sum() # total number of valid voxels
+        if voxels_i.numel() == 0:
+            # TODO weird bug!
+            import pdb
+            pdb.set_trace()
         MV = voxels_i.max() # number of max voxels per ray
         origins = origins_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
         dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
@@ -1935,6 +1944,12 @@ class SparseGrid(nn.Module):
 
         # a, b, c, d = plane000.to(dtype).unbind(-1)
 
+        # thresholding to force the plane to stay within its voxel
+        # abs(torch.sum((l + 0.5) * torch.stack([a,b,c]).T, axis=-1) + d) <= sqrt(3 * (0.5 ** 2))
+        th = 0.3
+        xyz_term = torch.sum((l + 0.5) * torch.stack([a,b,c]).T, axis=-1)
+        d = torch.clamp(d, -th - xyz_term, th - xyz_term)
+
         ox, oy, oz = origins[voxel_mask].to(dtype).unbind(-1)
         vx, vy, vz = dirs[voxel_mask].to(dtype).unbind(-1)
 
@@ -1943,13 +1958,20 @@ class SparseGrid(nn.Module):
         ts = ts[..., None]
         samples = origins[voxel_mask, :] + ts * dirs[voxel_mask, :] # B, three intersections, xyz
 
-        # remove all samples outside of the voxel
-        invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+
+        if allow_outside:
+            invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
+        else:
+            # remove all samples outside of the voxel
+            invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
         invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
         
         # TODO only interpolate for valid samples to save computation
         # interpolate opacity
         wa, wb = 1. - (samples - l), (samples - l)
+        if allow_outside:
+            torch.clamp_(wa, 0., 1.)
+            torch.clamp_(wb, 0., 1.)
         c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
         c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
         c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
@@ -1986,10 +2008,9 @@ class SparseGrid(nn.Module):
         )  # [VV, 3]
 
         # log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
-        # TODO check if clamp is needed
         B_alpha[voxel_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
 
-        assert not torch.isnan(B_alpha).any(), 'NaN detcted in log_att!'
+        assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
 
         B_rgb = B_rgb.reshape(B, MV, 3)
         B_alpha = B_alpha.reshape(B, MV)
@@ -2270,6 +2291,7 @@ class SparseGrid(nn.Module):
             )
         return out_rgb
 
+
     def volume_render(
         self, rays: Rays, use_kernel: bool = True, randomize: bool = False,
         return_raylen: bool=False, 
@@ -2386,6 +2408,7 @@ class SparseGrid(nn.Module):
         self.sparse_sh_grad_indexer = self.sparse_grad_indexer.clone()
         return rgb_out
 
+
     def volume_render_image(
         self, camera: Camera, use_kernel: bool = True, randomize: bool = False,
         batch_size : int = 5000,
@@ -2424,6 +2447,7 @@ class SparseGrid(nn.Module):
 
             all_rgb_out = torch.cat(all_rgb_out, dim=0)
             return all_rgb_out.view(camera.height, camera.width, -1)
+
 
     def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None):
         """

@@ -1,9 +1,9 @@
 #/bin/bash
 
 
-EXP_NAME="plane_lego_random"
+EXP_NAME="plane_lego_t64_h"
 DATA_DIR="../data/nerf_synthetic/lego"
-CONFIG="./configs/sdf_syn.yaml"
+CONFIG="./configs/plane_syn.yaml"
 
 
 CKPT_DIR=ckpt/$EXP_NAME

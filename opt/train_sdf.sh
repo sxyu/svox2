@@ -13,7 +13,7 @@
 # DATA_DIR="../data/nerf_synthetic/materials"
 # CONFIG="./configs/syn.json"
 
-EXP_NAME="sdf_lego_sphere_64_tanh_2"
+EXP_NAME="sdf_lego_sphere_64_outside"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/sdf_syn.yaml"
 
