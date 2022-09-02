@@ -631,7 +631,7 @@ __global__ void render_ray_kernel(
     calc_sphfunc(grid, lane_id,
                  ray_id,
                  ray_spec[ray_blk_id].dir,
-                 sphfunc_val[ray_blk_id]);
+                 sphfunc_val[ray_blk_id]); // calculate spherial harmonics function
     ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     __syncwarp((1U << grid.sh_data_dim) - 1);
 

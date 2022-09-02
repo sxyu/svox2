@@ -1,8 +1,8 @@
 nokernel = True
 renderer_backend = "plane"
-geometry_init = "random"
-reso = [[128,128,128]]
-init_sigma = 0.01
+geometry_init = "sphere"
+reso = [[256,256,256]]
+init_sigma = 0.005
 nosphereinit = True
 
 upsamp_every = 1e10
@@ -14,8 +14,9 @@ lr_sh = 1e-2
 lambda_tv = 0
 lambda_tv_sh = 0
 
-n_iters = 100000
-print_every = 1
+n_iters = 20000
+print_every = 10
+save_every = 5000
 eval_every_iter = 5000
 n_eval = 1
 load_ckpt = False

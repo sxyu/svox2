@@ -1,12 +1,11 @@
 #/bin/bash
 
 
-EXP_NAME="plane_lego_128_th"
+EXP_NAME="plane_lego_256_th_sphere"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/plane_syn.yaml"
-
-
 CKPT_DIR=ckpt/$EXP_NAME
+
 mkdir -p $CKPT_DIR
 
 echo CKPT $CKPT_DIR

@@ -407,7 +407,6 @@ while True:
             mse = F.mse_loss(rgb_gt, out['rgb'])
             loss = mse
 
-
             # Stats
             mse_num : float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)

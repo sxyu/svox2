@@ -18,16 +18,17 @@ torch.random.manual_seed(2)
 device = 'cuda:0'
 dtype = torch.float32
 grid = svox2.SparseGrid(
-                     reso=8,
+                     reso=64,
                      center=[0.0, 0.0, 0.0],
                      radius=[1.0, 1.0, 1.0],
                      basis_dim=9,
                      use_z_order=True,
+                     use_sphere_bound=False,
                      device=device,
                      background_nlayers=0,
                      basis_type=svox2.BASIS_TYPE_SH,
                      backend="plane",
-                     geometry_init='random')
+                     geometry_init='sphere')
 grid.opt.backend = 'plane'
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
@@ -76,8 +77,9 @@ rgb_gt = torch.zeros((origins.size(0), 3), device=device, dtype=dtype)
 #  sampt = grid.volume_render(grid, origins, dirs, use_kernel=False)
 
 with Timing("ours"):
-    samps, outside_loss = grid.volume_render(rays, use_kernel=False, allow_outside=True, return_outside_loss=True)
-s = F.mse_loss(samps, rgb_gt) + outside_loss
+    out = grid.volume_render(rays, use_kernel=False, allow_outside=False, return_outside_loss=False)
+    samps = out['rgb']
+s = F.mse_loss(samps, rgb_gt)
 
 print(s)
 print('bkwd..')
@@ -98,7 +100,8 @@ if grid.use_background:
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
-        sampt, outside_loss = grid.volume_render(rays, use_kernel=False, allow_outside=True, return_outside_loss=True)
+        out = grid.volume_render(rays, use_kernel=False, allow_outside=True, return_outside_loss=True)
+        sampt = out['rgb']
     # s = F.mse_loss(sampt, rgb_gt) + outside_loss
     s = F.mse_loss(sampt, rgb_gt)
     with Timing("torch_backward"):

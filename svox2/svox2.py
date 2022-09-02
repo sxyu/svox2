@@ -608,16 +608,34 @@ class SparseGrid(nn.Module):
             )
 
             if geometry_init == 'random' or geometry_init is None:
-                plane_data = torch.rand(self.capacity, 4, dtype=torch.float32, device=device)
+                plane_data = torch.rand(self.capacity, 4, dtype=torch.float32, device=device) -.5 # allow negative values
+                # ax + by + cz + d = 0
+                # normalize a,b,c
+                # plane_data[:, :3] = plane_data[:, :3] / torch.sqrt(torch.sum(plane_data[:, :3]**2, axis=-1))
+                plane_data[:, :3] = plane_data[:, :3] / torch.norm(plane_data[:, :3], dim=-1, keepdim=True)
 
                 # modify d to initialize all vertices to have planes located exactly on them
-                # ax + by + cz + d = 0
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
                 coords = torch.stack(coords).view(3, -1).T
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
                 plane_data[links.long(), 3] = -torch.sum(coords.to(device) * plane_data[links.long(), :3], axis=-1)
                 # plane_data[links.long(), 3] = -torch.sum((coords.to(device) + 0.5) * plane_data[links.long(), :3], axis=-1)
+            elif geometry_init == 'sphere':
+                plane_data = torch.zeros(self.capacity, 4, dtype=torch.float32, device=device)
+                grid_center = torch.tensor(reso) / 2
 
+                coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
+                coords = torch.stack(coords).view(3, -1).T
+                links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
+
+                norm_dirs = (coords - grid_center).to(device)
+                norm_dirs = norm_dirs / torch.norm(norm_dirs, dim=-1, keepdim=True)
+                norm_dirs = torch.nan_to_num(norm_dirs, 1./np.sqrt(3))
+
+                plane_data[links.long(), :3] = norm_dirs
+
+                # modify d to initialize all vertices to have planes located exactly on them
+                plane_data[links.long(), 3] = -torch.sum(coords.to(device) * plane_data[links.long(), :3], axis=-1)
 
             else:
                 raise NotImplementedError(f'Geometry initialization [{geometry_init}] is not supported for grid [{backend}]')
@@ -1261,7 +1279,7 @@ class SparseGrid(nn.Module):
         dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
         sh_mult = sh_mult[:, None, :].repeat([1, MV, 1]).reshape(-1,9)
 
-        voxel_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
+        visited_l_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
         # origins = origins[select_mask]
         # dirs = dirs[select_mask]
         # l = voxels[:, :MV, :][select_mask]
@@ -1271,7 +1289,7 @@ class SparseGrid(nn.Module):
 
         ###### find intersections within each voxel ######
 
-        l = B_l[voxel_mask] # [VV]
+        l = B_l[visited_l_mask] # [VV]
         lx, ly, lz = l.unbind(-1) 
         links000 = self.links[lx, ly, lz]
         links001 = self.links[lx, ly, lz + 1]
@@ -1383,8 +1401,8 @@ class SparseGrid(nn.Module):
             return NotImplementedError
 
 
-        ox, oy, oz = origins[voxel_mask].to(dtype).unbind(-1)
-        vx, vy, vz = dirs[voxel_mask].to(dtype).unbind(-1)
+        ox, oy, oz = origins[visited_l_mask].to(dtype).unbind(-1)
+        vx, vy, vz = dirs[visited_l_mask].to(dtype).unbind(-1)
 
         a00 = sdf000[:,0].to(dtype) * (1-oz+lz) + sdf001[:,0].to(dtype) * (oz-lz)
         a01 = sdf010[:,0].to(dtype) * (1-oz+lz) + sdf011[:,0].to(dtype) * (oz-lz)
@@ -1526,7 +1544,7 @@ class SparseGrid(nn.Module):
         # TODO: issue, the root can be coarse!
 
         ts = ts[..., None]
-        samples = origins[voxel_mask, None, :] + ts * dirs[voxel_mask, None, :] # B, three intersections, xyz
+        samples = origins[visited_l_mask, None, :] + ts * dirs[visited_l_mask, None, :] # B, three intersections, xyz
 
         # filter out roots with negative t
         neg_roots = ts.view(-1) < 0
@@ -1583,13 +1601,13 @@ class SparseGrid(nn.Module):
         B_alpha = torch.zeros(B*MV, device=origins.device)
 
         rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-        B_rgb[voxel_mask,:] = torch.clamp_min(
-            torch.sum(sh_mult[voxel_mask, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
+        B_rgb[visited_l_mask,:] = torch.clamp_min(
+            torch.sum(sh_mult[visited_l_mask, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
             0.0,
         )  # [VV, 3]
 
         # log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
-        B_alpha[voxel_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
+        B_alpha[visited_l_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
 
         assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
 
@@ -1703,11 +1721,11 @@ class SparseGrid(nn.Module):
         out = {'rgb': out_rgb}
         if return_depth:
             # render depth -- find out t from valid samples
-            _ts = ((samples[:,0] - origins[voxel_mask][:,0]) / dirs[voxel_mask][:,0])
+            _ts = ((samples[:,0] - origins[visited_l_mask][:,0]) / dirs[visited_l_mask][:,0])
             _ts[invalid_sample_ids] = 0 
 
             B_ts = torch.zeros(B*MV, device=origins.device)
-            B_ts[voxel_mask] = _ts.to(B_ts.dtype) # [VV]
+            B_ts[visited_l_mask] = _ts.to(B_ts.dtype) # [VV]
             B_ts = B_ts.reshape(B, MV)
 
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
@@ -1824,6 +1842,7 @@ class SparseGrid(nn.Module):
 
         del invdirs
         
+        # with utils.Timing('Intersection finding'):
         while good_indices.numel() > 0:
             next_t = self.find_next_intersection(t, origins, dirs)
             l = self.find_intersect_voxels(t, next_t, origins, dirs)
@@ -1841,7 +1860,7 @@ class SparseGrid(nn.Module):
             # tmax = tmax[mask]
 
         # re-arrange voxels into a batch of samples
-        VV = voxels_i.sum() # total number of valid voxels
+        VV = voxels_i.sum() # total number of visited voxels
         if voxels_i.numel() == 0:
             # TODO weird bug!
             import pdb
@@ -1851,7 +1870,8 @@ class SparseGrid(nn.Module):
         dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
         sh_mult = sh_mult[:, None, :].repeat([1, MV, 1]).reshape(-1,9)
 
-        voxel_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
+        visited_l_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
+        valid_sample_ids = torch.arange(visited_l_mask.shape[0])[visited_l_mask] # [VV]
         # origins = origins[select_mask]
         # dirs = dirs[select_mask]
         # l = voxels[:, :MV, :][select_mask]
@@ -1861,7 +1881,7 @@ class SparseGrid(nn.Module):
 
         ###### find intersections within each voxel ######
 
-        l = B_l[voxel_mask] # [VV]
+        l = B_l[visited_l_mask] # [VV]
         lx, ly, lz = l.unbind(-1) 
         links000 = self.links[lx, ly, lz]
         links001 = self.links[lx, ly, lz + 1]
@@ -1872,14 +1892,21 @@ class SparseGrid(nn.Module):
         links110 = self.links[lx + 1, ly + 1, lz]
         links111 = self.links[lx + 1, ly + 1, lz + 1]
 
-        alpha000, rgb000, plane000 = self._fetch_links(links000)
-        alpha001, rgb001, plane001 = self._fetch_links(links001)
-        alpha010, rgb010, plane010 = self._fetch_links(links010)
-        alpha011, rgb011, plane011 = self._fetch_links(links011)
-        alpha100, rgb100, plane100 = self._fetch_links(links100)
-        alpha101, rgb101, plane101 = self._fetch_links(links101)
-        alpha110, rgb110, plane110 = self._fetch_links(links110)
-        alpha111, rgb111, plane111 = self._fetch_links(links111)
+        # mask of voxels that exist
+        exist_l_mask = [links != -1 for links in [links000, links001, links010, links011, links100, links101, links110, links111]]
+        exist_l_mask = torch.stack(exist_l_mask).T.all(axis=-1) # [VV]
+        VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
+        valid_sample_ids = valid_sample_ids[exist_l_mask] # [VEV]
+        exist_l = l[exist_l_mask]
+
+        alpha000, rgb000, plane000 = self._fetch_links(links000[exist_l_mask]) # [VEV, ...]
+        alpha001, rgb001, plane001 = self._fetch_links(links001[exist_l_mask])
+        alpha010, rgb010, plane010 = self._fetch_links(links010[exist_l_mask])
+        alpha011, rgb011, plane011 = self._fetch_links(links011[exist_l_mask])
+        alpha100, rgb100, plane100 = self._fetch_links(links100[exist_l_mask])
+        alpha101, rgb101, plane101 = self._fetch_links(links101[exist_l_mask])
+        alpha110, rgb110, plane110 = self._fetch_links(links110[exist_l_mask])
+        alpha111, rgb111, plane111 = self._fetch_links(links111[exist_l_mask])
 
         # plane: ax + by + cz + d = 0
         a, b, c, d = torch.mean(torch.stack(
@@ -1891,28 +1918,28 @@ class SparseGrid(nn.Module):
         # thresholding to force the plane to stay within its voxel
         # abs(torch.sum((l + 0.5) * torch.stack([a,b,c]).T, axis=-1) + d) <= sqrt(3 * (0.5 ** 2))
         th = 0.3
-        xyz_term = torch.sum((l + 0.5) * torch.stack([a,b,c]).T, axis=-1)
+        xyz_term = torch.sum((exist_l + 0.5) * torch.stack([a,b,c]).T, axis=-1)
         d = torch.clamp(d, -th - xyz_term, th - xyz_term)
 
-        ox, oy, oz = origins[voxel_mask].to(dtype).unbind(-1)
-        vx, vy, vz = dirs[voxel_mask].to(dtype).unbind(-1)
+        ox, oy, oz = origins[valid_sample_ids].to(dtype).unbind(-1)
+        vx, vy, vz = dirs[valid_sample_ids].to(dtype).unbind(-1)
 
         ts = -(a*ox + b*oy + c*oz + d) / (a*vx+b*vy+c*vz)
 
         ts = ts[..., None]
-        samples = origins[voxel_mask, :] + ts * dirs[voxel_mask, :] # B, three intersections, xyz
+        samples = origins[valid_sample_ids] + ts * dirs[valid_sample_ids] # [VEV, 3]
 
         if allow_outside:
             # invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
             invalid_sample_mask = (torch.isnan(samples)).any(axis=-1)
         else:
             # remove all samples outside of the voxel
-            invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+            invalid_sample_mask = (samples < exist_l).any(axis=-1) | (samples > exist_l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
         invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
         
         # TODO only interpolate for valid samples to save computation
         # interpolate opacity
-        wa, wb = 1. - (samples - l), (samples - l)
+        wa, wb = 1. - (samples - exist_l), (samples - exist_l)
         if allow_outside:
             torch.clamp_(wa, 0., 1.)
             torch.clamp_(wb, 0., 1.)
@@ -1938,7 +1965,9 @@ class SparseGrid(nn.Module):
         c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
         c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
         c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-        rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+        _rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+        rgb = torch.clone(_rgb)
+        rgb[invalid_sample_ids,:] = 0.
 
         # END CRAZY TRILERP
 
@@ -1946,13 +1975,12 @@ class SparseGrid(nn.Module):
         B_alpha = torch.zeros(B*MV, device=origins.device)
 
         rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-        B_rgb[voxel_mask,:] = torch.clamp_min(
-            torch.sum(sh_mult[voxel_mask, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
+        B_rgb[valid_sample_ids,:] = torch.clamp_min(
+            torch.sum(sh_mult[valid_sample_ids, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
             0.0,
-        )  # [VV, 3]
+        ) # [VEV, 3]
 
-        # log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
-        B_alpha[voxel_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
+        B_alpha[valid_sample_ids] = alpha[:,0].to(B_rgb.dtype) # [VEV]
 
         assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
 
@@ -1965,7 +1993,6 @@ class SparseGrid(nn.Module):
             )[:, :-1] # [B, MV, 3]
         
         out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
-
 
 
         if self.use_background:
@@ -2062,9 +2089,9 @@ class SparseGrid(nn.Module):
             # https://math.stackexchange.com/questions/2133217/minimal-distance-to-a-cube-in-2d-and-3d-from-a-point-lying-outside
             
             # shift voxel to have corners at -.5, +.5
-            shift_samples = samples - l -.5
+            shift_samples = samples - exist_l -.5
             dists = torch.zeros_like(samples[:,0])
-            outside_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) & (~torch.isnan(samples).any(axis=-1))
+            outside_mask = (samples < exist_l).any(axis=-1) | (samples > exist_l+1).any(axis=-1) & (~torch.isnan(samples).any(axis=-1))
             dists[outside_mask] = torch.sqrt(torch.sum(torch.clamp_min(torch.abs(shift_samples[outside_mask]) - .5, 0)**2, axis=-1))
             outside_loss = torch.sum(dists * alpha[:,0]) / torch.count_nonzero(dists)
 
@@ -2072,11 +2099,11 @@ class SparseGrid(nn.Module):
 
         if return_depth:
             # render depth -- find out t from valid samples
-            _ts = ((samples[:,0] - origins[voxel_mask][:,0]) / dirs[voxel_mask][:,0])
+            _ts = ((samples[:,0] - origins[valid_sample_ids][:,0]) / dirs[valid_sample_ids][:,0])
             _ts[invalid_sample_ids] = 0 
 
             B_ts = torch.zeros(B*MV, device=origins.device)
-            B_ts[voxel_mask] = _ts.to(B_ts.dtype) # [VV]
+            B_ts[valid_sample_ids] = _ts.to(B_ts.dtype) # [VV]
             B_ts = B_ts.reshape(B, MV)
 
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
