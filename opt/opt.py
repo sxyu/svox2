@@ -103,7 +103,7 @@ if path.isfile(ckpt_npz) and args.load_ckpt:
     print(f'Resume from ckpt at {ckpt_npz}')
     print('#####################################################')
     grid = svox2.SparseGrid.load(ckpt_npz, device=device)
-    assert args.renderer_backend == grid.backend, "Loaded ckpt incompatible with given configs"
+    assert args.renderer_backend == grid.surface_type, "Loaded ckpt incompatible with given configs"
     gstep_id_base = grid.step_id
 else: 
     grid = svox2.SparseGrid(reso=reso_list[reso_id],
@@ -112,6 +112,7 @@ else:
                             use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
                             basis_dim=args.sh_dim,
                             use_z_order=True,
+                            use_octree=True,
                             device=device,
                             basis_reso=args.basis_reso,
                             basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
@@ -119,8 +120,8 @@ else:
                             mlp_width=args.mlp_width,
                             background_nlayers=args.background_nlayers,
                             background_reso=args.background_reso,
-                            backend=args.renderer_backend,
-                            geometry_init=args.geometry_init)
+                            surface_type=args.renderer_backend,
+                            surface_init=args.surface_init)
 
     # DC -> gray; mind the SH scaling!
     grid.sh_data.data[:] = 0.0
@@ -385,13 +386,8 @@ while True:
 
             #  with Timing("volrend_fused"):
             if not USE_KERNEL:
-                if args.renderer_backend == 'sdf':
-                    out = grid._sdf_render_gradcheck_lerp(rays, rgb_gt,
-                            beta_loss=args.lambda_beta,
-                            sparsity_loss=args.lambda_sparsity,
-                            randomize=args.enable_random)
-                elif args.renderer_backend == 'plane':
-                    out = grid._plane_render_gradcheck_lerp(rays, rgb_gt,
+                if args.renderer_backend in ['sdf', 'plane']:
+                    out = grid._surface_render_gradcheck_lerp(rays, rgb_gt,
                             beta_loss=args.lambda_beta,
                             sparsity_loss=args.lambda_sparsity,
                             randomize=args.enable_random)
@@ -500,7 +496,7 @@ while True:
             if not USE_KERNEL:
                 loss = mse
 
-                if grid.backend == 'plane':
+                if grid.surface_type == 'plane':
                     # TODO add outside loss to encourage the plane to stay within its voxel
                     pass
 

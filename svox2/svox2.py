@@ -16,6 +16,7 @@ import numpy as np
 import sympy
 from sympy.solvers import solve
 from sympy import Symbol
+import kaolin
 
 _C = utils._get_c_extension()
 
@@ -32,7 +33,7 @@ class RenderOptions:
     :param stop_thresh: float
     """
 
-    backend: str = "sdf"  # One of cuvol, svox1, nvol, sdf, plane
+    backend: str = 'sdf'  # One of cuvol, svox1, nvol, sdf, plane
 
     background_brightness: float = 1.0  # [0, 1], the background color black-white
 
@@ -337,6 +338,15 @@ class _TotalVariationFunction(autograd.Function):
 
 # END Differentiable CUDA functions with custom gradient
 
+class _SPC():
+    def __init__(self, octree=None, length=None, feature=None, max_level=None, pyramid=None, exsum=None, point_hierarchy=None):
+        self.octree = octree
+        self.length = length
+        self.feature = feature
+        self.max_level = max_level
+        self.pyramid = pyramid
+        self.exsum = exsum
+        self.point_hierarchy = point_hierarchy
 
 class SparseGrid(nn.Module):
     """
@@ -373,12 +383,13 @@ class SparseGrid(nn.Module):
         background_nlayers : int = 0,  # BG MSI layers
         background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
-        backend: str = "svox", # svox -- plenoxel volume rendering, sdf -- ours
-        geometry_init: str = None # methods used to init sdf data
+        surface_type: str = None,
+        surface_init: str = None, # methods used to init sdf data
+        use_octree: bool = True
     ):
         super().__init__()
         self.basis_type = basis_type
-        self.backend = backend
+        self.surface_type = surface_type
         self.step_id = 0
         if basis_type == BASIS_TYPE_SH:
             assert utils.isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
@@ -534,16 +545,11 @@ class SparseGrid(nn.Module):
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
 
-        if backend == 'sdf':
-            # use density data as alpha values
-            self.density_data = nn.Parameter(
-                torch.zeros(self.capacity, 1, dtype=torch.float32, device=device) * .1
-            ) # note that it is overritten
-
-            # geometry_init = None
-            if geometry_init == 'sphere' or geometry_init is None:
+        if surface_type == 'sdf':
+            # surface_init = None
+            if surface_init == 'sphere' or surface_init is None:
                 # method 1: initialize with distance to grid center, then reduce each vertices by the mean from the 8?
-                sdf_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+                surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
                 coords = torch.stack(coords).view(3, -1).T
                 # grid_center = (torch.tensor(reso) - 1.) / 2
@@ -555,7 +561,7 @@ class SparseGrid(nn.Module):
                 dists = rs[:, None] - sphere_rs[None, :]
 
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
-                sdf_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices]
+                surface_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices]
 
 
                 # floors = torch.floor(rs - 0.5)
@@ -566,15 +572,15 @@ class SparseGrid(nn.Module):
 
                 # # fetch links
                 # links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
-                #     # sdf_data[links[pos_ids].long(), 0] = rs[pos_ids]
-                #     # sdf_data[links[neg_ids].long(), 0] = rs[neg_ids] * -1.
-                #     sdf_data[links[pos_ids].long(), 0] = rs[pos_ids] - (floors[pos_ids] + 0.5)
-                #     sdf_data[links[neg_ids].long(), 0] = rs[neg_ids] - (floors[neg_ids] + 1.5)
+                #     # surface_data[links[pos_ids].long(), 0] = rs[pos_ids]
+                #     # surface_data[links[neg_ids].long(), 0] = rs[neg_ids] * -1.
+                #     surface_data[links[pos_ids].long(), 0] = rs[pos_ids] - (floors[pos_ids] + 0.5)
+                #     surface_data[links[neg_ids].long(), 0] = rs[neg_ids] - (floors[neg_ids] + 1.5)
 
 
-            elif geometry_init == 'outwards':
+            elif surface_init == 'outwards':
                 # method 2: init as random surface facing outwards
-                sdf_data = torch.rand(self.capacity, 1, dtype=torch.float32, device=device)
+                surface_data = torch.rand(self.capacity, 1, dtype=torch.float32, device=device)
                 grid_center = torch.tensor(reso) / 2
 
                 ids = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
@@ -590,38 +596,31 @@ class SparseGrid(nn.Module):
                     # fech link ids
                     links = self.links[neg_coords[:, 0], neg_coords[:, 1], neg_coords[:, 2]]
                     # set surface to face outwards
-                    sdf_data[links.long()] *= -1
+                    surface_data[links.long()] *= -1
 
-            elif geometry_init == 'plane':
+            elif surface_init == 'plane':
                 # method 3: simple plane with fixed driection
-                sdf_data = torch.rand(self.capacity, 1, dtype=torch.float32, device=device) * 0.1 + 1
-                sdf_data[self.links[np.arange(1,reso[0],2),:,:].view(-1).long()] *= -1.
+                surface_data = torch.rand(self.capacity, 1, dtype=torch.float32, device=device) * 0.1 + 1
+                surface_data[self.links[np.arange(1,reso[0],2),:,:].view(-1).long()] *= -1.
             else:
-                raise NotImplementedError(f'Geometry initialization [{geometry_init}] is not supported for grid [{backend}]')
-
-            self.sdf_data = nn.Parameter(sdf_data)
+                raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
         
-        elif backend == 'plane':
-            # use density data as alpha values
-            self.density_data = nn.Parameter(
-                torch.zeros(self.capacity, 1, dtype=torch.float32, device=device) * .1
-            )
-
-            if geometry_init == 'random' or geometry_init is None:
-                plane_data = torch.rand(self.capacity, 4, dtype=torch.float32, device=device) -.5 # allow negative values
+        elif surface_type == 'plane':
+            if surface_init == 'random' or surface_init is None:
+                surface_data = torch.rand(self.capacity, 4, dtype=torch.float32, device=device) -.5 # allow negative values
                 # ax + by + cz + d = 0
                 # normalize a,b,c
-                # plane_data[:, :3] = plane_data[:, :3] / torch.sqrt(torch.sum(plane_data[:, :3]**2, axis=-1))
-                plane_data[:, :3] = plane_data[:, :3] / torch.norm(plane_data[:, :3], dim=-1, keepdim=True)
+                # surface_data[:, :3] = surface_data[:, :3] / torch.sqrt(torch.sum(surface_data[:, :3]**2, axis=-1))
+                surface_data[:, :3] = surface_data[:, :3] / torch.norm(surface_data[:, :3], dim=-1, keepdim=True)
 
                 # modify d to initialize all vertices to have planes located exactly on them
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
                 coords = torch.stack(coords).view(3, -1).T
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
-                plane_data[links.long(), 3] = -torch.sum(coords.to(device) * plane_data[links.long(), :3], axis=-1)
-                # plane_data[links.long(), 3] = -torch.sum((coords.to(device) + 0.5) * plane_data[links.long(), :3], axis=-1)
-            elif geometry_init == 'sphere':
-                plane_data = torch.zeros(self.capacity, 4, dtype=torch.float32, device=device)
+                surface_data[links.long(), 3] = -torch.sum(coords.to(device) * surface_data[links.long(), :3], axis=-1)
+                # surface_data[links.long(), 3] = -torch.sum((coords.to(device) + 0.5) * surface_data[links.long(), :3], axis=-1)
+            elif surface_init == 'sphere':
+                surface_data = torch.zeros(self.capacity, 4, dtype=torch.float32, device=device)
                 grid_center = torch.tensor(reso) / 2
 
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
@@ -632,15 +631,15 @@ class SparseGrid(nn.Module):
                 norm_dirs = norm_dirs / torch.norm(norm_dirs, dim=-1, keepdim=True)
                 norm_dirs = torch.nan_to_num(norm_dirs, 1./np.sqrt(3))
 
-                plane_data[links.long(), :3] = norm_dirs
+                surface_data[links.long(), :3] = norm_dirs
 
                 # modify d to initialize all vertices to have planes located exactly on them
-                plane_data[links.long(), 3] = -torch.sum(coords.to(device) * plane_data[links.long(), :3], axis=-1)
+                surface_data[links.long(), 3] = -torch.sum(coords.to(device) * surface_data[links.long(), :3], axis=-1)
 
             else:
-                raise NotImplementedError(f'Geometry initialization [{geometry_init}] is not supported for grid [{backend}]')
+                raise NotImplementedError(f'Geometry initialization [{surface_init}] is not supported for grid [{surface_type}]')
 
-            self.plane_data = nn.Parameter(plane_data)
+        self.surface_data = nn.Parameter(surface_data)
 
         self.opt = RenderOptions() # set up outside of initializer
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
@@ -651,6 +650,18 @@ class SparseGrid(nn.Module):
         self.sh_rms: Optional[torch.Tensor] = None
         self.background_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
+        self.use_octree = use_octree
+
+        if use_octree:
+            # create place holder feature grid
+            # this grid is empty and is only used for ray-voxel intersection determination
+            feature_grid = torch.ones(1, 1, reso[0], reso[1], reso[2]).to(device)
+            octree, length, feature = kaolin.ops.spc.feature_grids_to_spc(feature_grid)
+            max_level, pyramids, exsum = kaolin.ops.spc.scan_octrees(octree, length)
+            point_hierarchy = kaolin.ops.spc.generate_points(octree, pyramids, exsum)
+            
+            self.spc = _SPC(octree, length[0], feature, max_level, pyramids[0], exsum, point_hierarchy)
+
 
         if self.links.is_cuda and use_sphere_bound and _C is not None:
             self.accelerate()
@@ -692,18 +703,13 @@ class SparseGrid(nn.Module):
         idxs = links[mask].long()
         results_sigma[mask] = self.density_data[idxs]
         results_sh[mask] = self.sh_data[idxs]
-        if self.backend == 'sdf':
-            results_sdf = torch.zeros(
-                (links.size(0), 1), device=links.device, dtype=torch.float32
+
+        if self.surface_type in ['sdf', 'plane']:
+            results_surface = torch.zeros(
+                (links.size(0), self.surface_data.shape[-1]), device=links.device, dtype=torch.float32
             )
-            results_sdf[mask] = self.sdf_data[idxs]
-            return results_sigma, results_sh, results_sdf
-        elif self.backend == 'plane':
-            result_plane = -torch.ones(
-                (links.size(0), 4), device=links.device, dtype=torch.float32
-            )
-            result_plane[mask] = self.plane_data[idxs]
-            return results_sigma, results_sh, result_plane
+            results_surface[mask] = self.surface_data[idxs]
+            return results_sigma, results_sh, results_surface
 
         return results_sigma, results_sh
 
@@ -729,7 +735,7 @@ class SparseGrid(nn.Module):
 
         :return: (density, color)
         """
-        if self.backend == 'sdf' or self.backend == 'plane':
+        if self.surface_type in ['sdf', 'plane']:
             raise NotImplementedError
 
         if use_kernel and self.links.is_cuda and _C is not None:
@@ -1086,7 +1092,7 @@ class SparseGrid(nn.Module):
         return next_t
     
 
-    def find_intersect_voxels(self, t, next_t, origins, dirs):
+    def find_mid_voxel(self, t, next_t, origins, dirs):
         '''
         Use two ray-plane intersections to find the voxel that ray passes through
         '''
@@ -1094,8 +1100,84 @@ class SparseGrid(nn.Module):
         pos_mid = origins + t_mid[:, None] * dirs
         return torch.floor(pos_mid).long()
 
+    
+    def find_ray_voxels_intersection(self, t, origins, dirs, sh_mult):
+        '''
+        Find a list of voxels that given camera ray batch intersects with
+        Re-arrange ray and voxels into a batch
+        '''
+        gsz = self._grid_size()
+        gsz_cu = gsz.to(device=dirs.device)
+        B = origins.shape[0]
+        origins_ini = origins
+        dirs_ini = dirs
+        voxels_i = torch.zeros(B, device=origins.device, dtype=torch.long)
 
-    def _sdf_render_gradcheck_lerp(
+        if self.use_octree:
+            # re-scale and shift camera pos to [-1, +1]
+            ray_o = origins / (gsz_cu/2) - 1.
+            ray_d = dirs / (gsz_cu/2)
+
+            # # FIXME kaolin seems to sort depth in wrong way, work around to solve this
+            # ray_o = -1 * ray_o
+            # ray_d = -1 * ray_d
+            
+            nugs_ridx, nugs_pidx, _ = \
+                kaolin.render.spc.unbatched_raytrace(
+                    self.spc.octree, self.spc.point_hierarchy, self.spc.pyramid, 
+                    self.spc.exsum, ray_o.float(), ray_d.float(), self.spc.max_level)
+
+            l = kaolin.ops.spc.morton_to_points(nugs_pidx.long() - self.spc.pyramid[1, self.spc.max_level]).long() 
+            # filter boundary ls
+            valid_l_mask = (l <= gsz_cu-2).all(axis=-1) & (l >= 0).all(axis=-1)
+            l = l[valid_l_mask]
+            bincount = torch.bincount(nugs_ridx[valid_l_mask])
+            voxels_i[:bincount.shape[0]] = bincount
+        else:
+            voxels = torch.ones((B, torch.sum(gsz_cu).long(), 3), device=origins.device, dtype=torch.long) * -1
+            good_indices = torch.arange(B, device=origins.device)
+
+            # record a list of intersecting voxels
+            # with utils.Timing('Intersection finding'):
+            while good_indices.numel() > 0:
+                next_t = self.find_next_intersection(t, origins, dirs)
+                l = self.find_mid_voxel(t, next_t, origins, dirs)
+
+                mask = ~torch.isnan(next_t)
+                good_indices = good_indices[mask]
+                # invalid l can appear due to rounding error
+                valid_l_mask = (l[mask] <= gsz_cu-2).all(axis=-1) & (l[mask] >= 0).all(axis=-1)
+                
+                voxels[good_indices[valid_l_mask], voxels_i[good_indices[valid_l_mask]], :] = l[mask][valid_l_mask]
+                voxels_i[good_indices[valid_l_mask]] += 1
+                origins = origins[mask]
+                dirs = dirs[mask]
+                t = next_t[mask]
+
+        # re-arrange voxels into a batch of samples
+        VV = voxels_i.sum() # total number of visited voxels
+        if voxels_i.numel() == 0:
+            # TODO weird bug!
+            import pdb
+            pdb.set_trace()
+        MV = voxels_i.max() # number of max voxels per ray
+        origins = origins_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
+        dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
+        sh_mult = sh_mult[:, None, :].repeat([1, MV, 1]).reshape(-1,self.basis_dim)
+
+        visited_l_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
+        valid_l_ids = torch.arange(visited_l_mask.shape[0])[visited_l_mask] # [VV]
+        
+        if not self.use_octree:
+            B_l = voxels[:, :MV, :].reshape(-1, 3)
+            l = B_l[visited_l_mask] # [VV]
+
+        assert origins.shape[0] == B * MV 
+
+        return l, voxels_i, valid_l_ids, origins, dirs, sh_mult
+
+
+    def _sdf_render_gradcheck_lerp_backup(
         self,
         rays: Rays,
         rgb_gt: torch.Tensor = None,
@@ -1111,6 +1193,9 @@ class SparseGrid(nn.Module):
         """
         gradcheck version for sdf rendering
         """
+
+        raise NotImplementedError
+
         origins = self.world2grid(rays.origins).to(dtype)
         dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
         viewdirs = dirs
@@ -1256,40 +1341,11 @@ class SparseGrid(nn.Module):
 
         del invdirs
         
-        while good_indices.numel() > 0:
-            next_t = self.find_next_intersection(t, origins, dirs)
-            l = self.find_intersect_voxels(t, next_t, origins, dirs)
-
-            mask = ~torch.isnan(next_t)
-            good_indices = good_indices[mask]
-            # invalid l can appear due to rounding error
-            valid_l_mask = (l[mask] <= gsz_cu-2).all(axis=-1) & (l[mask] >= 0).all(axis=-1)
-            
-            voxels[good_indices[valid_l_mask], voxels_i[good_indices[valid_l_mask]], :] = l[mask][valid_l_mask]
-            voxels_i[good_indices[valid_l_mask]] += 1
-            origins = origins[mask]
-            dirs = dirs[mask]
-            t = next_t[mask]
-            # tmax = tmax[mask]
-
-        # re-arrange voxels into a batch of samples
-        VV = voxels_i.sum() # total number of valid voxels
-        MV = voxels_i.max() # number of max voxels per ray
-        origins = origins_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
-        dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
-        sh_mult = sh_mult[:, None, :].repeat([1, MV, 1]).reshape(-1,9)
-
-        visited_l_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
-        # origins = origins[select_mask]
-        # dirs = dirs[select_mask]
-        # l = voxels[:, :MV, :][select_mask]
-        B_l = voxels[:, :MV, :].reshape(-1, 3)
-
-        assert origins.shape[0] == B * MV 
+        l, voxels_i, valid_sample_ids, origins, dirs, sh_mult = self.find_ray_voxels_intersection(t, origins, dirs, sh_mult)
+        VV = voxels_i.sum()
 
         ###### find intersections within each voxel ######
 
-        l = B_l[visited_l_mask] # [VV]
         lx, ly, lz = l.unbind(-1) 
         links000 = self.links[lx, ly, lz]
         links001 = self.links[lx, ly, lz + 1]
@@ -1299,6 +1355,13 @@ class SparseGrid(nn.Module):
         links101 = self.links[lx + 1, ly, lz + 1]
         links110 = self.links[lx + 1, ly + 1, lz]
         links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+        # mask out voxels that don't exist
+        exist_l_mask = [links != -1 for links in [links000, links001, links010, links011, links100, links101, links110, links111]]
+        exist_l_mask = torch.stack(exist_l_mask).T.all(axis=-1) # [VV]
+        VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
+        valid_sample_ids = valid_sample_ids[exist_l_mask] # [VEV]
+        exist_l = l[exist_l_mask]
 
         alpha000, rgb000, sdf000 = self._fetch_links(links000)
         alpha001, rgb001, sdf001 = self._fetch_links(links001)
@@ -1734,7 +1797,7 @@ class SparseGrid(nn.Module):
         return out
 
 
-    def _plane_render_gradcheck_lerp(
+    def _surface_render_gradcheck_lerp(
         self,
         rays: Rays,
         rgb_gt: torch.Tensor = None,
@@ -1749,51 +1812,24 @@ class SparseGrid(nn.Module):
         return_outside_loss: bool = False
     ):
         """
-        gradcheck version for sdf rendering
+        gradcheck version for surface rendering
         """
-        origins = self.world2grid(rays.origins).to(dtype)
-        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
-        viewdirs = dirs
-        B = dirs.size(0)
-        assert origins.size(0) == B
-        gsz = self._grid_size()
-        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
-        delta_scale = 1.0 / dirs.norm(dim=1)
-        dirs *= delta_scale.unsqueeze(-1)
-
-        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
-            sh_mult = self._eval_learned_bases(viewdirs)
-        elif self.basis_type == BASIS_TYPE_MLP:
-            sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
-        else:
-            sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
-
-        invdirs = 1.0 / dirs
-
-        gsz = self._grid_size().to(dtype)
-        gsz_cu = gsz.to(device=dirs.device).to(dtype)
-
+        
         # debug helpers:
-
         def pos():
             return origins + t[:, None] * dirs
-
         def next_pos():
             return origins + find_next_intersection(t, origins, dirs)[:, None] * dirs
-
         def global_id_to_current_id(global_id):
             return torch.arange(good_indices.shape[0])[good_indices == global_id]
-
         def save_rays():
             cache = {
                 'origins': origins_ini.cpu().detach().numpy(),
                 'dirs': dirs_ini.cpu().detach().numpy()
             }
             np.save('rays.npy', cache)
-
         def index(tensor, ele):
             return torch.arange(tensor.shape[0])[tensor==ele]
-
         def save_vis_cache():
             '''
             Save parameters for visualization
@@ -1814,6 +1850,30 @@ class SparseGrid(nn.Module):
             }
 
             np.save('vis_cache.npy', cache)
+        
+        ########### Preprocess Camera Rays ###########
+        
+        origins = self.world2grid(rays.origins).to(dtype)
+        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
+        viewdirs = dirs
+        B = dirs.size(0)
+        assert origins.size(0) == B
+
+        gsz = self._grid_size()
+        gsz_cu = gsz.to(device=dirs.device).to(dtype)
+
+        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
+        delta_scale = 1.0 / dirs.norm(dim=1)
+        dirs *= delta_scale.unsqueeze(-1)
+
+        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
+            sh_mult = self._eval_learned_bases(viewdirs)
+        elif self.basis_type == BASIS_TYPE_MLP:
+            sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
+        else:
+            sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
+
+        ########### Find Ray Bounds ###########
 
         ts_bd = torch.cat([(gsz_cu*0 - origins) / dirs, (gsz_cu-1 - origins) / dirs], axis=-1)
         
@@ -1832,56 +1892,15 @@ class SparseGrid(nn.Module):
         if return_raylen:
             return tmax - t
 
-        origins_ini = origins
-        dirs_ini = dirs
 
-        good_indices = torch.arange(B, device=origins.device)
-        # record a list of intersecting voxels
-        voxels = torch.ones((B, torch.sum(gsz_cu).long(), 3), device=origins.device, dtype=torch.long) * -1
-        voxels_i = torch.zeros(B, device=origins.device, dtype=torch.long)
+        ########### Find Ray-Voxel Intersections ###########
 
-        del invdirs
-        
-        # with utils.Timing('Intersection finding'):
-        while good_indices.numel() > 0:
-            next_t = self.find_next_intersection(t, origins, dirs)
-            l = self.find_intersect_voxels(t, next_t, origins, dirs)
+        l, voxels_i, valid_l_ids, origins, dirs, sh_mult = self.find_ray_voxels_intersection(t, origins, dirs, sh_mult)
+        VV = voxels_i.sum()
+        MV = voxels_i.max()
 
-            mask = ~torch.isnan(next_t)
-            good_indices = good_indices[mask]
-            # invalid l can appear due to rounding error
-            valid_l_mask = (l[mask] <= gsz_cu-2).all(axis=-1) & (l[mask] >= 0).all(axis=-1)
-            
-            voxels[good_indices[valid_l_mask], voxels_i[good_indices[valid_l_mask]], :] = l[mask][valid_l_mask]
-            voxels_i[good_indices[valid_l_mask]] += 1
-            origins = origins[mask]
-            dirs = dirs[mask]
-            t = next_t[mask]
-            # tmax = tmax[mask]
+        ########### Fetch Vertices Data ###########
 
-        # re-arrange voxels into a batch of samples
-        VV = voxels_i.sum() # total number of visited voxels
-        if voxels_i.numel() == 0:
-            # TODO weird bug!
-            import pdb
-            pdb.set_trace()
-        MV = voxels_i.max() # number of max voxels per ray
-        origins = origins_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
-        dirs = dirs_ini[:, None, :].repeat([1, MV, 1]).reshape(-1,3)
-        sh_mult = sh_mult[:, None, :].repeat([1, MV, 1]).reshape(-1,9)
-
-        visited_l_mask = (torch.arange(MV)[None, :].repeat([B, 1]).to(origins.device) < voxels_i[:, None]).reshape(-1)
-        valid_sample_ids = torch.arange(visited_l_mask.shape[0])[visited_l_mask] # [VV]
-        # origins = origins[select_mask]
-        # dirs = dirs[select_mask]
-        # l = voxels[:, :MV, :][select_mask]
-        B_l = voxels[:, :MV, :].reshape(-1, 3)
-
-        assert origins.shape[0] == B * MV 
-
-        ###### find intersections within each voxel ######
-
-        l = B_l[visited_l_mask] # [VV]
         lx, ly, lz = l.unbind(-1) 
         links000 = self.links[lx, ly, lz]
         links001 = self.links[lx, ly, lz + 1]
@@ -1892,51 +1911,225 @@ class SparseGrid(nn.Module):
         links110 = self.links[lx + 1, ly + 1, lz]
         links111 = self.links[lx + 1, ly + 1, lz + 1]
 
-        # mask of voxels that exist
+        # mask out voxels that don't exist
         exist_l_mask = [links != -1 for links in [links000, links001, links010, links011, links100, links101, links110, links111]]
         exist_l_mask = torch.stack(exist_l_mask).T.all(axis=-1) # [VV]
         VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
-        valid_sample_ids = valid_sample_ids[exist_l_mask] # [VEV]
+        valid_l_ids = valid_l_ids[exist_l_mask] # [VEV]
         exist_l = l[exist_l_mask]
 
-        alpha000, rgb000, plane000 = self._fetch_links(links000[exist_l_mask]) # [VEV, ...]
-        alpha001, rgb001, plane001 = self._fetch_links(links001[exist_l_mask])
-        alpha010, rgb010, plane010 = self._fetch_links(links010[exist_l_mask])
-        alpha011, rgb011, plane011 = self._fetch_links(links011[exist_l_mask])
-        alpha100, rgb100, plane100 = self._fetch_links(links100[exist_l_mask])
-        alpha101, rgb101, plane101 = self._fetch_links(links101[exist_l_mask])
-        alpha110, rgb110, plane110 = self._fetch_links(links110[exist_l_mask])
-        alpha111, rgb111, plane111 = self._fetch_links(links111[exist_l_mask])
+        alpha000, rgb000, surface000 = self._fetch_links(links000[exist_l_mask]) # [VEV, ...]
+        alpha001, rgb001, surface001 = self._fetch_links(links001[exist_l_mask])
+        alpha010, rgb010, surface010 = self._fetch_links(links010[exist_l_mask])
+        alpha011, rgb011, surface011 = self._fetch_links(links011[exist_l_mask])
+        alpha100, rgb100, surface100 = self._fetch_links(links100[exist_l_mask])
+        alpha101, rgb101, surface101 = self._fetch_links(links101[exist_l_mask])
+        alpha110, rgb110, surface110 = self._fetch_links(links110[exist_l_mask])
+        alpha111, rgb111, surface111 = self._fetch_links(links111[exist_l_mask])
 
-        # plane: ax + by + cz + d = 0
-        a, b, c, d = torch.mean(torch.stack(
-            [plane000, plane001, plane010, plane011, plane100, plane101, plane110, plane111]
-            ), axis=0).to(dtype).unbind(-1)
 
-        # a, b, c, d = plane000.to(dtype).unbind(-1)
+        ########### Find Ray-Surface Intersections ###########
+        if self.surface_type == 'sdf':
+            ox, oy, oz = origins[valid_l_ids].to(dtype).unbind(-1)
+            vx, vy, vz = dirs[valid_l_ids].to(dtype).unbind(-1)
 
-        # thresholding to force the plane to stay within its voxel
-        # abs(torch.sum((l + 0.5) * torch.stack([a,b,c]).T, axis=-1) + d) <= sqrt(3 * (0.5 ** 2))
-        th = 0.3
-        xyz_term = torch.sum((exist_l + 0.5) * torch.stack([a,b,c]).T, axis=-1)
-        d = torch.clamp(d, -th - xyz_term, th - xyz_term)
+            a00 = surface000[:,0].to(dtype) * (1-oz+lz) + surface001[:,0].to(dtype) * (oz-lz)
+            a01 = surface010[:,0].to(dtype) * (1-oz+lz) + surface011[:,0].to(dtype) * (oz-lz)
+            a10 = surface100[:,0].to(dtype) * (1-oz+lz) + surface101[:,0].to(dtype) * (oz-lz)
+            a11 = surface110[:,0].to(dtype) * (1-oz+lz) + surface111[:,0].to(dtype) * (oz-lz)
 
-        ox, oy, oz = origins[valid_sample_ids].to(dtype).unbind(-1)
-        vx, vy, vz = dirs[valid_sample_ids].to(dtype).unbind(-1)
+            b00 = -surface000[:,0].to(dtype) + surface001[:,0].to(dtype)
+            b01 = -surface010[:,0].to(dtype) + surface011[:,0].to(dtype)
+            b10 = -surface100[:,0].to(dtype) + surface101[:,0].to(dtype)
+            b11 = -surface110[:,0].to(dtype) + surface111[:,0].to(dtype)
 
-        ts = -(a*ox + b*oy + c*oz + d) / (a*vx+b*vy+c*vz)
+            c0 = a00*(1-oy+ly) + a01*(oy-ly)
+            c1 = a10*(1-oy+ly) + a11*(oy-ly)
 
-        ts = ts[..., None]
-        samples = origins[valid_sample_ids] + ts * dirs[valid_sample_ids] # [VEV, 3]
+            d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
+            d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
 
-        if allow_outside:
-            # invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
-            invalid_sample_mask = (torch.isnan(samples)).any(axis=-1)
-        else:
-            # remove all samples outside of the voxel
-            invalid_sample_mask = (samples < exist_l).any(axis=-1) | (samples > exist_l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
-        invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
+            e0 = -vy*vz*b00 + vy*vz*b01
+            e1 = -vy*vz*b10 + vy*vz*b11
+
+            f0 = c0*(1-ox+lx) + c1*(ox-lx)
+            f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
+            f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
+            f3 = -e0*vx + e1*vx
+
+            # negative roots are considered no roots and are filtered out later
+            ts = torch.ones([f0.numel(), 3]).to(dtype).to(device=dirs.device) * -1 # [VV, 3]
+
+            # solve cubic equations
+            numerical_solution = False
+            if numerical_solution: 
+                # TODO use Aesara instead https://aesara.readthedocs.io/en/latest/
+                print('using slow numerical solver for cubic functions!')
+                print('no gradient is enabled at the moment!')
+                ts = torch.ones([f0.numel(), 3]).to(device=dirs.device) * -1
+                for i in range(f0.shape[0]):
+                    x = Symbol('x')
+                    a_np = f3.cpu().detach().numpy() 
+                    b_np = f2.cpu().detach().numpy()
+                    c_np = f1.cpu().detach().numpy()
+                    d_np = f0.cpu().detach().numpy()
+                    solutions = sympy.solveset(a_np[i] * x**3 + b_np[i] * x**2 + c_np[i] * x + d_np[i], x, domain=sympy.S.Reals)
+                    solutions = torch.tensor(list(solutions),dtype=torch.float32).to(device=dirs.device)
+                    ts[i, :solutions.shape[0]] = solutions
+            else:
+
+                # analyical solution for f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3 = 0
+                # https://github.com/shril/CubicEquationSolver/blob/master/CubicEquationSolver.py
+
+                # check for trivial a and b -- reduce to linear or polynomial solutions
+                no_solution_mask = (f3 == 0.) & (f2 == 0.) & (f1 == 0.)
+                linear_mask = (f3 == 0.) & (f2 == 0.) & (~no_solution_mask)
+                quad_mask = (f3 == 0.) & (~linear_mask) & (~no_solution_mask)
+                cubic_mask = (~quad_mask) & (~linear_mask) & (~no_solution_mask)
+
+
+
+                ##### Linear Roots #####
+                if ts[linear_mask].numel() > 0:
+                    ts[linear_mask, 0] = (-f0[linear_mask] * 1.0) / f1[linear_mask]
+
+                ##### Quadratic Roots #####
+                if ts[quad_mask].numel() > 0:
+                    _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
+                    D = _c**2 - 4.0 * _b * _d
+
+                    # two real roots
+                    D_mask = D >+ 0 
+                    sqrt_D = torch.sqrt(D[D_mask])
+                    ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
+                    ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
+                    ts[ids, 1] = (-_c[D_mask] - sqrt_D) / (2.0 * _b[D_mask])
+
+                    # otherwise, has no real roots
+
+                ##### Cubic Roots #####
+
+                # normalize 
+                a = f3 / f3
+                b = f2 / f3
+                c = f1 / f3
+                d = f0 / f3
+
+                # TODO: remove voxels with invalid SDFs as they can cause numerical issues
+
+                def cond_cbrt(x, eps=1e-6):
+                    '''
+                    Compute cubic root of x based on sign
+                    '''
+                    ret = torch.zeros_like(x)
+                    ret[x >= 0] = torch.pow(torch.clamp_min_(x[x >= 0], eps), 1/3.)
+                    ret[x < 0] = torch.pow(torch.clamp_min_(-x[x < 0], eps), 1/3.) * -1
+                    return ret
+
+                f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
+                g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
+                h = ((g**2.) / 4. + (f**3.) / 27.)
+
+                # h = torch.clamp_max_(h, 1e10) # might need to clamp min as well
+                # h = torch.clamp(h, -1e12, 1e12) 
+
+                # all three roots are real and equal
+                _mask = ((f == 0) & (g == 0) & (h == 0)) & cubic_mask
+                ts[_mask, 0] = cond_cbrt(d[_mask]/a[_mask])
+
+                # all three roots are real 
+                _mask = (h <= 0) & (~((f == 0) & (g == 0) & (h == 0))) & cubic_mask
+                _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+                
+                _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
+                _j = _i ** (1 / 3.)                      
+                _k = torch.acos(-(_g / (2 * _i)))              
+                _L = _j * -1                              
+                _M = torch.cos(_k / 3.)       
+                _N = np.sqrt(3) * torch.sin(_k / 3.)    
+                _P = (_b / (3. * _a)) * -1                
+
+                ts[_mask, 0] = 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
+                ts[_mask, 1] = _L * (_M + _N) + _P
+                ts[_mask, 2] = _L * (_M - _N) + _P
+
+                # only one root is real
+                _mask = (h > 0) & cubic_mask
+                _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+
+                _R = -(_g / 2.) + torch.sqrt(_h)    
+                _S = cond_cbrt(_R)
+
+                _T = -(_g / 2.) - torch.sqrt(_h)
+                _U = cond_cbrt(_T)
+
+                ts[_mask, 0] = (_S + _U) - (_b / (3. * _a))
+                # # the rest two are complex roots:
+                # ts[_mask, 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
+                # ts[_mask, 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
+
+                assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots'
+                assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
+
+            ts = ts[..., None]
+            samples = origins[valid_l_ids, None, :] + ts * dirs[valid_l_ids, None, :] # B, three intersections, xyz
+
+            # filter out roots with negative t
+            neg_roots = ts.view(-1) < 0
+            samples.view(-1, 3)[neg_roots, :] = -1e9 # FIXME better way
+
+            # find the intersection that is closest to voxel center
+            # FIXME it is possible to have more than one intersections per voxel, need to deal with that!
+            centers = (l+.5)[:,None,:]
+            sq_dists = torch.sum((samples - centers) ** 2,axis=-1)
+            min_ids = torch.min(sq_dists,axis=-1).indices
+            samples = samples[torch.arange(samples.shape[0]), min_ids, :]
+            # note that the samples could still contain invalid coords -- when ray does not intersect with any surface!
+
+            if allow_outside:
+                invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
+            else:
+                # remove all samples outside of the voxel
+                invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+            invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
         
+        elif self.surface_type == 'plane':
+            # plane: ax + by + cz + d = 0
+            a, b, c, d = torch.mean(torch.stack(
+                [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111]
+                ), axis=0).to(dtype).unbind(-1)
+
+            # a, b, c, d = plane000.to(dtype).unbind(-1)
+
+            # thresholding to force the plane to stay within its voxel
+            # abs(torch.sum((l + 0.5) * torch.stack([a,b,c]).T, axis=-1) + d) <= sqrt(3 * (0.5 ** 2))
+            th = 0.3
+            xyz_term = torch.sum((exist_l + 0.5) * torch.stack([a,b,c]).T, axis=-1)
+            d = torch.clamp(d, -th - xyz_term, th - xyz_term)
+
+            ox, oy, oz = origins[valid_l_ids].to(dtype).unbind(-1)
+            vx, vy, vz = dirs[valid_l_ids].to(dtype).unbind(-1)
+
+            ts = -(a*ox + b*oy + c*oz + d) / (a*vx+b*vy+c*vz)
+
+            ts = ts[..., None]
+            samples = origins[valid_l_ids] + ts * dirs[valid_l_ids] # [VEV, 3]
+
+            if allow_outside:
+                # invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
+                invalid_sample_mask = (torch.isnan(samples)).any(axis=-1)
+            else:
+                # remove all samples outside of the voxel
+                invalid_sample_mask = (samples < exist_l).any(axis=-1) | (samples > exist_l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+            invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask]
+        
+        else:
+            raise NotImplementedError(f'Gird surface type {self.surface_type} is not supported for grad check rendering')
+
+
+        ########### Interpolate Alpha & SH ###########
+ 
+    
         # TODO only interpolate for valid samples to save computation
         # interpolate opacity
         wa, wb = 1. - (samples - exist_l), (samples - exist_l)
@@ -1969,18 +2162,18 @@ class SparseGrid(nn.Module):
         rgb = torch.clone(_rgb)
         rgb[invalid_sample_ids,:] = 0.
 
-        # END CRAZY TRILERP
+        ########### Volume Rendering ###########
 
         B_rgb = torch.zeros((B*MV, 3), device=origins.device)
         B_alpha = torch.zeros(B*MV, device=origins.device)
 
         rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-        B_rgb[valid_sample_ids,:] = torch.clamp_min(
-            torch.sum(sh_mult[valid_sample_ids, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
+        B_rgb[valid_l_ids,:] = torch.clamp_min(
+            torch.sum(sh_mult[valid_l_ids, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
             0.0,
         ) # [VEV, 3]
 
-        B_alpha[valid_sample_ids] = alpha[:,0].to(B_rgb.dtype) # [VEV]
+        B_alpha[valid_l_ids] = alpha[:,0].to(B_rgb.dtype) # [VEV]
 
         assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
 
@@ -2099,11 +2292,11 @@ class SparseGrid(nn.Module):
 
         if return_depth:
             # render depth -- find out t from valid samples
-            _ts = ((samples[:,0] - origins[valid_sample_ids][:,0]) / dirs[valid_sample_ids][:,0])
+            _ts = ((samples[:,0] - origins[valid_l_ids][:,0]) / dirs[valid_l_ids][:,0])
             _ts[invalid_sample_ids] = 0 
 
             B_ts = torch.zeros(B*MV, device=origins.device)
-            B_ts[valid_sample_ids] = _ts.to(B_ts.dtype) # [VV]
+            B_ts[valid_l_ids] = _ts.to(B_ts.dtype) # [VV]
             B_ts = B_ts.reshape(B, MV)
 
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
@@ -2299,12 +2492,10 @@ class SparseGrid(nn.Module):
             )}
         else:
             warn("Using slow volume rendering, should only be used for debugging")
-            if self.opt.backend == 'nvol':
+            if self.surface_type in ['sdf', 'plane']:
+                return self._surface_render_gradcheck_lerp(rays, return_raylen=return_raylen, **kwargs)
+            elif self.opt.backend == 'nvol':
                 return {'rgb': self._volume_render_gradcheck_nvol_lerp(rays, return_raylen=return_raylen)}
-            elif self.opt.backend == 'sdf':
-                return self._sdf_render_gradcheck_lerp(rays, return_raylen=return_raylen, **kwargs)
-            elif self.opt.backend == 'plane':
-                return self._plane_render_gradcheck_lerp(rays, return_raylen=return_raylen, **kwargs)
             else:
                 return {'rgb': self._volume_render_gradcheck_lerp(rays, return_raylen=return_raylen)}
 
@@ -2336,7 +2527,7 @@ class SparseGrid(nn.Module):
         :return: (N, 3), predicted RGB
         """
 
-        if self.backend == 'sdf' or self.backend == 'plane':
+        if self.surface_type in ['sdf', 'plane']:
             raise NotImplementedError
         assert (
             _C is not None and self.sh_data.is_cuda
@@ -2436,12 +2627,10 @@ class SparseGrid(nn.Module):
 
         :return: (N,)
         """
-        if self.backend == 'sdf':
-            out = self._sdf_render_gradcheck_lerp(rays, return_depth=True)
+        if self.surface_type in ['sdf', 'plane']:
+            out = self._surface_render_gradcheck_lerp(rays, return_depth=True)
             return out['depth']
-        elif self.backend == 'plane':
-            out = self._plane_render_gradcheck_lerp(rays, return_depth=True, return_outside_loss=False)
-            return out['depth']
+
         if sigma_thresh is None:
             return _C.volume_render_expected_term(
                     self._to_cpp(),
@@ -2585,10 +2774,8 @@ class SparseGrid(nn.Module):
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
             self.density_data.grad = None
-            if self.backend == 'sdf':
-                self.sdf_data.grad = None
-            elif self.backend == 'plane':
-                self.plane_data.grad = None
+            if self.surface_type in ['sdf', 'plane']:
+                self.surface_data.grad = None
             self.sh_data.grad = None
             self.sparse_grad_indexer = None
             self.sparse_sh_grad_indexer = None
@@ -2675,10 +2862,8 @@ class SparseGrid(nn.Module):
 
             sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
             del self.density_data
-            if self.backend == 'sdf':
-                del self.sdf_data
-            elif self.backend == 'plane':
-                del self.plane_sdf_data
+            if self.surface_type in ['sdf', 'plane']:
+                del self.surface_data
             del self.sh_data
             del all_sample_vals_sh
 
@@ -2703,7 +2888,7 @@ class SparseGrid(nn.Module):
             print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
             print('links', init_links.shape, init_links.dtype)
             self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
-            if self.backend == 'sdf' or self.backend == 'plane':
+            if self.surface_type in ['sdf', 'plane']:
                 raise NotImplementedError
 
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
@@ -2825,10 +3010,8 @@ class SparseGrid(nn.Module):
             "sh_data":self.sh_data.data.cpu().numpy().astype(np.float16),
             "step_id": step_id
         }
-        if self.backend == 'sdf':
-            data['sdf_data'] = self.sdf_data.data.cpu().numpy()
-        elif self.backend == 'plane':
-            data['plane_data'] = self.plane_data.data.cpu().numpy()
+        if self.surface_type in ['sdf', 'plane']:
+            data['surface_data'] = self.surface_data.data.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -2840,7 +3023,7 @@ class SparseGrid(nn.Module):
             data['background_links'] = self.background_links.cpu().numpy()
             data['background_data'] = self.background_data.data.cpu().numpy()
         data['basis_type'] = self.basis_type
-        data['backend'] = self.backend
+        data['surface_type'] = self.surface_type
 
         save_fn(
             path,
@@ -2848,7 +3031,7 @@ class SparseGrid(nn.Module):
         )
 
     def save_sdf(self, path: str = './sdf_grid.npy'):
-        assert self.backend == 'sdf', 'onlt supported for sdf backend!'
+        assert self.surface_type == 'sdf', 'onlt supported for sdf surface_type!'
 
         sdf_voxel = {
             'sdf_data': self.sdf_data.data.cpu().numpy(),
@@ -2872,11 +3055,9 @@ class SparseGrid(nn.Module):
         else:
             sh_data = z.f.sh_data
             density_data = z.f.density_data
-            backend = z.f.backend.item()
-            if backend == 'sdf':
-                sdf_data = z.f.sdf_data
-            elif backend == 'plane':
-                plane_data = z.f.plane_data
+            surface_type = z.f.surface_type.item()
+            if surface_type in ['sdf', 'plane']:
+                surface_data = z.f.surface_data
 
         if 'background_data' in z:
             background_data = z['background_data']
@@ -2899,7 +3080,7 @@ class SparseGrid(nn.Module):
             mlp_posenc_size=z['mlp_posenc_size'].item() if 'mlp_posenc_size' in z else 0,
             mlp_width=z['mlp_width'].item() if 'mlp_width' in z else 16,
             background_nlayers=0,
-            backend=backend
+            surface_type=surface_type
         )
         if "step_id" in z.keys():
             grid.step_id = z.f.step_id.item()
@@ -2907,20 +3088,15 @@ class SparseGrid(nn.Module):
             sh_data = sh_data.astype(np.float32)
         if density_data.dtype != np.float32:
             density_data = density_data.astype(np.float32)
-        if backend == 'sdf' and sdf_data.dtype != np.float32:
-            sdf_data = sdf_data.astype(np.float32)
-        elif backend == 'plane' and plane_data.dtype != np.float32:
-            plane_data = plane_data.astype(np.float32)
+        if surface_type in ['sdf', 'plane'] and surface_data.dtype != np.float32:
+            surface_data = surface_data.astype(np.float32)
         sh_data = torch.from_numpy(sh_data).to(device=device)
         density_data = torch.from_numpy(density_data).to(device=device)
         grid.sh_data = nn.Parameter(sh_data)
         grid.density_data = nn.Parameter(density_data)
-        if backend == 'sdf':
-            sdf_data = torch.from_numpy(sdf_data).to(device=device)
-            grid.sdf_data = nn.Parameter(sdf_data)
-        if backend == 'plane':
-            plane_data = torch.from_numpy(plane_data).to(device=device)
-            grid.plane_data = nn.Parameter(plane_data)
+        if surface_type in ['sdf', 'plane']:
+            surface_data = torch.from_numpy(surface_data).to(device=device)
+            grid.surface_data = nn.Parameter(surface_data)
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.sh_data.size(0)
 
@@ -2997,7 +3173,7 @@ class SparseGrid(nn.Module):
 
         t[index, :-1] = self.sh_data.data.to(device=device)
         t[index, -1:] = self.density_data.data.to(device=device)
-        if self.backend == 'sdf':
+        if self.surface_type in ['sdf', 'plane']:
             raise NotImplementedError
         return t
 
@@ -3015,7 +3191,7 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for total variation"
         assert not logalpha, "No longer supported"
 
-        if self.backend == 'sdf' or self.backend == 'plane':
+        if self.surface_type in ['sdf', 'plane']:
             raise NotImplementedError
 
         return _TotalVariationFunction.apply(
@@ -3070,7 +3246,7 @@ class SparseGrid(nn.Module):
         [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
         """
-        if self.backend == 'sdf' or self.backend == 'plane':
+        if self.surface_type in ['sdf', 'plane']:
             raise NotImplementedError
 
         assert (
@@ -3346,30 +3522,29 @@ class SparseGrid(nn.Module):
         """
         Execute RMSprop or sgd step on density
         """
-        assert (
-            _C is not None
-        ), "CUDA extension is currently required for optimizers"
-
-        if self.backend == 'sdf':
-            geo_data = self.sdf_data
-        elif self.backend == 'plane':
-            geo_data = self.plane_data
+        if self.surface_type in ['sdf', 'plane']:
+            surface_data = self.surface_data
         else:
             # No geometry data used!
             return
+
+        assert (
+            _C is not None and surface_data.is_cuda
+        ), "CUDA extension is currently required for optimizers"
+
 
         indexer = self._maybe_convert_sparse_grad_indexer()
         if optim == 'rmsprop':
             if (
                 self.geo_rms is None
-                or self.geo_rms.shape != geo_data.shape
+                or self.geo_rms.shape != surface_data.shape
             ):
                 del self.geo_rms
-                self.geo_rms = torch.zeros_like(geo_data.data) # FIXME init?
+                self.geo_rms = torch.zeros_like(surface_data.data) # FIXME init?
             _C.rmsprop_step(
-                geo_data.data,
+                surface_data.data,
                 self.geo_rms,
-                geo_data.grad,
+                surface_data.grad,
                 indexer,
                 beta,
                 lr,
@@ -3379,8 +3554,8 @@ class SparseGrid(nn.Module):
             )
         elif optim == 'sgd':
             _C.sgd_step(
-                geo_data.data,
-                geo_data.grad,
+                surface_data.data,
+                surface_data.grad,
                 indexer,
                 lr,
                 lr
@@ -3518,10 +3693,8 @@ class SparseGrid(nn.Module):
         """
         gspec = _C.SparseGridSpec()
         gspec.density_data = self.density_data
-        if self.backend == 'sdf':
-            gspec.sdf_data = self.sdf_data
-        elif self.backend == 'plane':
-            gspec.plane_data = self.plane_data
+        if self.surface_type in ['sdf', 'plane']:
+            gspec.surface_data = self.surface_data
         gspec.sh_data = self.sh_data
         gspec.links = self.links
         if grid_coords:

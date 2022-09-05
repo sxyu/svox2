@@ -55,18 +55,10 @@
             "justMyCode": false
         },
         {
-            "name": "test sdf py",
+            "name": "test surface py",
             "type": "python",
             "request": "launch",
-            "program": "test/test_render_gradcheck_sdf.py",
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "test plane py",
-            "type": "python",
-            "request": "launch",
-            "program": "test/test_render_gradcheck_plane.py",
+            "program": "test/test_render_gradcheck_surface.py",
             "console": "integratedTerminal",
             "justMyCode": false
         },
@@ -79,7 +71,7 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "-t", "ckpt/sdf_lego_sphere_16_outside",
+                "-t", "ckpt/sdf_debug",
                 "../data/nerf_synthetic/lego",
                 "-c", "configs/sdf_syn.yaml"
             ]

@@ -16,9 +16,10 @@ torch.random.manual_seed(2)
 # torch.autograd.set_detect_anomaly(True)
 
 device = 'cuda:0'
+backend = 'sdf'
 dtype = torch.float32
 grid = svox2.SparseGrid(
-                     reso=8,
+                     reso=256,
                      center=[0.0, 0.0, 0.0],
                      radius=[1.0, 1.0, 1.0],
                      basis_dim=9,
@@ -26,9 +27,9 @@ grid = svox2.SparseGrid(
                      device=device,
                      background_nlayers=0,
                      basis_type=svox2.BASIS_TYPE_SH,
-                     backend="sdf",
-                     geometry_init='sphere')
-grid.opt.backend = 'sdf'
+                     surface_type=backend,
+                     surface_init='sphere')
+grid.opt.backend = backend
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
 grid.opt.background_brightness = 1.0
@@ -76,7 +77,8 @@ rgb_gt = torch.zeros((origins.size(0), 3), device=device, dtype=dtype)
 #  sampt = grid.volume_render(grid, origins, dirs, use_kernel=False)
 
 with Timing("ours"):
-    samps = grid.volume_render(rays, use_kernel=False)
+    out = grid.volume_render(rays, use_kernel=False, allow_outside=False, return_outside_loss=False)
+    samps = out['rgb']
 s = F.mse_loss(samps, rgb_gt)
 
 print(s)
@@ -85,10 +87,10 @@ with Timing("ours_backward"):
     s.backward()
 grid_sh_grad_s = grid.sh_data.grad.clone().cpu()
 grid_density_grad_s = grid.density_data.grad.clone().cpu()
-grid_sdf_grad_s = grid.sdf_data.grad.clone().cpu()
+grid_surface_grad_s = grid.surface_data.grad.clone().cpu()
 grid.sh_data.grad = None
 grid.density_data.grad = None
-grid.sdf_data.grad = None
+grid.surface_data.grad = None
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
     grid_basis_grad_s = grid.basis_data.grad.clone().cpu()
     grid.basis_data.grad = None
@@ -98,13 +100,14 @@ if grid.use_background:
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
-        sampt = grid.volume_render(rays, use_kernel=False)
+        out = grid.volume_render(rays, use_kernel=False, allow_outside=False, return_outside_loss=False)
+        sampt = out['rgb']
     s = F.mse_loss(sampt, rgb_gt)
     with Timing("torch_backward"):
         s.backward()
     grid_sh_grad_t = grid.sh_data.grad.clone().cpu() if grid.sh_data.grad is not None else torch.zeros_like(grid_sh_grad_s)
     grid_density_grad_t = grid.density_data.grad.clone().cpu() if grid.density_data.grad is not None else torch.zeros_like(grid_density_grad_s)
-    grid_sdf_grad_t = grid.sdf_data.grad.clone().cpu() if grid.sdf_data.grad is not None else torch.zeros_like(grid_sdf_grad_s)
+    grid_surface_grad_t = grid.surface_data.grad.clone().cpu() if grid.surface_data.grad is not None else torch.zeros_like(grid_surface_grad_s)
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         grid_basis_grad_t = grid.basis_data.grad.clone().cpu()
     if grid.use_background:
@@ -112,7 +115,7 @@ if ENABLE_TORCH_CHECK:
 
     E = torch.abs(grid_sh_grad_s-grid_sh_grad_t)
     Ed = torch.abs(grid_density_grad_s-grid_density_grad_t)
-    Esdf = torch.abs(grid_sdf_grad_s-grid_sdf_grad_t)
+    Esurface = torch.abs(grid_surface_grad_s-grid_surface_grad_t)
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         Eb = torch.abs(grid_basis_grad_s-grid_basis_grad_t)
     if grid.use_background:
@@ -122,8 +125,8 @@ if ENABLE_TORCH_CHECK:
     print(' mean\n', E.mean())
     print('err_density_grad\n', Ed.max())
     print(' mean\n', Ed.mean())
-    print('err_sdf_grad\n', Esdf.max())
-    print(' mean\n', Esdf.mean())
+    print('err_surface_grad\n', Esurface.max())
+    print(' mean\n', Esurface.mean())
     if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
         print('err_basis_grad\n', Eb.max())
         print(' mean\n', Eb.mean())

@@ -1,8 +1,8 @@
 nokernel = True
-renderer_backend = "sdf"
+surface_type = 'sdf'
 reso = [[64,64,64]]
 init_sigma = 0.01
-geometry_init = "sphere"
+surface_init = "sphere"
 nosphereinit = True
 
 upsamp_every = 1e10

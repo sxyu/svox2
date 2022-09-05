@@ -1,7 +1,7 @@
 #/bin/bash
 
 
-EXP_NAME="plane_lego_256_th_sphere"
+EXP_NAME="plane_lego_256_th_octree"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/plane_syn.yaml"
 CKPT_DIR=ckpt/$EXP_NAME

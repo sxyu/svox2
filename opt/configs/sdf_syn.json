@@ -1,9 +1,9 @@
 {
     "nokernel": true,
-    "renderer_backend": "sdf",
+    "surface_type": "sdf",
     "reso": "[[64, 64, 64]]",
     "init_sigma": 0.001,
-    "geometry_init": "sphere",
+    "surface_init": "sphere",
     "nosphereinit": true,
 
     "upsamp_every": 1e20,

@@ -79,8 +79,12 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          default=1.0,
                          help="Brightness of the infinite background")
     group.add_argument('--renderer_backend', '-B',
-                         choices=['cuvol', 'svox1', 'nvol', 'sdf', 'plane'],
+                         choices=['cuvol', 'svox1', 'nvol'],
                          default='sdf',
+                         help="Renderer backend")
+    group.add_argument('--surface_type',
+                         choices=['sdf', 'plane'],
+                         default=None,
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',
                          type=float,
@@ -394,7 +398,7 @@ def setup_train_conf():
     group.add_argument('--load_ckpt', action='store_true', default=False,
                         help='resume training from ckpt in the given path if exists')
 
-    group.add_argument('--geometry_init', type=str, default=None)
+    group.add_argument('--surface_init', type=str, default=None)
 
     args = parser.parse_args()
     # maybe_merge_config_file(args)
