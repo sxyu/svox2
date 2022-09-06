@@ -231,13 +231,13 @@ def setup_train_conf():
     group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
 
-    group.add_argument('--geo_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
-    group.add_argument('--lr_geo', type=float, default=3e1, help='SGD/rmsprop lr for geometry')
-    group.add_argument('--lr_geo_final', type=float, default=5e-2)
-    group.add_argument('--lr_geo_decay_steps', type=lambda x: int(float(x)), default=250000)
-    group.add_argument('--lr_geo_delay_steps', type=lambda x: int(float(x)), default=15000,
+    group.add_argument('--surface_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Surface optimizer")
+    group.add_argument('--lr_surface', type=float, default=3e1, help='SGD/rmsprop lr for surface')
+    group.add_argument('--lr_surface_final', type=float, default=5e-2)
+    group.add_argument('--lr_surface_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_surface_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
-    group.add_argument('--lr_geo_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+    group.add_argument('--lr_surface_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
 
     group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
@@ -294,7 +294,7 @@ def setup_train_conf():
                     help='save every x iterations')
     group.add_argument('--eval_every', type=lambda x: int(float(x)), default=1,
                     help='evaluate every x epochs')
-    group.add_argument('--eval_every_iter', type=lambda x: int(float(x)), default=100,
+    group.add_argument('--eval_every_iter', type=lambda x: int(float(x)), default=10000,
                     help='evaluate every x iterations')
 
     group.add_argument('--init_sigma', type=float,

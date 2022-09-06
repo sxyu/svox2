@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "train_python",
+            "name": "train py",
             "type": "python",
             "request": "launch",
             "program": "opt.py",
@@ -15,7 +15,7 @@
             "args": [
                 "-t", "ckpt/debug",
                 "../data/nerf_synthetic/lego",
-                "-c", "configs/syn.json"
+                "-c", "configs/syn.yaml"
             ]
         },
         {

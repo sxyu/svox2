@@ -545,6 +545,7 @@ class SparseGrid(nn.Module):
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
 
+        surface_data = None
         if surface_type == 'sdf':
             # surface_init = None
             if surface_init == 'sphere' or surface_init is None:
@@ -637,7 +638,7 @@ class SparseGrid(nn.Module):
                 surface_data[links.long(), 3] = -torch.sum(coords.to(device) * surface_data[links.long(), :3], axis=-1)
 
             else:
-                raise NotImplementedError(f'Geometry initialization [{surface_init}] is not supported for grid [{surface_type}]')
+                raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
         elif surface_type == 'udf':
             # unsigned distance field with fixed level sets
             if surface_init == 'sphere' or surface_init is None:
@@ -654,18 +655,18 @@ class SparseGrid(nn.Module):
                 surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])]
             
             else:
-                raise NotImplementedError(f'Geometry initialization [{surface_init}] is not supported for grid [{surface_type}]')
+                raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
 
             self.level_sets = level_sets
-
-        self.surface_data = nn.Parameter(surface_data)
+        if surface_data is not None:
+            self.surface_data = nn.Parameter(surface_data)
 
         self.opt = RenderOptions() # set up outside of initializer
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_background_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
-        self.geo_rms: Optional[torch.Tensor] = None
+        self.surface_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
         self.background_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
@@ -2597,7 +2598,7 @@ class SparseGrid(nn.Module):
             basis_data.backward(grad_basis)
 
         self.sparse_sh_grad_indexer = self.sparse_grad_indexer.clone()
-        return rgb_out
+        return {'rgb': rgb_out}
 
 
     def volume_render_image(
@@ -3541,7 +3542,7 @@ class SparseGrid(nn.Module):
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
 
-    def optim_geo_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+    def optim_surface_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
                              optim : str='rmsprop'):
         """
         Execute RMSprop or sgd step on density
@@ -3549,7 +3550,7 @@ class SparseGrid(nn.Module):
         if self.surface_type in ['sdf', 'plane', 'udf']:
             surface_data = self.surface_data
         else:
-            # No geometry data used!
+            # No surface data used!
             return
 
         assert (
@@ -3560,14 +3561,14 @@ class SparseGrid(nn.Module):
         indexer = self._maybe_convert_sparse_grad_indexer()
         if optim == 'rmsprop':
             if (
-                self.geo_rms is None
-                or self.geo_rms.shape != surface_data.shape
+                self.surface_rms is None
+                or self.surface_rms.shape != surface_data.shape
             ):
-                del self.geo_rms
-                self.geo_rms = torch.zeros_like(surface_data.data) # FIXME init?
+                del self.surface_rms
+                self.surface_rms = torch.zeros_like(surface_data.data) # FIXME init?
             _C.rmsprop_step(
                 surface_data.data,
-                self.geo_rms,
+                self.surface_rms,
                 surface_data.grad,
                 indexer,
                 beta,

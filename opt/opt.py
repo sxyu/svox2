@@ -182,8 +182,8 @@ ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
-lr_geo_func = get_expon_lr_func(args.lr_geo, args.lr_geo_final, args.lr_geo_delay_steps,
-                                  args.lr_geo_delay_mult, args.lr_geo_decay_steps)
+lr_surface_func = get_expon_lr_func(args.lr_surface, args.lr_surface_final, args.lr_surface_delay_steps,
+                                  args.lr_surface_delay_mult, args.lr_surface_decay_steps)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_basis_func = get_expon_lr_func(args.lr_basis, args.lr_basis_final, args.lr_basis_delay_steps,
@@ -193,7 +193,7 @@ lr_sigma_bg_func = get_expon_lr_func(args.lr_sigma_bg, args.lr_sigma_bg_final, a
 lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, args.lr_color_bg_delay_steps,
                                args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
 lr_sigma_factor = 1.0
-lr_geo_factor = 1.0
+lr_surface_factor = 1.0
 lr_sh_factor = 1.0
 lr_basis_factor = 1.0
 
@@ -367,14 +367,14 @@ while True:
             if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
                 grid.density_data.data[:] = args.init_sigma
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
-            lr_geo = lr_geo_func(gstep_id) * lr_geo_factor
+            lr_surface = lr_surface_func(gstep_id) * lr_surface_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             lr_basis = lr_basis_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             lr_sigma_bg = lr_sigma_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             lr_color_bg = lr_color_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             if not args.lr_decay:
                 lr_sigma = args.lr_sigma * lr_sigma_factor
-                lr_geo = args.lr_geo * lr_geo_factor
+                lr_surface = args.lr_surface * lr_surface_factor
                 lr_sh = args.lr_sh * lr_sh_factor
                 lr_basis = args.lr_basis * lr_basis_factor
 
@@ -436,7 +436,7 @@ while True:
                 #      tv_basis = grid.tv_basis() #  summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
-                summary_writer.add_scalar("lr_geo", lr_geo, global_step=gstep_id)
+                summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
                 if grid.use_background:
@@ -498,17 +498,12 @@ while True:
 
             if not USE_KERNEL:
                 loss = mse
-
-                if grid.surface_type == 'plane':
-                    # TODO add outside loss to encourage the plane to stay within its voxel
-                    pass
-
                 loss.backward()
 
             # Manual SGD/rmsprop step
             if gstep_id >= args.lr_fg_begin_step:
                 grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
-                grid.optim_geo_step(lr_geo, beta=args.rms_beta, optim=args.geo_optim)
+                grid.optim_surface_step(lr_surface, beta=args.rms_beta, optim=args.surface_optim)
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
                 grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
