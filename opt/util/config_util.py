@@ -80,10 +80,10 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          help="Brightness of the infinite background")
     group.add_argument('--renderer_backend', '-B',
                          choices=['cuvol', 'svox1', 'nvol'],
-                         default='sdf',
+                         default='cuvol',
                          help="Renderer backend")
     group.add_argument('--surface_type',
-                         choices=['sdf', 'plane'],
+                         choices=['sdf', 'plane', 'udf'],
                          default=None,
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',

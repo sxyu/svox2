@@ -77,6 +77,20 @@
             ]
         },
         {
+            "name": "opt udf py",
+            "type": "python",
+            "request": "launch",
+            "program": "opt.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "/home/tw554/plenoxels/opt",
+            "args": [
+                "-t", "ckpt/udf_debug",
+                "../data/nerf_synthetic/lego",
+                "-c", "configs/udf_syn.yaml"
+            ]
+        },
+        {
             "name": "opt plane py",
             "type": "python",
             "request": "launch",
@@ -92,7 +106,7 @@
             ]
         },
         {
-            "name": "render sdf py",
+            "name": "render udf py",
             "type": "python",
             "request": "launch",
             "program": "render_imgs_circle.py",
@@ -100,7 +114,7 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "ckpt/sdf_lego_sphere_8",
+                "ckpt/udf_lego_sphere",
                 "../data/nerf_synthetic/lego"
             ]
         },

@@ -1,6 +1,6 @@
 nokernel = True
 surface_type = 'plane'
-surface_init = "sphere"
+surface_init = 'sphere'
 reso = [[256,256,256]]
 # reso = [[32,32,32]]
 init_sigma = 0.005

@@ -13,10 +13,10 @@ torch.random.manual_seed(2)
 # eq.backward()
 # print(x.grad)
 
-# torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)
 
 device = 'cuda:0'
-backend = 'sdf'
+backend = 'udf'
 dtype = torch.float32
 grid = svox2.SparseGrid(
                      reso=256,
