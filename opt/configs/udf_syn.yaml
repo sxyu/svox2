@@ -16,9 +16,9 @@ lr_sh = 1e-2
 lambda_tv = 0
 lambda_tv_sh = 0
 
-n_iters = 1000
+n_iters = 100
 print_every = 10
-eval_every_iter = 200
+eval_every_iter = 100
 save_every = 5000
 n_eval = 1
 load_ckpt = False
