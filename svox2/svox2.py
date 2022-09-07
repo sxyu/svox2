@@ -1921,6 +1921,7 @@ class SparseGrid(nn.Module):
         VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
         ray_ids = ray_ids[exist_l_mask]
         l = l[exist_l_mask]
+        l_ids = torch.arange(l.shape[0]).to(l.device)
 
         alpha000, rgb000, surface000 = self._fetch_links(links000[exist_l_mask]) # [VEV, ...]
         alpha001, rgb001, surface001 = self._fetch_links(links001[exist_l_mask])
@@ -1962,14 +1963,35 @@ class SparseGrid(nn.Module):
             f0 = c0*(1-ox+lx) + c1*(ox-lx)
 
             if self.surface_type == 'udf':
-                # find closest level set
-                surface_avg = torch.mean(torch.stack( 
-                    [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111]), axis=0)
+                # # find closest level set
+                # surface_avg = torch.mean(torch.stack( 
+                #     [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111]), axis=0)
 
-                lv_dists = torch.abs(surface_avg - self.level_sets)
-                lv_sets = self.level_sets[lv_dists.min(axis=-1).indices]
+                # lv_dists = torch.abs(surface_avg - self.level_sets)
+                # lv_sets = self.level_sets[lv_dists.min(axis=-1).indices]
+
+                # f0 = f0 - lv_sets
+
+                # find the list of possible level sets
+                udfs = torch.stack( 
+                        [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
+                        dim=-1)
+                lv_set_mask = (self.level_sets >= udfs.min(axis=-1).values) & \
+                    (self.level_sets <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
+                lv_sets = self.level_sets[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
+                N_EQS = lv_sets.shape[0] # total number of equations to solve
+                lv_set_bincount = torch.count_nonzero(lv_set_mask,axis=-1)
+
+                ray_ids = torch.repeat_interleave(ray_ids, lv_set_bincount)
+                l_ids = torch.repeat_interleave(l_ids, lv_set_bincount)
+
+                f3 = torch.repeat_interleave(f3, lv_set_bincount)
+                f2 = torch.repeat_interleave(f2, lv_set_bincount)
+                f1 = torch.repeat_interleave(f1, lv_set_bincount)
+                f0 = torch.repeat_interleave(f0, lv_set_bincount)
 
                 f0 = f0 - lv_sets
+
 
             # negative roots are considered no roots and are filtered out later
             ts = torch.ones([f0.numel(), 3]).to(dtype).to(device=dirs.device) * -1 # [VV, 3]
@@ -2092,7 +2114,7 @@ class SparseGrid(nn.Module):
             ts = torch.sort(ts, dim=-1).values
             samples = origins[ray_ids, None, :] + ts[..., None] * dirs[ray_ids, None, :] # [VEV, N_INTERSECT, 3]
             ray_ids = ray_ids[:, None].repeat(1, N_INTERSECT)
-            l_ids = torch.arange(l.shape[0])[:, None].repeat(1, N_INTERSECT)
+            l_ids = l_ids[:, None].repeat(1, N_INTERSECT)
 
             ts = ts.reshape(-1) # [VEV * N_INTERSECT]
             ray_ids = ray_ids.reshape(-1) # [VEV * N_INTERSECT]
