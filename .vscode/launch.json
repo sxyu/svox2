@@ -119,6 +119,20 @@
             ]
         },
         {
+            "name": "debug render udf py",
+            "type": "python",
+            "request": "launch",
+            "program": "debug_render.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "/home/tw554/plenoxels/opt",
+            "args": [
+                "-t", "ckpt/udf_lego_sphere",
+                "../data/nerf_synthetic/lego",
+                "-c", "configs/udf_syn.yaml"
+            ]
+        },
+        {
             "name": "(gdb) Attach",
             "type": "cppdbg",
             "request": "attach",

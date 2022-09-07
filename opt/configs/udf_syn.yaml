@@ -1,6 +1,6 @@
 nokernel = True
 surface_type = 'udf'
-reso = [[256,256,256]]
+reso = [[8,8,8]]
 init_sigma = 0.01
 surface_init = 'sphere'
 nosphereinit = True
@@ -16,11 +16,11 @@ lr_sh = 1e-2
 lambda_tv = 0
 lambda_tv_sh = 0
 
-n_iters = 50000
+n_iters = 1000
 print_every = 10
-eval_every_iter = 5000
+eval_every_iter = 200
 save_every = 5000
 n_eval = 1
 load_ckpt = False
-log_depth_map = True
+log_depth_map = True 
 

@@ -13,7 +13,7 @@
 # DATA_DIR="../data/nerf_synthetic/materials"
 # CONFIG="./configs/syn.json"
 
-EXP_NAME="udf_lego_sphere"
+EXP_NAME="udf_lego_8"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/udf_syn.yaml"
 CKPT_DIR=ckpt/$EXP_NAME

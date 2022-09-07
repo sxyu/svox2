@@ -101,10 +101,11 @@ ckpt_npz = path.join(args.train_dir, 'ckpt.npz')
 if path.isfile(ckpt_npz) and args.load_ckpt:
     print('#####################################################')
     print(f'Resume from ckpt at {ckpt_npz}')
-    print('#####################################################')
     grid = svox2.SparseGrid.load(ckpt_npz, device=device)
     assert args.surface_type == grid.surface_type, "Loaded ckpt incompatible with given configs"
-    gstep_id_base = grid.step_id
+    gstep_id_base = grid.step_id + 1
+    print(f'Starting from step {gstep_id_base}')
+    print('#####################################################')
 else: 
     grid = svox2.SparseGrid(reso=reso_list[reso_id],
                             center=dset.scene_center,
@@ -112,7 +113,6 @@ else:
                             use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
                             basis_dim=args.sh_dim,
                             use_z_order=True,
-                            use_octree=True,
                             device=device,
                             basis_reso=args.basis_reso,
                             basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
@@ -251,7 +251,7 @@ while True:
                 #                    width=100,
                 #                    height=100,
                 #                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, batch_size=10000)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -329,7 +329,7 @@ while True:
                                    width=dset.get_image_size(img_id)[1],
                                    height=dset.get_image_size(img_id)[0],
                                    ndc_coeffs=dset.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, batch_size=10000)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
                 rgb_gt_test = dset.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -360,7 +360,8 @@ while True:
 
     def train_step():
         print('Train step')
-        pbar = tqdm(enumerate(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size)), total=batches_per_epoch)
+        # pbar = tqdm(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size), total=batches_per_epoch, initial=gstep_id_base)
+        pbar = tqdm(enumerate(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size)), total=args.n_iters, initial=gstep_id_base)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
@@ -417,9 +418,9 @@ while True:
                 loss += args.lambda_outside_loss * out['ouside_loss']
                 stats['ouside_loss'] = (args.lambda_outside_loss * out['ouside_loss']).detach().item()
 
-            if (iter_id + 1) % args.print_every == 0:
+            if (gstep_id + 1) % args.print_every == 0:
                 # Print averaged stats
-                pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f}')
+                pbar.set_description(f'epoch {gstep_id // batches_per_epoch} psnr={psnr:.2f}')
                 for stat_name in stats:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
@@ -530,7 +531,7 @@ while True:
             
             if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode and gstep_id > 0:
                 print('Saving', ckpt_path)
-                grid.save(ckpt_path)
+                grid.save(ckpt_path, step_id=gstep_id)
 
     train_step()
     gc.collect()
@@ -538,10 +539,10 @@ while True:
 
     #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
     # Overwrite prev checkpoints since they are very huge
-    if args.save_every > 0 and (epoch_id + 1) % max(
-            factor, args.save_every) == 0 and not args.tune_mode:
-        print('Saving', ckpt_path)
-        grid.save(ckpt_path)
+    # if args.save_every > 0 and (epoch_id + 1) % max(
+    #         factor, args.save_every) == 0 and not args.tune_mode:
+    #     print('Saving', ckpt_path)
+    #     grid.save(ckpt_path)
 
     if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
         last_upsamp_step = gstep_id_base
@@ -577,13 +578,13 @@ while True:
             dset.gen_rays(factor=factor)
             dset.shuffle_rays()
 
-    if gstep_id_base >= args.n_iters:
-        print('* Final eval and save')
-        # eval_step()
-        global_stop_time = datetime.now()
-        secs = (global_stop_time - global_start_time).total_seconds()
-        timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
-        timings_file.write(f"{secs / 60}\n")
-        if not args.tune_nosave:
-            grid.save(ckpt_path)
-        break
+    # if gstep_id_base >= args.n_iters:
+    #     print('* Final eval and save')
+    #     # eval_step()
+    #     global_stop_time = datetime.now()
+    #     secs = (global_stop_time - global_start_time).total_seconds()
+    #     timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
+    #     timings_file.write(f"{secs / 60}\n")
+    #     if not args.tune_nosave:
+    #         grid.save(ckpt_path)
+    #     break

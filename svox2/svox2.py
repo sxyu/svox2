@@ -2207,7 +2207,7 @@ class SparseGrid(nn.Module):
 
         # TODO check if it makes sense!
         B_weights = B_alpha * torch.cumprod(
-            torch.cat([torch.ones((B_alpha.shape[0], 1)).to(B_alpha.device), 1.-B_alpha + 1e-10], -1), -1
+            torch.cat([torch.ones((B_alpha.shape[0], 1)).to(B_alpha.device), torch.clamp(1.-B_alpha, 1e-7, 1-1e-7)], -1), -1
             )[:, :-1] # [B, MV, 3]
         
         out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
@@ -2605,7 +2605,7 @@ class SparseGrid(nn.Module):
         self, camera: Camera, use_kernel: bool = True, randomize: bool = False,
         batch_size : int = 5000,
         return_raylen: bool=False,
-        # sdf_return_depth: bool=False
+        debug_pixels: list=None, # a list of pixel coords to render, only for debugging
     ):
         """
         Standard volume rendering (entire image version).
@@ -2629,17 +2629,24 @@ class SparseGrid(nn.Module):
         else:
             # Manually generate rays for now
             rays = camera.gen_rays()
-            all_rgb_out = []
-            for batch_start in range(0, camera.height * camera.width, batch_size):
-                rgb_out_part = self.volume_render(rays[batch_start:batch_start+batch_size],
-                                                  use_kernel=use_kernel,
-                                                  randomize=randomize,
-                                                  return_raylen=return_raylen)['rgb']
-                all_rgb_out.append(rgb_out_part)
+            if debug_pixels is None:
+                all_rgb_out = []
+                for batch_start in range(0, camera.height * camera.width, batch_size):
+                    rgb_out_part = self.volume_render(rays[batch_start:batch_start+batch_size],
+                                                    use_kernel=use_kernel,
+                                                    randomize=randomize,
+                                                    return_raylen=return_raylen)['rgb']
+                    all_rgb_out.append(rgb_out_part)
 
-            all_rgb_out = torch.cat(all_rgb_out, dim=0)
-            return all_rgb_out.view(camera.height, camera.width, -1)
-
+                all_rgb_out = torch.cat(all_rgb_out, dim=0)
+                return all_rgb_out.view(camera.height, camera.width, -1)
+            else:
+                ray_ids = debug_pixels[:, 0]  + debug_pixels[:, 1] * camera.width
+                rgb_out_part = self.volume_render(rays[ray_ids],
+                                use_kernel=use_kernel,
+                                randomize=randomize,
+                                return_raylen=return_raylen)['rgb']
+                return rgb_out_part
 
     def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None):
         """
@@ -3100,7 +3107,7 @@ class SparseGrid(nn.Module):
             center=center,
             basis_dim=basis_dim,
             use_z_order=False,
-            device="cpu",
+            device=device,
             basis_type=z['basis_type'].item() if 'basis_type' in z else BASIS_TYPE_SH,
             mlp_posenc_size=z['mlp_posenc_size'].item() if 'mlp_posenc_size' in z else 0,
             mlp_width=z['mlp_width'].item() if 'mlp_width' in z else 16,
