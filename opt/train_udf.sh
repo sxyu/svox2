@@ -1,19 +1,8 @@
 #/bin/bash
 
 
-# EXP_NAME="lego"
-# DATA_DIR="../data/nerf_synthetic/lego"
-# CONFIG="./configs/syn.json"
-
-# EXP_NAME="horns"
-# DATA_DIR="../data/nerf_llff_data/horns"
-# CONFIG="./configs/llff.json"
-
-# EXP_NAME="materials"
-# DATA_DIR="../data/nerf_synthetic/materials"
-# CONFIG="./configs/syn.json"
-
-EXP_NAME="udf_lego_8"
+EXP_NAME="udf_lego_256_var_reg"
+# EXP_NAME="udf_lego_16_mp_ex_lr"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/udf_syn.yaml"
 CKPT_DIR=ckpt/$EXP_NAME

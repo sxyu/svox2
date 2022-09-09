@@ -405,7 +405,14 @@ while True:
 
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, out['rgb'])
-            loss = mse
+
+            if not USE_KERNEL:
+                loss = mse
+                if 'extra_loss' in out:
+                    # for k in out['extra_loss'].keys():
+                    #     loss += out['extra_loss'][k]
+                    loss += args.lambda_udf_var_loss * out['extra_loss'].get('udf_var_loss', 0.)
+                loss.backward()
 
             # Stats
             mse_num : float = mse.detach().item()
@@ -413,10 +420,15 @@ while True:
             stats['mse'] += mse_num
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
+            
+            if 'log_stats' in out:
+                for k in out['log_stats'].keys():
+                    v = out['log_stats'][k]
+                    stats[k] = v + stats[k] if k in stats else v
 
-            if 'outside_loss' in out:
-                loss += args.lambda_outside_loss * out['ouside_loss']
-                stats['ouside_loss'] = (args.lambda_outside_loss * out['ouside_loss']).detach().item()
+            # if 'outside_loss' in out:
+            #     loss += args.lambda_outside_loss * out['ouside_loss']
+            #     stats['ouside_loss'] = (args.lambda_outside_loss * out['ouside_loss']).detach().item()
 
             if (gstep_id + 1) % args.print_every == 0:
                 # Print averaged stats
@@ -425,16 +437,6 @@ while True:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
                     stats[stat_name] = 0.0
-                #  if args.lambda_tv > 0.0:
-                #      with torch.no_grad():
-                #          tv = grid.tv(logalpha=args.tv_logalpha, ndc_coeffs=dset.ndc_coeffs)
-                #      summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
-                #  if args.lambda_tv_sh > 0.0:
-                #      with torch.no_grad():
-                #          tv_sh = grid.tv_color()
-                #      summary_writer.add_scalar("loss_tv_sh", tv_sh, global_step=gstep_id)
-                #  with torch.no_grad():
-                #      tv_basis = grid.tv_basis() #  summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
@@ -465,7 +467,13 @@ while True:
                 grid.inplace_tv_grad(grid.density_data.grad,
                         scaling=args.lambda_tv,
                         sparse_frac=args.tv_sparsity,
-                        logalpha=args.tv_logalpha,
+                        ndc_coeffs=dset.ndc_coeffs,
+                        contiguous=args.tv_contiguous)
+            if args.lambda_tv_surface > 0.0:
+                #  with Timing("tv_inpl"):
+                grid.inplace_tv_surface_grad(grid.surface_data.grad,
+                        scaling=args.lambda_tv_surface,
+                        sparse_frac=args.tv_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
             if args.lambda_tv_sh > 0.0:
@@ -497,9 +505,6 @@ while True:
             #  print('nz density', torch.count_nonzero(grid.sparse_grad_indexer).item(),
             #        ' sh', torch.count_nonzero(grid.sparse_sh_grad_indexer).item())
 
-            if not USE_KERNEL:
-                loss = mse
-                loss.backward()
 
             # Manual SGD/rmsprop step
             if gstep_id >= args.lr_fg_begin_step:

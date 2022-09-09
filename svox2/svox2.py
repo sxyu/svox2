@@ -653,6 +653,9 @@ class SparseGrid(nn.Module):
 
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
                 surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])]
+
+                # # invert softplus activation
+                # surface_data = surface_data + torch.log(-torch.expm1(-surface_data))
             
             else:
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
@@ -1935,6 +1938,17 @@ class SparseGrid(nn.Module):
 
         ########### Find Ray-Surface Intersections ###########
         if self.surface_type == 'sdf' or self.surface_type == 'udf':
+            if self.surface_type == 'udf':
+                fn = torch.nn.Softplus()
+                surface000 = fn(surface000)
+                surface001 = fn(surface001)
+                surface010 = fn(surface010)
+                surface011 = fn(surface011)
+                surface100 = fn(surface100)
+                surface101 = fn(surface101)
+                surface110 = fn(surface110)
+                surface111 = fn(surface111)
+
             ox, oy, oz = origins[ray_ids].to(dtype).unbind(-1)
             vx, vy, vz = dirs[ray_ids].to(dtype).unbind(-1)
 
@@ -1963,15 +1977,6 @@ class SparseGrid(nn.Module):
             f0 = c0*(1-ox+lx) + c1*(ox-lx)
 
             if self.surface_type == 'udf':
-                # # find closest level set
-                # surface_avg = torch.mean(torch.stack( 
-                #     [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111]), axis=0)
-
-                # lv_dists = torch.abs(surface_avg - self.level_sets)
-                # lv_sets = self.level_sets[lv_dists.min(axis=-1).indices]
-
-                # f0 = f0 - lv_sets
-
                 # find the list of possible level sets
                 udfs = torch.stack( 
                         [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
@@ -1979,7 +1984,8 @@ class SparseGrid(nn.Module):
                 lv_set_mask = (self.level_sets >= udfs.min(axis=-1).values) & \
                     (self.level_sets <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
                 lv_sets = self.level_sets[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
-                N_EQS = lv_sets.shape[0] # total number of equations to solve
+                N_EQ = lv_sets.shape[0] # total number of equations to solve
+                M_LV = torch.count_nonzero(lv_set_mask, dim=-1).max() # maximum number of level sets in one voxel
                 lv_set_bincount = torch.count_nonzero(lv_set_mask,axis=-1)
 
                 ray_ids = torch.repeat_interleave(ray_ids, lv_set_bincount)
@@ -2327,7 +2333,11 @@ class SparseGrid(nn.Module):
         if self.opt.background_brightness:
             out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
 
-        out = {'rgb': out_rgb}
+        out = {
+            'rgb': out_rgb,
+            'log_stats': {},
+            'extra_loss': {}
+        }
 
         # if return_outside_loss and allow_outside:
         #     # calculate outside loss to encourage the intersection to stay within the voxel
@@ -2349,6 +2359,18 @@ class SparseGrid(nn.Module):
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
 
             out['depth'] = out_depth
+
+        if self.surface_type == 'udf':
+            out['log_stats']['m_lv_sets'] = M_LV
+
+            # caluclate udf_var_loss
+            # this loss is to reduce variance in UDF values in the same voxel
+            N_lv_sets = torch.count_nonzero(lv_set_mask, dim=-1)
+            udf_vars = torch.var(udfs,dim=-1)[:,0]
+            udf_var_loss = torch.mean(torch.clamp_min((N_lv_sets - 1), 0.) * udf_vars)
+            out['extra_loss']['udf_var_loss'] = udf_var_loss
+            out['log_stats']['udf_var_loss'] = udf_var_loss
+
 
         return out
 
@@ -3322,6 +3344,44 @@ class SparseGrid(nn.Module):
                         grad)
         else:
             _C.tv_grad(self.links, self.density_data, 0, 1, scaling,
+                    logalpha, logalpha_delta,
+                    False,
+                    ndc_coeffs[0], ndc_coeffs[1],
+                    grad)
+            self.sparse_grad_indexer : Optional[torch.Tensor] = None
+
+    def inplace_tv_surface_grad(self, grad: torch.Tensor,
+                                scaling: float = 1.0,
+                                sparse_frac: float = 0.01,
+                                logalpha: bool=False, logalpha_delta: float=2.0,
+                                ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
+                                contiguous: bool = True
+                            ):
+        """
+        Add gradient of total variation for sigma as in Neural Volumes
+        [Lombardi et al., ToG 2019]
+        directly into the gradient tensor, multiplied by 'scaling'
+        """
+
+        assert (
+            _C is not None and self.surface_data.is_cuda and grad.is_cuda
+        ), "CUDA extension is currently required for total variation"
+
+        assert not logalpha, "No longer supported"
+        rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+        if rand_cells is not None:
+            if rand_cells.size(0) > 0:
+                _C.tv_grad_sparse(self.links, self.surface_data,
+                        rand_cells,
+                        self._get_sparse_grad_indexer(),
+                        0, 1, scaling,
+                        logalpha, logalpha_delta,
+                        False,
+                        self.opt.last_sample_opaque,
+                        ndc_coeffs[0], ndc_coeffs[1],
+                        grad)
+        else:
+            _C.tv_grad(self.links, self.surface_data, 0, 1, scaling,
                     logalpha, logalpha_delta,
                     False,
                     ndc_coeffs[0], ndc_coeffs[1],
