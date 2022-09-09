@@ -1924,6 +1924,7 @@ class SparseGrid(nn.Module):
         VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
         ray_ids = ray_ids[exist_l_mask]
         l = l[exist_l_mask]
+        lx, ly, lz = l.unbind(-1) 
         l_ids = torch.arange(l.shape[0]).to(l.device)
 
         alpha000, rgb000, surface000 = self._fetch_links(links000[exist_l_mask]) # [VEV, ...]

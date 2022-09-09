@@ -116,6 +116,11 @@ def define_common_args(parser : configargparse.ArgumentParser):
     group.add_argument('--nokernel', action='store_true', default=False,
                         help='do not use cuda kernel to speed up training')
 
+    group.add_argument('--refresh_iter', 
+                        type=int,
+                        default=1,
+                        help='do not use cuda kernel to speed up training')
+
 
 def build_data_options(args):
     """

@@ -360,7 +360,12 @@ while True:
     def train_step():
         print('Train step')
         # pbar = tqdm(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size), total=batches_per_epoch, initial=gstep_id_base)
-        pbar = tqdm(enumerate(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size)), total=args.n_iters, initial=gstep_id_base)
+        pbar = tqdm(
+            enumerate(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size)), 
+            total=args.n_iters, 
+            initial=gstep_id_base, 
+            miniters=args.refresh_iter
+            )
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
