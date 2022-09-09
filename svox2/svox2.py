@@ -3322,8 +3322,8 @@ class SparseGrid(nn.Module):
         [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
         """
-        if self.surface_type in ['sdf', 'plane', 'udf']:
-            raise NotImplementedError
+        # if self.surface_type in ['sdf', 'plane', 'udf']:
+        #     raise NotImplementedError
 
         assert (
             _C is not None and self.density_data.is_cuda and grad.is_cuda
