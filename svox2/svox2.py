@@ -1,6 +1,3 @@
-from ftplib import ftpcp
-from multiprocessing.util import sub_debug
-from tkinter.tix import MAX
 from .defs import *
 from . import utils
 import torch
@@ -1134,11 +1131,20 @@ class SparseGrid(nn.Module):
         if self.use_octree:
             # re-scale and shift camera pos to [-1, +1]
             ray_o = origins / (gsz_cu/2) - 1.
+            # only necessary if grid size is not the same for each axis
             ray_d = dirs / (gsz_cu/2)
+            ray_d = ray_d / torch.norm(ray_d, dim=-1, keepdim=True)
 
             # # FIXME kaolin seems to sort depth in wrong way, work around to solve this
             # ray_o = -1 * ray_o
             # ray_d = -1 * ray_d
+
+            # ugly work arounds to move ray_o outside [-1, +1]
+            ts = (torch.tensor([-1, -1, -1, 1, 1, 1], dtype=ray_o.dtype, device=ray_o.device) - ray_o.repeat([1,2])) /  ray_d.repeat([1,2])
+            near = ts.min(axis=-1).values
+            inside_o_mask = near <= 0.
+            ray_o[inside_o_mask] = ray_o[inside_o_mask] + (near[inside_o_mask]-1e-6)[:, None] * ray_d[inside_o_mask]
+
             
             nugs_ridx, nugs_pidx, _ = \
                 kaolin.render.spc.unbatched_raytrace(
@@ -1919,7 +1925,7 @@ class SparseGrid(nn.Module):
         links111 = self.links[lx + 1, ly + 1, lz + 1]
 
         # mask out voxels that don't exist
-        exist_l_mask = [links != -1 for links in [links000, links001, links010, links011, links100, links101, links110, links111]]
+        exist_l_mask = [links >= 0 for links in [links000, links001, links010, links011, links100, links101, links110, links111]]
         exist_l_mask = torch.stack(exist_l_mask).T.all(axis=-1) # [VV]
         VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
         ray_ids = ray_ids[exist_l_mask]
@@ -1979,14 +1985,17 @@ class SparseGrid(nn.Module):
 
             if self.surface_type == 'udf':
                 # find the list of possible level sets
-                udfs = torch.stack( 
+                udfs = torch.stack(
                         [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
                         dim=-1)
                 lv_set_mask = (self.level_sets >= udfs.min(axis=-1).values) & \
                     (self.level_sets <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
                 lv_sets = self.level_sets[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
                 N_EQ = lv_sets.shape[0] # total number of equations to solve
-                M_LV = torch.count_nonzero(lv_set_mask, dim=-1).max() # maximum number of level sets in one voxel
+                if lv_set_mask.numel() == 0:
+                    M_LV = 0
+                else:
+                    M_LV = torch.count_nonzero(lv_set_mask, dim=-1).max() # maximum number of level sets in one voxel
                 lv_set_bincount = torch.count_nonzero(lv_set_mask,axis=-1)
 
                 ray_ids = torch.repeat_interleave(ray_ids, lv_set_bincount)
@@ -2005,7 +2014,7 @@ class SparseGrid(nn.Module):
 
             # solve cubic equations
             numerical_solution = False
-            if numerical_solution: 
+            if numerical_solution:
                 # TODO use Aesara instead https://aesara.readthedocs.io/en/latest/
                 print('using slow numerical solver for cubic functions!')
                 print('no gradient is enabled at the moment!')
@@ -3123,7 +3132,7 @@ class SparseGrid(nn.Module):
         """
         Load from path
         """
-        z = np.load(path)
+        z = np.load(path, allow_pickle=True)
         if "data" in z.keys():
             # Compatibility
             all_data = z.f.data

@@ -215,7 +215,7 @@ while True:
 
             # Standard set
             # N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
-            N_IMGS_TO_EVAL = args.n_eval
+            N_IMGS_TO_EVAL = args.n_eval_test
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
@@ -315,8 +315,14 @@ while True:
             print('eval stats:', stats_test)
 
             # log train imgs
-            img_eval_interval = dset.n_images // N_IMGS_TO_EVAL
-            img_ids = range(0, dset.n_images, img_eval_interval)
+            if args.n_eval_train > 0:
+                N_IMGS_TO_EVAL = args.n_eval_test
+                N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
+                img_eval_interval = dset.n_images // N_IMGS_TO_EVAL
+                img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
+                img_ids = range(0, dset.n_images, img_eval_interval)
+            else:
+                img_ids = []
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset.c2w[img_id].to(device=device)
                 cam = svox2.Camera(c2w,
@@ -363,7 +369,8 @@ while True:
             enumerate(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size)), 
             total=args.n_iters, 
             initial=gstep_id_base, 
-            miniters=args.refresh_iter
+            miniters=1000,
+            # miniters=args.refresh_iter,
             )
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:

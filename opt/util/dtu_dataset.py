@@ -71,7 +71,8 @@ class DTUDataset(DatasetBase):
             scene_scale = 1.0
         if scale is None:
             scale = 0.25
-
+        
+        self.scene_radius = [1., 1., 1.]
         self.device = device
         self.permutation = permutation
         self.epoch_size = epoch_size
@@ -145,7 +146,7 @@ class DTUDataset(DatasetBase):
         self.intrins_full : Intrin = Intrin(intrinsics_all[:, 0, 0], 
                                             intrinsics_all[:, 1, 1],
                                             intrinsics_all[:, 0, 2],
-                                            intrinsics_all[:, 1, 2])
+                                            intrinsics_all[:, 1, 2]).scale(scale)
 
         self.split = split
         self.scene_scale = scene_scale

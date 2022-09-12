@@ -127,7 +127,7 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "-t", "ckpt/udf_lego_sphere",
+                "-t", "ckpt/udf_debug",
                 "../data/nerf_synthetic/lego",
                 "-c", "configs/udf_syn.yaml"
             ]
