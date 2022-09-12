@@ -2,6 +2,7 @@ from .nerf_dataset import NeRFDataset
 from .llff_dataset import LLFFDataset
 from .nsvf_dataset import NSVFDataset
 from .co3d_dataset import CO3DDataset
+from .dtu_dataset import DTUDataset
 from os import path
 
 def auto_dataset(root : str, *args, **kwargs):
@@ -15,6 +16,8 @@ def auto_dataset(root : str, *args, **kwargs):
          path.isfile(path.join(root, 'transforms_train.json')):
         print("Detected NeRF (Blender) dataset")
         return NeRFDataset(root, *args, **kwargs)
+    elif path.isfile(path.join(root, 'cameras_large.npz')):
+        return DTUDataset(root, *args, **kwargs)
     else:
         print("Defaulting to extended NSVF dataset")
         return NSVFDataset(root, *args, **kwargs)
@@ -24,5 +27,6 @@ datasets = {
     'llff': LLFFDataset,
     'nsvf': NSVFDataset,
     'co3d': CO3DDataset,
-    'auto': auto_dataset
+    'auto': auto_dataset,
+    'dtu': DTUDataset,
 }

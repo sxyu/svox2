@@ -166,7 +166,6 @@ config_util.setup_render_opts(grid.opt, args)
 print('Render options', grid.opt)
 
 
-
 resample_cameras = [
         svox2.Camera(c2w.to(device=device),
                      dset.intrins.get('fx', i),

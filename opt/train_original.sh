@@ -1,7 +1,7 @@
 #/bin/bash
 
 
-EXP_NAME="lego_no_tv"
+EXP_NAME="lego"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/syn.yaml"
 CKPT_DIR=ckpt/$EXP_NAME

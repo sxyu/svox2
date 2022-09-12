@@ -86,7 +86,7 @@
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
                 "-t", "ckpt/udf_debug",
-                "../data/nerf_synthetic/lego",
+                "../data/dtu/dtu_scan63",
                 "-c", "configs/udf_syn.yaml"
             ]
         },
