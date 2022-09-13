@@ -636,8 +636,9 @@ class SparseGrid(nn.Module):
 
             else:
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
-        elif surface_type == 'udf':
+        elif surface_type == 'udf' or surface_type == 'udf_alpha':
             # unsigned distance field with fixed level sets
+            # udf_alpha: each level set has an alpha, instead of each vertex
             if surface_init == 'sphere' or surface_init is None:
                 surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
@@ -658,6 +659,11 @@ class SparseGrid(nn.Module):
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
 
             self.level_sets = level_sets
+            if surface_type == 'udf_alpha':
+                self.density_data = nn.Parameter(
+                    torch.zeros(level_sets.numel(), 1, dtype=torch.float32, device=device)
+                )
+            
         if surface_data is not None:
             self.surface_data = nn.Parameter(surface_data)
 
@@ -721,10 +727,11 @@ class SparseGrid(nn.Module):
         )
         mask = links >= 0
         idxs = links[mask].long()
-        results_sigma[mask] = self.density_data[idxs]
+        if self.surface_type not in ['udf_alpha']:
+            results_sigma[mask] = self.density_data[idxs]
         results_sh[mask] = self.sh_data[idxs]
 
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             results_surface = torch.zeros(
                 (links.size(0), self.surface_data.shape[-1]), device=links.device, dtype=torch.float32
             )
@@ -755,7 +762,7 @@ class SparseGrid(nn.Module):
 
         :return: (density, color)
         """
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             raise NotImplementedError
 
         if use_kernel and self.links.is_cuda and _C is not None:
@@ -1830,41 +1837,41 @@ class SparseGrid(nn.Module):
         gradcheck version for surface rendering
         """
         
-        # debug helpers:
-        def pos():
-            return origins + t[:, None] * dirs
-        def next_pos():
-            return origins + find_next_intersection(t, origins, dirs)[:, None] * dirs
-        def global_id_to_current_id(global_id):
-            return torch.arange(good_indices.shape[0])[good_indices == global_id]
-        def save_rays():
-            cache = {
-                'origins': origins_ini.cpu().detach().numpy(),
-                'dirs': dirs_ini.cpu().detach().numpy()
-            }
-            np.save('rays.npy', cache)
-        def index(tensor, ele):
-            return torch.arange(tensor.shape[0])[tensor==ele]
-        def save_vis_cache():
-            '''
-            Save parameters for visualization
-            '''
-            cache = {
-                'origins': origins.cpu().detach().numpy(),
-                'dirs': dirs.cpu().detach().numpy(),
-                'sdf000': sdf000.cpu().detach().numpy(),
-                'sdf001': sdf001.cpu().detach().numpy(),
-                'sdf010': sdf010.cpu().detach().numpy(),
-                'sdf011': sdf011.cpu().detach().numpy(),
-                'sdf100': sdf100.cpu().detach().numpy(),
-                'sdf101': sdf101.cpu().detach().numpy(),
-                'sdf110': sdf110.cpu().detach().numpy(),
-                'sdf111': sdf111.cpu().detach().numpy(),
-                'l': l.cpu().detach().numpy(),
-                't': t.cpu().detach().numpy(),
-            }
+        # # debug helpers:
+        # def pos():
+        #     return origins + t[:, None] * dirs
+        # def next_pos():
+        #     return origins + find_next_intersection(t, origins, dirs)[:, None] * dirs
+        # def global_id_to_current_id(global_id):
+        #     return torch.arange(good_indices.shape[0])[good_indices == global_id]
+        # def save_rays():
+        #     cache = {
+        #         'origins': origins_ini.cpu().detach().numpy(),
+        #         'dirs': dirs_ini.cpu().detach().numpy()
+        #     }
+        #     np.save('rays.npy', cache)
+        # def index(tensor, ele):
+        #     return torch.arange(tensor.shape[0])[tensor==ele]
+        # def save_vis_cache():
+        #     '''
+        #     Save parameters for visualization
+        #     '''
+        #     cache = {
+        #         'origins': origins.cpu().detach().numpy(),
+        #         'dirs': dirs.cpu().detach().numpy(),
+        #         'sdf000': sdf000.cpu().detach().numpy(),
+        #         'sdf001': sdf001.cpu().detach().numpy(),
+        #         'sdf010': sdf010.cpu().detach().numpy(),
+        #         'sdf011': sdf011.cpu().detach().numpy(),
+        #         'sdf100': sdf100.cpu().detach().numpy(),
+        #         'sdf101': sdf101.cpu().detach().numpy(),
+        #         'sdf110': sdf110.cpu().detach().numpy(),
+        #         'sdf111': sdf111.cpu().detach().numpy(),
+        #         'l': l.cpu().detach().numpy(),
+        #         't': t.cpu().detach().numpy(),
+        #     }
 
-            np.save('vis_cache.npy', cache)
+        #     np.save('vis_cache.npy', cache)
         
         ########### Preprocess Camera Rays ###########
         
@@ -1944,8 +1951,8 @@ class SparseGrid(nn.Module):
 
 
         ########### Find Ray-Surface Intersections ###########
-        if self.surface_type == 'sdf' or self.surface_type == 'udf':
-            if self.surface_type == 'udf':
+        if self.surface_type == 'sdf' or self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
+            if self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
                 fn = torch.nn.Softplus()
                 surface000 = fn(surface000)
                 surface001 = fn(surface001)
@@ -1983,7 +1990,7 @@ class SparseGrid(nn.Module):
             f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
             f0 = c0*(1-ox+lx) + c1*(ox-lx)
 
-            if self.surface_type == 'udf':
+            if self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
                 # find the list of possible level sets
                 udfs = torch.stack(
                         [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
@@ -1991,6 +1998,7 @@ class SparseGrid(nn.Module):
                 lv_set_mask = (self.level_sets >= udfs.min(axis=-1).values) & \
                     (self.level_sets <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
                 lv_sets = self.level_sets[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
+                lv_set_ids = torch.arange(self.level_sets.shape[0], device=udfs.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
                 N_EQ = lv_sets.shape[0] # total number of equations to solve
                 if lv_set_mask.numel() == 0:
                     M_LV = 0
@@ -2131,10 +2139,12 @@ class SparseGrid(nn.Module):
             samples = origins[ray_ids, None, :] + ts[..., None] * dirs[ray_ids, None, :] # [VEV, N_INTERSECT, 3]
             ray_ids = ray_ids[:, None].repeat(1, N_INTERSECT)
             l_ids = l_ids[:, None].repeat(1, N_INTERSECT)
+            lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
 
             ts = ts.reshape(-1) # [VEV * N_INTERSECT]
             ray_ids = ray_ids.reshape(-1) # [VEV * N_INTERSECT]
             l_ids = l_ids.reshape(-1) # [VEV * N_INTERSECT]
+            lv_set_ids = lv_set_ids.reshape(-1) # [VEV * N_INTERSECT]
             samples = samples.reshape(-1, 3) # [VEV * N_INTERSECT, 3]
 
             # filter out roots with negative t
@@ -2152,9 +2162,10 @@ class SparseGrid(nn.Module):
             ts = ts[valid_sample_mask]
             ray_ids = ray_ids[valid_sample_mask]
             l_ids = l_ids[valid_sample_mask]
+            lv_set_ids = lv_set_ids[valid_sample_mask]
             samples = samples[valid_sample_mask, :]
             l = l[l_ids, :]
-            
+                  
         
         elif self.surface_type == 'plane':
             # raise NotImplementedError
@@ -2198,20 +2209,21 @@ class SparseGrid(nn.Module):
 
         ########### Interpolate Alpha & SH ###########
  
-    
-        # TODO only interpolate for valid samples to save computation
         # interpolate opacity
         wa, wb = 1. - (samples - l), (samples - l)
         if allow_outside:
             torch.clamp_(wa, 0., 1.)
             torch.clamp_(wb, 0., 1.)
-        c00 = alpha000[l_ids] * wa[:, 2:] + alpha001[l_ids] * wb[:, 2:]
-        c01 = alpha010[l_ids] * wa[:, 2:] + alpha011[l_ids] * wb[:, 2:]
-        c10 = alpha100[l_ids] * wa[:, 2:] + alpha101[l_ids] * wb[:, 2:]
-        c11 = alpha110[l_ids] * wa[:, 2:] + alpha111[l_ids] * wb[:, 2:]
-        c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-        c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-        _alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+        if self.surface_type == 'udf_alpha':
+            _alpha = self.density_data[lv_set_ids]
+        else:
+            c00 = alpha000[l_ids] * wa[:, 2:] + alpha001[l_ids] * wb[:, 2:]
+            c01 = alpha010[l_ids] * wa[:, 2:] + alpha011[l_ids] * wb[:, 2:]
+            c10 = alpha100[l_ids] * wa[:, 2:] + alpha101[l_ids] * wb[:, 2:]
+            c11 = alpha110[l_ids] * wa[:, 2:] + alpha111[l_ids] * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            _alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
         # post sigmoid activation
         alpha = torch.sigmoid(_alpha)
 
@@ -2370,7 +2382,7 @@ class SparseGrid(nn.Module):
 
             out['depth'] = out_depth
 
-        if self.surface_type == 'udf':
+        if self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
             out['log_stats']['m_lv_sets'] = M_LV
 
             # caluclate udf_var_loss
@@ -2571,7 +2583,7 @@ class SparseGrid(nn.Module):
             )}
         else:
             warn("Using slow volume rendering, should only be used for debugging")
-            if self.surface_type in ['sdf', 'plane', 'udf']:
+            if self.surface_type is not None:
                 return self._surface_render_gradcheck_lerp(rays, return_raylen=return_raylen, **kwargs)
             elif self.opt.backend == 'nvol':
                 return {'rgb': self._volume_render_gradcheck_nvol_lerp(rays, return_raylen=return_raylen)}
@@ -2606,7 +2618,7 @@ class SparseGrid(nn.Module):
         :return: (N, 3), predicted RGB
         """
 
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             raise NotImplementedError
         assert (
             _C is not None and self.sh_data.is_cuda
@@ -2713,7 +2725,7 @@ class SparseGrid(nn.Module):
 
         :return: (N,)
         """
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             out = self._surface_render_gradcheck_lerp(rays, return_depth=True)
             return out['depth']
 
@@ -2860,7 +2872,7 @@ class SparseGrid(nn.Module):
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
             self.density_data.grad = None
-            if self.surface_type in ['sdf', 'plane', 'udf']:
+            if self.surface_type is not None:
                 self.surface_data.grad = None
             self.sh_data.grad = None
             self.sparse_grad_indexer = None
@@ -2948,7 +2960,7 @@ class SparseGrid(nn.Module):
 
             sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
             del self.density_data
-            if self.surface_type in ['sdf', 'plane', 'udf']:
+            if self.surface_type is not None:
                 del self.surface_data
             del self.sh_data
             del all_sample_vals_sh
@@ -2974,7 +2986,7 @@ class SparseGrid(nn.Module):
             print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
             print('links', init_links.shape, init_links.dtype)
             self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
-            if self.surface_type in ['sdf', 'plane', 'udf']:
+            if self.surface_type is not None:
                 raise NotImplementedError
 
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
@@ -3096,7 +3108,7 @@ class SparseGrid(nn.Module):
             "sh_data":self.sh_data.data.cpu().numpy().astype(np.float16),
             "step_id": step_id
         }
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             data['surface_data'] = self.surface_data.data.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
@@ -3142,7 +3154,7 @@ class SparseGrid(nn.Module):
             sh_data = z.f.sh_data
             density_data = z.f.density_data
             surface_type = z.f.surface_type.item()
-            if surface_type in ['sdf', 'plane', 'udf']:
+            if surface_type is not None:
                 surface_data = z.f.surface_data
 
         if 'background_data' in z:
@@ -3174,13 +3186,13 @@ class SparseGrid(nn.Module):
             sh_data = sh_data.astype(np.float32)
         if density_data.dtype != np.float32:
             density_data = density_data.astype(np.float32)
-        if surface_type in ['sdf', 'plane', 'udf'] and surface_data.dtype != np.float32:
+        if surface_type is not None and surface_data.dtype != np.float32:
             surface_data = surface_data.astype(np.float32)
         sh_data = torch.from_numpy(sh_data).to(device=device)
         density_data = torch.from_numpy(density_data).to(device=device)
         grid.sh_data = nn.Parameter(sh_data)
         grid.density_data = nn.Parameter(density_data)
-        if surface_type in ['sdf', 'plane', 'udf']:
+        if surface_type is not None:
             surface_data = torch.from_numpy(surface_data).to(device=device)
             grid.surface_data = nn.Parameter(surface_data)
         grid.links = torch.from_numpy(links).to(device=device)
@@ -3259,7 +3271,7 @@ class SparseGrid(nn.Module):
 
         t[index, :-1] = self.sh_data.data.to(device=device)
         t[index, -1:] = self.density_data.data.to(device=device)
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             raise NotImplementedError
         return t
 
@@ -3277,7 +3289,7 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for total variation"
         assert not logalpha, "No longer supported"
 
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             raise NotImplementedError
 
         return _TotalVariationFunction.apply(
@@ -3332,7 +3344,7 @@ class SparseGrid(nn.Module):
         [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
         """
-        # if self.surface_type in ['sdf', 'plane', 'udf']:
+        # if self.surface_type is not None:
         #     raise NotImplementedError
 
         assert (
@@ -3646,7 +3658,7 @@ class SparseGrid(nn.Module):
         """
         Execute RMSprop or sgd step on density
         """
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             surface_data = self.surface_data
         else:
             # No surface data used!
@@ -3817,7 +3829,7 @@ class SparseGrid(nn.Module):
         """
         gspec = _C.SparseGridSpec()
         gspec.density_data = self.density_data
-        if self.surface_type in ['sdf', 'plane', 'udf']:
+        if self.surface_type is not None:
             gspec.surface_data = self.surface_data
         gspec.sh_data = self.sh_data
         gspec.links = self.links

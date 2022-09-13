@@ -76,6 +76,8 @@ parser.add_argument('--ray_len',
                     help="Render the ray lengths")
 
 args = parser.parse_args()
+USE_KERNEL = not args.nokernel
+USE_KERNEL = True
 # config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 

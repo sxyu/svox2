@@ -86,7 +86,7 @@
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
                 "-t", "ckpt/udf_debug",
-                "../data/dtu/dtu_scan63",
+                "../data/nerf_synthetic/lego",
                 "-c", "configs/udf_syn.yaml"
             ]
         },
@@ -106,7 +106,7 @@
             ]
         },
         {
-            "name": "render udf py",
+            "name": "render py",
             "type": "python",
             "request": "launch",
             "program": "render_imgs_circle.py",
@@ -114,8 +114,8 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "ckpt/udf_lego_sphere",
-                "../data/nerf_synthetic/lego"
+                "ckpt/dtu_test",
+                "../data/dtu/dtu_scan63"
             ]
         },
         {

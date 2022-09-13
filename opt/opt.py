@@ -124,7 +124,7 @@ else:
 
     # DC -> gray; mind the SH scaling!
     grid.sh_data.data[:] = 0.0
-    if args.surface_type in ['sdf', 'plane', 'udf']:
+    if args.surface_type is not None:
         grid.density_data.data[:] = -1e8 if args.lr_fg_begin_step > 0 else torch.logit(torch.tensor(args.init_sigma))
     else:
         grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
@@ -369,8 +369,8 @@ while True:
             enumerate(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size)), 
             total=args.n_iters, 
             initial=gstep_id_base, 
-            miniters=1000,
-            # miniters=args.refresh_iter,
+            # miniters=1000,
+            miniters=args.refresh_iter,
             )
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
@@ -400,7 +400,7 @@ while True:
 
             #  with Timing("volrend_fused"):
             if not USE_KERNEL:
-                if args.surface_type in ['sdf', 'plane', 'udf']:
+                if args.surface_type is not None:
                     out = grid._surface_render_gradcheck_lerp(rays, rgb_gt,
                             beta_loss=args.lambda_beta,
                             sparsity_loss=args.lambda_sparsity,

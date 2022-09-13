@@ -83,7 +83,7 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          default='cuvol',
                          help="Renderer backend")
     group.add_argument('--surface_type',
-                         choices=['sdf', 'plane', 'udf'],
+                         choices=['sdf', 'plane', 'udf', 'udf_alpha'],
                          default=None,
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',
