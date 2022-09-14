@@ -12,3 +12,5 @@ svox2.egg-info/
 kaolin/
 
 slurm-*.out
+
+opt/configs/hpc_confs/
