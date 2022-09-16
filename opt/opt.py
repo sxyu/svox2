@@ -316,7 +316,7 @@ while True:
 
             # log train imgs
             if args.n_eval_train > 0:
-                N_IMGS_TO_EVAL = args.n_eval_test
+                N_IMGS_TO_EVAL = args.n_eval_train
                 N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
                 img_eval_interval = dset.n_images // N_IMGS_TO_EVAL
                 img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)

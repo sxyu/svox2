@@ -543,6 +543,7 @@ class SparseGrid(nn.Module):
         self.links: torch.Tensor
 
         surface_data = None
+        self.level_sets = None
         if surface_type == 'sdf':
             # surface_init = None
             if surface_init == 'sphere' or surface_init is None:
@@ -646,14 +647,48 @@ class SparseGrid(nn.Module):
                 grid_center = (torch.tensor(reso)) / 2
                 rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
 
+                links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
+                surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])]
+
                 level_sets = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)), 1) + 0.5
                 level_sets = level_sets.to(device)
+
+                # # invert softplus activation
+                # surface_data = surface_data + torch.log(-torch.expm1(-surface_data))
+            elif surface_init == 'single_lv':
+                # single level set with single sphere
+                surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+                coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
+                coords = torch.stack(coords).view(3, -1).T
+                grid_center = (torch.tensor(reso)) / 2
+                rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
 
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
                 surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])]
 
-                # # invert softplus activation
-                # surface_data = surface_data + torch.log(-torch.expm1(-surface_data))
+                level_sets = torch.norm(grid_center, keepdim=True) / 2.
+                level_sets = level_sets.to(device)
+            elif surface_init == 'single_lv_multi_sphere':
+                # single level set with multi sphere
+                grid_center = (torch.tensor(reso)) / 2
+                level_sets = torch.norm(grid_center, keepdim=True) / 2.
+                level_sets = level_sets.to(device)
+
+                surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+                coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
+                coords = torch.stack(coords).view(3, -1).T
+                # grid_center = (torch.tensor(reso) - 1.) / 2
+                grid_center = (torch.tensor(reso)) / 2
+                rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
+
+                sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 2) + 0.5
+                sphere_rs = sphere_rs.to(device)
+                dists = rs[:, None] - sphere_rs[None, :]
+
+                links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
+                surface_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices] + level_sets[0]
+
+
             
             else:
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
@@ -3117,6 +3152,8 @@ class SparseGrid(nn.Module):
         }
         if self.surface_type is not None:
             data['surface_data'] = self.surface_data.data.cpu().numpy()
+        if self.level_sets is not None:
+            data['level_sets'] = self.level_sets.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -3202,6 +3239,8 @@ class SparseGrid(nn.Module):
         if surface_type is not None:
             surface_data = torch.from_numpy(surface_data).to(device=device)
             grid.surface_data = nn.Parameter(surface_data)
+        if 'level_sets' in z:
+            grid.level_sets = torch.from_numpy(z.f.level_sets.astype(np.float32)).to(device=device)
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.sh_data.size(0)
 
