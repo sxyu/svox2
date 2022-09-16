@@ -2393,6 +2393,13 @@ class SparseGrid(nn.Module):
             out['extra_loss']['udf_var_loss'] = udf_var_loss
             out['log_stats']['udf_var_loss'] = udf_var_loss
 
+        # compute density lap loss
+        p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
+        density_lap_loss = torch.mean(-torch.log(p_lap))
+        # make positive
+        density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
+        out['extra_loss']['density_lap_loss'] = density_lap_loss
+        out['log_stats']['density_lap_loss'] = density_lap_loss
 
         return out
 
