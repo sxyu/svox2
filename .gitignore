@@ -14,3 +14,11 @@ kaolin/
 slurm-*.out
 
 opt/configs/hpc_confs/
+
+imgs/
+
+tb.sh
+
+*.npy
+
+.ipynb_checkpoints/

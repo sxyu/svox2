@@ -51,7 +51,8 @@ np.random.seed(20200823)
 DATASET_TYPE = 'test'
 IMG_ID = 0
 P_COORD = torch.tensor([ # matlib [x, y]
-    [489, 235],
+    [320, 332],
+    [335, 332],
     ])
 
 P_COORD = None

@@ -698,6 +698,29 @@ class SparseGrid(nn.Module):
                 self.density_data = nn.Parameter(
                     torch.zeros(level_sets.numel(), 1, dtype=torch.float32, device=device)
                 )
+
+        elif surface_type == 'alpha_surface':
+            # use level set on alpha values to get surface and intersections
+            # self.
+            raise NotImplementedError
+            grid_center = (torch.tensor(reso)) / 2
+            level_sets = torch.norm(grid_center, keepdim=True) / 2.
+            level_sets = level_sets.to(device)
+
+            surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+            coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
+            coords = torch.stack(coords).view(3, -1).T
+            # grid_center = (torch.tensor(reso) - 1.) / 2
+            grid_center = (torch.tensor(reso)) / 2
+            rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
+
+            sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 2) + 0.5
+            sphere_rs = sphere_rs.to(device)
+            dists = rs[:, None] - sphere_rs[None, :]
+
+            links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
+            surface_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices] + level_sets[0]
+
             
         if surface_data is not None:
             self.surface_data = nn.Parameter(surface_data)
@@ -1866,7 +1889,7 @@ class SparseGrid(nn.Module):
         numerical_solution: bool = False, # no gradient flow!
         dtype = torch.double,
         allow_outside: bool = False, # allow intersections outside of voxel
-        return_outside_loss: bool = False
+        intersect_th: float = 0.1, # threshold for determining intersections 
     ):
         """
         gradcheck version for surface rendering
@@ -2396,19 +2419,6 @@ class SparseGrid(nn.Module):
             'extra_loss': {}
         }
 
-        # if return_outside_loss and allow_outside:
-        #     # calculate outside loss to encourage the intersection to stay within the voxel
-        #     # https://math.stackexchange.com/questions/2133217/minimal-distance-to-a-cube-in-2d-and-3d-from-a-point-lying-outside
-            
-        #     # shift voxel to have corners at -.5, +.5
-        #     shift_samples = samples - l -.5
-        #     dists = torch.zeros_like(samples[:,0])
-        #     outside_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) & (~torch.isnan(samples).any(axis=-1))
-        #     dists[outside_mask] = torch.sqrt(torch.sum(torch.clamp_min(torch.abs(shift_samples[outside_mask]) - .5, 0)**2, axis=-1))
-        #     outside_loss = torch.sum(dists * alpha[:,0]) / torch.count_nonzero(dists)
-
-        #     out['outside_loss'] = outside_loss
-
         if return_depth:
             B_ts = torch.zeros((B, MS), device=origins.device)
             B_ts[B_to_sample_mask] = ts.to(B_ts.dtype) # [N_samples]
@@ -2435,6 +2445,15 @@ class SparseGrid(nn.Module):
         density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
         out['extra_loss']['density_lap_loss'] = density_lap_loss
         out['log_stats']['density_lap_loss'] = density_lap_loss
+
+        B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
+        B_samples[B_to_sample_mask] = samples.to(B_rgb.dtype)
+        sample_mask = B_alpha > intersect_th
+        B_samples[~sample_mask, :] = -1.
+        ids = torch.argmax(sample_mask.long(), dim=-1)
+        intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
+        intersects = intersects[sample_mask.any(axis=-1)]
+        out['intersections'] = intersects
 
         return out
 
@@ -2803,7 +2822,7 @@ class SparseGrid(nn.Module):
         return all_depth_out.view(camera.height, camera.width)
 
 
-    def volume_render_extract_pts(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000):
+    def volume_render_extract_pts(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
         """
         Volume render and caculate depth for each camera ray, then store a 3D point for each ray
 
@@ -2814,18 +2833,27 @@ class SparseGrid(nn.Module):
 
         :return: [N, 3] points array
         """
-        # raise NotImplementedError()
         rays = camera.gen_rays()
-        all_depths = []
-        for batch_start in range(0, camera.height * camera.width, batch_size):
-            depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh)
-            all_depths.append(depths)
-        all_depth_out = torch.cat(all_depths, dim=0)
-        
-        pts = rays.origins + rays.dirs * all_depth_out[:,None]
-        # filter 0 depth
-        pts = pts[all_depth_out!=0.]
-        return pts
+        if self.surface_type is None:
+            # extrac points from depth
+            all_depths = []
+            for batch_start in range(0, camera.height * camera.width, batch_size):
+                depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh)
+                all_depths.append(depths)
+            all_depth_out = torch.cat(all_depths, dim=0)
+            
+            all_pts = rays.origins + rays.dirs * all_depth_out[:,None]
+            # filter 0 depth
+            all_pts = all_pts[all_depth_out!=0.]
+        else:
+            # extract from intersections
+            all_pts = []
+            for batch_start in range(0, camera.height * camera.width, batch_size):
+                pts = self._surface_render_gradcheck_lerp(rays[batch_start: batch_start + batch_size], **kwargs)['intersections']
+                all_pts.append(pts)
+            all_pts = torch.cat(all_pts, dim=0)
+            
+        return all_pts
 
     def resample(
         self,

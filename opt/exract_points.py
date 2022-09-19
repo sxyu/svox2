@@ -26,10 +26,6 @@ parser.add_argument('--traj_type',
                     choices=['spiral', 'circle'],
                     default='spiral',
                     help="Render a spiral (doubles length, using 2 elevations), or just a cirle")
-parser.add_argument('--fps',
-                    type=int,
-                    default=30,
-                    help="FPS of video")
 parser.add_argument(
                 "--width", "-W", type=float, default=None, help="Rendering image width (only if not --traj)"
                         )
@@ -37,7 +33,7 @@ parser.add_argument(
                     "--height", "-H", type=float, default=None, help="Rendering image height (only if not --traj)"
                             )
 parser.add_argument(
-	"--num_views", "-N", type=int, default=30,
+	"--num_views", "-N", type=int, default=10,
     help="Number of frames to render"
 )
 
@@ -49,13 +45,13 @@ parser.add_argument("--radius", type=float, default=2.0, help="Radius of orbit (
 parser.add_argument(
     "--elevation",
     type=float,
-    default=-45.0,
+    default=-90,
     help="Elevation of orbit in deg, negative is above",
 )
 parser.add_argument(
     "--elevation2",
     type=float,
-    default=-12.0,
+    default=90,
     help="Max elevation, only for spiral",
 )
 parser.add_argument(
@@ -78,24 +74,9 @@ parser.add_argument('--crop',
                     default=1.0,
                     help="Crop (0, 1], 1.0 = full image")
 
-# Foreground/background only
-parser.add_argument('--nofg',
-                    action='store_true',
-                    default=False,
-                    help="Do not render foreground (if using BG model)")
-parser.add_argument('--nobg',
-                    action='store_true',
-                    default=False,
-                    help="Do not render background (if using BG model)")
 
-# Random debugging features
-parser.add_argument('--blackbg',
-                    action='store_true',
-                    default=False,
-                    help="Force a black BG (behind BG model) color; useful for debugging 'clouds'")
 
 args = parser.parse_args()
-config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 
 
@@ -166,39 +147,8 @@ if args.vert_shift != 0.0:
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
 print(grid.center, grid.radius)
 
-# DEBUG
-#  grid.background_data.data[:, 32:, -1] = 0.0
-#  render_out_path += '_front'
-
-if grid.use_background:
-    if args.nobg:
-        grid.background_data.data[..., -1] = 0.0
-        render_out_path += '_nobg'
-    if args.nofg:
-        grid.density_data.data[:] = 0.0
-        #  grid.sh_data.data[..., 0] = 1.0 / svox2.utils.SH_C0
-        #  grid.sh_data.data[..., 9] = 1.0 / svox2.utils.SH_C0
-        #  grid.sh_data.data[..., 18] = 1.0 / svox2.utils.SH_C0
-        render_out_path += '_nofg'
-
-    #  # DEBUG
-    #  grid.background_data.data[..., -1] = 100.0
-    #  a1 = torch.linspace(0, 1, grid.background_data.size(0) // 2, dtype=torch.float32, device=device)[:, None]
-    #  a2 = torch.linspace(1, 0, (grid.background_data.size(0) - 1) // 2 + 1, dtype=torch.float32, device=device)[:, None]
-    #  a = torch.cat([a1, a2], dim=0)
-    #  c = torch.stack([a, 1-a, torch.zeros_like(a)], dim=-1)
-    #  grid.background_data.data[..., :-1] = c
-    #  render_out_path += "_gradient"
 
 config_util.setup_render_opts(grid.opt, args)
-
-if args.blackbg:
-    print('Forcing black bg')
-    render_out_path += '_blackbg'
-    grid.opt.background_brightness = 0.0
-
-render_out_path += '.mp4'
-print('Writing to', render_out_path)
 
 # NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
 # other backends will manually generate rays per frame (slow)
@@ -226,22 +176,22 @@ with torch.no_grad():
                            h * 0.5,
                            w, h,
                            ndc_coeffs=(-1.0, -1.0))
+        # torch.cuda.synchronize()
+        # depth = grid.volume_render_depth_image(cam)
         torch.cuda.synchronize()
-        depth = grid.volume_render_depth_image(cam)
-        torch.cuda.synchronize()
-        pts = grid.volume_render_extract_pts(cam, 0.25)
+        pts = grid.volume_render_extract_pts(cam, intersect_th=0.1)
         torch.cuda.synchronize()
 
         # depth.clamp_(0.0, 1.0)
-        depth = depth /depth.max()
+        # depth = depth /depth.max()
         pts = pts.cpu().numpy()
-        depth = depth.cpu().numpy()
-        depth = (depth * 255).astype(np.uint8)
+        # depth = depth.cpu().numpy()
+        # depth = (depth * 255).astype(np.uint8)
         all_pts.append(pts)
 
         # # debug purpose, save pts from only one view
         # np.save(path.join(path.dirname(args.ckpt), 'pts.npy'), pts.astype(np.half))
-        # imageio.imsave(path.join(path.dirname(args.ckpt), 'depth.png'),depth)
+        # imageio.imsave(path.join(path.dirname(args.ckpt), 'depth.png'), depth)
 
         # raise NotImplementedError
 

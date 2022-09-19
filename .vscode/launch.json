@@ -28,7 +28,7 @@
             // "preLaunchTask": "updatesvox2",
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "ckpt/lego/ckpt.npz",
+                "ckpt/udf_lego_single_lv/ckpt.npz",
                 "../data/nerf_synthetic/lego"
             ]
         },

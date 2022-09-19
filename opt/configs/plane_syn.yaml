@@ -19,7 +19,8 @@ n_iters = 25000
 print_every = 10
 save_every = 5000
 eval_every_iter = 5000
-n_eval = 1
+n_eval_test = 1
+n_eval_train = 1
 load_ckpt = False
 log_depth_map = True
 

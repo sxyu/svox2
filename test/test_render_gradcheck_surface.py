@@ -28,7 +28,7 @@ grid = svox2.SparseGrid(
                      background_nlayers=0,
                      basis_type=svox2.BASIS_TYPE_SH,
                      surface_type=backend,
-                     surface_init='sphere')
+                     surface_init='single_lv_multi_sphere')
 grid.opt.backend = backend
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
@@ -77,7 +77,7 @@ rgb_gt = torch.zeros((origins.size(0), 3), device=device, dtype=dtype)
 #  sampt = grid.volume_render(grid, origins, dirs, use_kernel=False)
 
 with Timing("ours"):
-    out = grid.volume_render(rays, use_kernel=False, allow_outside=False, return_outside_loss=False)
+    out = grid.volume_render(rays, use_kernel=False, allow_outside=False)
     samps = out['rgb']
 s = F.mse_loss(samps, rgb_gt)
 
@@ -100,7 +100,7 @@ if grid.use_background:
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
-        out = grid.volume_render(rays, use_kernel=False, allow_outside=False, return_outside_loss=False)
+        out = grid.volume_render(rays, use_kernel=False, allow_outside=False)
         sampt = out['rgb']
     s = F.mse_loss(sampt, rgb_gt)
     with Timing("torch_backward"):
