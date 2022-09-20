@@ -542,6 +542,8 @@ class SparseGrid(nn.Module):
         self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
 
+        self.trainable_data = ["density_data", "sh_data", "basis_data", "background_data"]
+
         surface_data = None
         self.level_sets = None
         if surface_type == 'sdf':
@@ -724,6 +726,7 @@ class SparseGrid(nn.Module):
             
         if surface_data is not None:
             self.surface_data = nn.Parameter(surface_data)
+            self.trainable_data.append('surface_data')
 
         self.opt = RenderOptions() # set up outside of initializer
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
@@ -2446,14 +2449,17 @@ class SparseGrid(nn.Module):
         out['extra_loss']['density_lap_loss'] = density_lap_loss
         out['log_stats']['density_lap_loss'] = density_lap_loss
 
-        B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
-        B_samples[B_to_sample_mask] = samples.to(B_rgb.dtype)
-        sample_mask = B_alpha > intersect_th
-        B_samples[~sample_mask, :] = -1.
-        ids = torch.argmax(sample_mask.long(), dim=-1)
-        intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
-        intersects = intersects[sample_mask.any(axis=-1)]
-        out['intersections'] = intersects
+        if B_alpha.numel() == 0:
+            out['intersections'] = torch.ones((0, 3), device=origins.device)
+        else:
+            B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
+            B_samples[B_to_sample_mask] = samples.to(B_rgb.dtype)
+            sample_mask = B_alpha > intersect_th
+            B_samples[~sample_mask, :] = -1.
+            ids = torch.argmax(sample_mask.long(), dim=-1)
+            intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
+            intersects = intersects[sample_mask.any(axis=-1)]
+            out['intersections'] = intersects
 
         return out
 
@@ -2685,28 +2691,30 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for fused"
         assert rays.is_cuda
-        grad_density, grad_sh, grad_basis, grad_bg = self._get_data_grads()
+        grad = self._get_data_grads()
         rgb_out = torch.zeros_like(rgb_gt)
         basis_data : Optional[torch.Tensor] = None
         if self.basis_type == BASIS_TYPE_MLP:
             with torch.enable_grad():
                 basis_data = self._eval_basis_mlp(rays.dirs)
-            grad_basis = torch.empty_like(basis_data)
+            grad['basis_data'] = torch.empty_like(basis_data)
 
         self.sparse_grad_indexer = torch.zeros((self.density_data.size(0),),
                 dtype=torch.bool, device=self.density_data.device)
 
         grad_holder = _C.GridOutputGrads()
-        grad_holder.grad_density_out = grad_density
-        grad_holder.grad_sh_out = grad_sh
+        grad_holder.grad_density_out = grad['density_data']
+        grad_holder.grad_sh_out = grad['sh_data']
         if self.basis_type != BASIS_TYPE_SH:
-            grad_holder.grad_basis_out = grad_basis
+            grad_holder.grad_basis_out = grad['basis_data']
         grad_holder.mask_out = self.sparse_grad_indexer
         if self.use_background:
-            grad_holder.grad_background_out = grad_bg
+            grad_holder.grad_background_out = grad['background_data']
             self.sparse_background_indexer = torch.zeros(list(self.background_data.shape[:-1]),
                     dtype=torch.bool, device=self.background_data.device)
             grad_holder.mask_background_out = self.sparse_background_indexer
+        if 'surface_data' in grad:
+            grad_holder.grad_surface_out = grad['surface_data']
 
         cu_fn = _C.__dict__[f"volume_render_{self.opt.backend}_fused"]
         #  with utils.Timing("actual_render"):
@@ -2722,7 +2730,7 @@ class SparseGrid(nn.Module):
         )
         if self.basis_type == BASIS_TYPE_MLP:
             # Manually trigger MLP backward!
-            basis_data.backward(grad_basis)
+            basis_data.backward(grad['basis_data'])
 
         self.sparse_sh_grad_indexer = self.sparse_grad_indexer.clone()
         return {'rgb': rgb_out}
@@ -3931,21 +3939,21 @@ class SparseGrid(nn.Module):
         return torch.tensor(self.links.shape, device="cpu", dtype=torch.float32)
 
     def _get_data_grads(self):
-        ret = []
-        for subitem in ["density_data", "sh_data", "basis_data", "background_data"]:
+        ret = {}
+        for subitem in self.trainable_data:
             param = self.__getattr__(subitem)
             if not param.requires_grad:
-                ret.append(torch.zeros_like(param.data))
+                ret[subitem] = torch.zeros_like(param.data)
             else:
                 if (
                     not hasattr(param, "grad")
                     or param.grad is None
                     or param.grad.shape != param.data.shape
-                ):
+                ): # if grad attribute is none or invalid, assign new one to it
                     if hasattr(param, "grad"):
                         del param.grad
                     param.grad = torch.zeros_like(param.data)
-                ret.append(param.grad)
+                ret[subitem] = param.grad
         return ret
 
     def _get_sparse_grad_indexer(self):
