@@ -67,6 +67,7 @@ struct PackedGridOutputGrads {
         grad_sh_out(grads.grad_sh_out.defined() ? grads.grad_sh_out.data_ptr<float>() : nullptr),
         grad_basis_out(grads.grad_basis_out.defined() ? grads.grad_basis_out.data_ptr<float>() : nullptr),
         grad_background_out(grads.grad_background_out.defined() ? grads.grad_background_out.data_ptr<float>() : nullptr),
+        grad_surface_out(grads.grad_surface_out.defined() ? grads.grad_surface_out.data_ptr<float>() : nullptr),
         mask_out((grads.mask_out.defined() && grads.mask_out.size(0) > 0) ? grads.mask_out.data_ptr<bool>() : nullptr),
         mask_background_out((grads.mask_background_out.defined() && grads.mask_background_out.size(0) > 0) ? grads.mask_background_out.data_ptr<bool>() : nullptr)
         {}
@@ -74,6 +75,7 @@ struct PackedGridOutputGrads {
     float* __restrict__ grad_sh_out;
     float* __restrict__ grad_basis_out;
     float* __restrict__ grad_background_out;
+    float* __restrict__ grad_surface_out;
 
     bool* __restrict__ mask_out;
     bool* __restrict__ mask_background_out;

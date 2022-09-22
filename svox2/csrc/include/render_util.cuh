@@ -78,8 +78,8 @@ __device__ __inline__ float trilerp_cuvol_one(
         const int idx) {
     const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
 
-#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u] * stride + idx] : 0.f)
-    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);
+#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u] * stride + idx] : 0.f) // fetch data only if link is non negative
+    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);            // stride is last dim of the data
     const float ix0y1 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), pos[2]);
     const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
     const float ix1y0 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), pos[2]);
@@ -100,19 +100,19 @@ __device__ __inline__ void trilerp_backward_cuvol_one(
         float grad_out,
         const int idx) {
     const float ay = 1.f - pos[1], az = 1.f - pos[2];
-    float xo = (1.0f - pos[0]) * grad_out;
+    float xo = (1.0f - pos[0]) * grad_out; // az * d_mse/d_sh
 
     const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
 
 #define MAYBE_ADD_LINK(u, val) if (link_ptr[u] >= 0) { \
               atomicAdd(&grad_data[link_ptr[u] * stride + idx], val); \
         }
-    MAYBE_ADD_LINK(0, ay * az * xo);
-    MAYBE_ADD_LINK(1, ay * pos[2] * xo);
-    MAYBE_ADD_LINK(offy, pos[1] * az * xo);
-    MAYBE_ADD_LINK(offy + 1, pos[1] * pos[2] * xo);
+    MAYBE_ADD_LINK(0, ay * az * xo); // 000
+    MAYBE_ADD_LINK(1, ay * pos[2] * xo); // 001
+    MAYBE_ADD_LINK(offy, pos[1] * az * xo); // 010
+    MAYBE_ADD_LINK(offy + 1, pos[1] * pos[2] * xo); // 011
 
-    xo = pos[0] * grad_out;
+    xo = pos[0] * grad_out; // pz * d_mse/d_sh
     MAYBE_ADD_LINK(offx + 0, ay * az * xo);
     MAYBE_ADD_LINK(offx + 1, ay * pos[2] * xo);
     MAYBE_ADD_LINK(offx + offy, pos[1] * az * xo);
@@ -130,7 +130,7 @@ __device__ __inline__ void trilerp_backward_cuvol_one_density(
         const float* __restrict__ pos,
         float grad_out) {
     const float ay = 1.f - pos[1], az = 1.f - pos[2];
-    float xo = (1.0f - pos[0]) * grad_out;
+    float xo = (1.0f - pos[0]) * grad_out; // used as if az * d_mse/d_sig
 
     const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
 

@@ -17,7 +17,7 @@ const int TRACE_RAY_CUDA_RAYS_PER_BLOCK = TRACE_RAY_CUDA_THREADS / WARP_SIZE;
 const int TRACE_RAY_BKWD_CUDA_THREADS = 128;
 const int TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK = TRACE_RAY_BKWD_CUDA_THREADS / WARP_SIZE;
 
-const int MIN_BLOCKS_PER_SM = 8;
+const int MIN_BLOCKS_PER_SM = 8; // why?
 
 const int TRACE_RAY_BG_CUDA_THREADS = 128;
 const int MIN_BG_BLOCKS_PER_SM = 8;
@@ -36,7 +36,7 @@ __device__ __inline__ void trace_ray_cuvol(
         WarpReducef::TempStorage& __restrict__ temp_storage,
         float* __restrict__ out,
         float* __restrict__ out_log_transmit) {
-    const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
+    const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim; // (9) every basis in SH has a lane
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
 
     if (ray.tmin > ray.tmax) {
@@ -56,10 +56,10 @@ __device__ __inline__ void trace_ray_cuvol(
     while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
-            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
-            ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
-            ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
-            ray.pos[j] -= static_cast<float>(ray.l[j]);
+            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]); // fmaf(x,y,z) = (x*y)+z
+            ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f); // clamp to fit within grid
+            ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2); // get l
+            ray.pos[j] -= static_cast<float>(ray.l[j]); // get trilinear interpolate distances
         }
 
         const float skip = compute_skip_dist(ray,
@@ -98,7 +98,7 @@ __device__ __inline__ void trace_ray_cuvol(
             log_transmit -= pcnt;
 
             float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                           lane_color, lane_colorgrp_id == 0);
+                                           lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
             outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
             if (_EXP(log_transmit) < opt.stop_thresh) {
                 log_transmit = -1e3f;
@@ -226,7 +226,7 @@ __device__ __inline__ void trace_ray_sigma_thresh(
 
 __device__ __inline__ void trace_ray_cuvol_backward(
         const PackedSparseGridSpec& __restrict__ grid,
-        const float* __restrict__ grad_output,
+        const float* __restrict__ grad_output, // array[3], MSE gradient wrt rgb channel
         const float* __restrict__ color_cache,
         SingleRaySpec& __restrict__ ray,
         const RenderOptions& __restrict__ opt,
@@ -241,13 +241,13 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         float* __restrict__ accum_out,
         float* __restrict__ log_transmit_out
         ) {
-    const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim;
-    const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
-    const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim));
+    const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim; // basis id in each channel
+    const uint32_t lane_colorgrp = lane_id / grid.basis_dim; // rgb channel id
+    const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim)); // mask for RGB channels of same basis
 
     float accum = fmaf(color_cache[0], grad_output[0],
                       fmaf(color_cache[1], grad_output[1],
-                           color_cache[2] * grad_output[2]));
+                           color_cache[2] * grad_output[2])); // sum(d_mse/d_pred_rgb * pred_rgb)
 
     if (beta_loss > 0.f) {
         const float transmit_in = _EXP(log_transmit_in);
@@ -264,11 +264,11 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     }
     float t = ray.tmin;
 
-    const float gout = grad_output[lane_colorgrp];
+    const float gout = grad_output[lane_colorgrp]; // get gradient of corresponding RGB channel
 
     float log_transmit = 0.f;
 
-    // remat samples
+    // remat samples. Needed because individual rgb/sigma are not stored during forward pass
     while (t <= ray.tmax) {
 #pragma unroll 3
         for (int j = 0; j < 3; ++j) {
@@ -313,18 +313,18 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             log_transmit -= pcnt;
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                           weighted_lane_color, lane_colorgrp_id == 0) + 0.5f;
-            float total_color = fmaxf(lane_color_total, 0.f);
-            float color_in_01 = total_color == lane_color_total;
-            total_color *= gout; // Clamp to [+0, infty)
+                                           weighted_lane_color, lane_colorgrp_id == 0) + 0.5f; // TODO: why +0.5f???
+            float total_color = fmaxf(lane_color_total, 0.f); // ci -- one channel of radiance of the sample
+            float color_in_01 = total_color == lane_color_total; // 1 if color >= 0.
+            total_color *= gout; // Clamp to [+0, infty), d_mse/d_pred_c * ci
 
-            float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim);
-            total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim);
-            total_color += total_color_c1;
+            float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim); // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-description 
+            total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim); // taking RGB channels
+            total_color += total_color_c1; // add from c2 then c1 ... what's the point?
 
-            color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim);
-            const float grad_common = weight * color_in_01 * gout;
-            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common;
+            color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim); // get color_in_01 from 'parent' lane in the color group where the channel color is computed
+            const float grad_common = weight * color_in_01 * gout; // d_mse/d_ci * ci in the final computed color is within clamp range, compute proper gradient 
+            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; // d_mse/d_sh * ci gradient wrt sh coefficient
 
             if (grid.basis_type != BASIS_TYPE_SH) {
                 float curr_grad_sphfunc = lane_color * grad_common;
@@ -339,7 +339,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
             }
 
             accum -= weight * total_color;
-            float curr_grad_sigma = ray.world_step * (
+            float curr_grad_sigma = ray.world_step * ( // TODO: not sure why...
                     total_color * _EXP(log_transmit) - accum);
             if (sparsity_loss > 0.f) {
                 // Cauchy version (from SNeRG)
@@ -615,14 +615,14 @@ __global__ void render_ray_kernel(
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out,
         float* __restrict__ log_transmit_out = nullptr) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
-    const int ray_id = tid >> 5;
+    const int ray_id = tid >> 5; // same as / 32, which is the WARP_SIZE
     const int ray_blk_id = threadIdx.x >> 5;
-    const int lane_id = threadIdx.x & 0x1F;
+    const int lane_id = threadIdx.x & 0x1F; // take only last 5 digits
 
     if (lane_id >= grid.sh_data_dim)  // Bad, but currently the best way due to coalesced memory access
         return;
 
-    __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][9];
+    __shared__ float sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][9]; // seems to be hard coded for 9 basis?
     __shared__ SingleRaySpec ray_spec[TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
@@ -633,7 +633,7 @@ __global__ void render_ray_kernel(
                  ray_spec[ray_blk_id].dir,
                  sphfunc_val[ray_blk_id]); // calculate spherial harmonics function
     ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
-    __syncwarp((1U << grid.sh_data_dim) - 1);
+    __syncwarp((1U << grid.sh_data_dim) - 1); // make sure all rays are loaded and sh computed?
 
     trace_ray_cuvol(
         grid,
@@ -692,7 +692,7 @@ __launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_backward_kernel(
     PackedSparseGridSpec grid,
     const float* __restrict__ grad_output,
-    const float* __restrict__ color_cache,
+    const float* __restrict__ color_cache, // predict rgb
     PackedRaysSpec rays,
     RenderOptions opt,
     bool grad_out_is_rgb,
@@ -700,7 +700,7 @@ __global__ void render_ray_backward_kernel(
     float beta_loss,
     float sparsity_loss,
     PackedGridOutputGrads grads,
-    float* __restrict__ accum_out = nullptr,
+    float* __restrict__ accum_out = nullptr, // left-over gradient for background?
     float* __restrict__ log_transmit_out = nullptr) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5;
@@ -730,15 +730,15 @@ __global__ void render_ray_backward_kernel(
         ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     }
 
-    float grad_out[3];
-    if (grad_out_is_rgb) {
-        const float norm_factor = 2.f / (3 * int(rays.origins.size(0)));
+    float grad_out[3]; // computes gradient for current ray
+    if (grad_out_is_rgb) { // true for fused function (grad_output is rgb_gt)
+        const float norm_factor = 2.f / (3 * int(rays.origins.size(0))); // normalize loss due to avg. 2 needed for MSE
 #pragma unroll 3
         for (int i = 0; i < 3; ++i) {
             const float resid = color_cache[ray_id * 3 + i] - grad_output[ray_id * 3 + i];
             grad_out[i] = resid * norm_factor;
         }
-    } else {
+    } else { // for backward function (grad_output is grad for color)
 #pragma unroll 3
         for (int i = 0; i < 3; ++i) {
             grad_out[i] = grad_output[ray_id * 3 + i];
@@ -1071,7 +1071,7 @@ void volume_render_cuvol_fused(
         RaysSpec& rays,
         RenderOptions& opt,
         torch::Tensor rgb_gt,
-        float beta_loss,
+        float beta_loss, // beta loss and sparsity loss are just weights for those loss
         float sparsity_loss,
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
@@ -1100,7 +1100,7 @@ void volume_render_cuvol_fused(
         device::render_ray_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
                 grid, rays, opt,
                 // Output
-                rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(), // <dtype, dim, __restrict__>
                 need_log_transmit ? log_transmit.data_ptr<float>() : nullptr);
     }
 
