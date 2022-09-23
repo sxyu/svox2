@@ -51,6 +51,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 args = config_util.setup_train_conf()
 USE_KERNEL = not args.nokernel
+if args.surface_type is None:
+    args.surface_type = 'none'
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
 assert args.lr_sh_final <= args.lr_sh, "lr_sh must be >= lr_sh_final"
@@ -101,7 +103,7 @@ if path.isfile(ckpt_npz) and args.load_ckpt:
     print('#####################################################')
     print(f'Resume from ckpt at {ckpt_npz}')
     grid = svox2.SparseGrid.load(ckpt_npz, device=device)
-    assert args.surface_type == grid.surface_type, "Loaded ckpt incompatible with given configs"
+    assert svox2.__dict__['BASIS_TYPE_' + args.surface_type.upper()] == grid.surface_type, "Loaded ckpt incompatible with given configs"
     gstep_id_base = grid.step_id + 1
     print(f'Starting from step {gstep_id_base}')
     print('#####################################################')
@@ -119,12 +121,12 @@ else:
                             mlp_width=args.mlp_width,
                             background_nlayers=args.background_nlayers,
                             background_reso=args.background_reso,
-                            surface_type=args.surface_type,
+                            surface_type=svox2.__dict__['BASIS_TYPE_' + args.surface_type.upper()],
                             surface_init=args.surface_init)
 
     # DC -> gray; mind the SH scaling!
     grid.sh_data.data[:] = 0.0
-    if args.surface_type is not None:
+    if args.surface_type != 'none':
         grid.density_data.data[:] = -1e8 if args.lr_fg_begin_step > 0 else torch.logit(torch.tensor(args.init_sigma))
     else:
         grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
@@ -400,7 +402,7 @@ while True:
 
             #  with Timing("volrend_fused"):
             if not USE_KERNEL:
-                if args.surface_type is not None:
+                if args.surface_type != 'none':
                     out = grid._surface_render_gradcheck_lerp(rays, rgb_gt,
                             beta_loss=args.lambda_beta,
                             sparsity_loss=args.lambda_sparsity,

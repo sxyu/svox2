@@ -30,7 +30,7 @@ class RenderOptions:
     :param stop_thresh: float
     """
 
-    backend: str = 'sdf'  # One of cuvol, svox1, nvol, sdf, plane
+    backend: str = 'cuvol'  # One of cuvol, svox1, nvol, surface
 
     background_brightness: float = 1.0  # [0, 1], the background color black-white
 
@@ -251,7 +251,10 @@ class _VolumeRenderFunction(autograd.Function):
         return color
 
     @staticmethod
-    def backward(ctx, grad_out):
+    def backward(ctx, grad_out): 
+        # this backward is only used for testing. Use fused MSE method in actual training instead
+        # grad_out is the gradient for color
+        import pdb; pdb.set_trace()
         (color_cache,) = ctx.saved_tensors
         cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_backward"]
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
@@ -266,7 +269,7 @@ class _VolumeRenderFunction(autograd.Function):
         grad_holder.grad_density_out = grad_density_grid
         grad_holder.grad_sh_out = grad_sh_grid
         if ctx.needs_input_grad[2]:
-            grad_holder.grad_basis_out = grad_basis
+            grad_holder.grad_basis_out = grad_basis # for SH type, basis needs no grad
         if ctx.grid.background_data is not None and ctx.needs_input_grad[3]:
             grad_holder.grad_background_out = grad_background
         cu_fn(
@@ -380,7 +383,7 @@ class SparseGrid(nn.Module):
         background_nlayers : int = 0,  # BG MSI layers
         background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
-        surface_type: str = None,
+        surface_type: int = SURFACE_TYPE_NONE,
         surface_init: str = None, # methods used to init sdf data
         use_octree: bool = True
     ):
@@ -544,9 +547,10 @@ class SparseGrid(nn.Module):
 
         self.trainable_data = ["density_data", "sh_data", "basis_data", "background_data"]
 
+        self.surface_data = None
         surface_data = None
-        self.level_sets = None
-        if surface_type == 'sdf':
+        self.level_set_data = None
+        if surface_type == SURFACE_TYPE_SDF:
             # surface_init = None
             if surface_init == 'sphere' or surface_init is None:
                 # method 1: initialize with distance to grid center, then reduce each vertices by the mean from the 8?
@@ -599,14 +603,14 @@ class SparseGrid(nn.Module):
                     # set surface to face outwards
                     surface_data[links.long()] *= -1
 
-            elif surface_init == 'plane':
+            elif surface_init == 'plane_init':
                 # method 3: simple plane with fixed driection
                 surface_data = torch.rand(self.capacity, 1, dtype=torch.float32, device=device) * 0.1 + 1
                 surface_data[self.links[np.arange(1,reso[0],2),:,:].view(-1).long()] *= -1.
             else:
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
         
-        elif surface_type == 'plane':
+        elif surface_type == SURFACE_TYPE_PLANE:
             if surface_init == 'random' or surface_init is None:
                 surface_data = torch.rand(self.capacity, 4, dtype=torch.float32, device=device) -.5 # allow negative values
                 # ax + by + cz + d = 0
@@ -639,7 +643,7 @@ class SparseGrid(nn.Module):
 
             else:
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
-        elif surface_type == 'udf' or surface_type == 'udf_alpha':
+        elif surface_type == SURFACE_TYPE_UDF or surface_type == SURFACE_TYPE_UDF_ALPHA:
             # unsigned distance field with fixed level sets
             # udf_alpha: each level set has an alpha, instead of each vertex
             if surface_init == 'sphere' or surface_init is None:
@@ -695,13 +699,13 @@ class SparseGrid(nn.Module):
             else:
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
 
-            self.level_sets = level_sets
-            if surface_type == 'udf_alpha':
+            self.level_set_data = level_sets
+            if surface_type == SURFACE_TYPE_UDF_ALPHA:
                 self.density_data = nn.Parameter(
                     torch.zeros(level_sets.numel(), 1, dtype=torch.float32, device=device)
                 )
 
-        elif surface_type == 'alpha_surface':
+        elif False: # surface_type == 'alpha_surface':
             # use level set on alpha values to get surface and intersections
             # self.
             raise NotImplementedError
@@ -788,7 +792,7 @@ class SparseGrid(nn.Module):
         )
         mask = links >= 0
         idxs = links[mask].long()
-        if self.surface_type not in ['udf_alpha']:
+        if self.surface_type not in [SURFACE_TYPE_UDF_ALPHA]:
             results_sigma[mask] = self.density_data[idxs]
         results_sh[mask] = self.sh_data[idxs]
 
@@ -2012,8 +2016,8 @@ class SparseGrid(nn.Module):
 
 
         ########### Find Ray-Surface Intersections ###########
-        if self.surface_type == 'sdf' or self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
-            if self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
+        if self.surface_type == SURFACE_TYPE_SDF or self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
+            if self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
                 fn = torch.nn.Softplus()
                 surface000 = fn(surface000)
                 surface001 = fn(surface001)
@@ -2051,15 +2055,15 @@ class SparseGrid(nn.Module):
             f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
             f0 = c0*(1-ox+lx) + c1*(ox-lx)
 
-            if self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
+            if self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
                 # find the list of possible level sets
                 udfs = torch.stack(
                         [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
                         dim=-1)
-                lv_set_mask = (self.level_sets >= udfs.min(axis=-1).values) & \
-                    (self.level_sets <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
-                lv_sets = self.level_sets[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
-                lv_set_ids = torch.arange(self.level_sets.shape[0], device=udfs.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
+                lv_set_mask = (self.level_set_data >= udfs.min(axis=-1).values) & \
+                    (self.level_set_data <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
+                lv_sets = self.level_set_data[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
+                lv_set_ids = torch.arange(self.level_set_data.shape[0], device=udfs.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
                 N_EQ = lv_sets.shape[0] # total number of equations to solve
                 if lv_set_mask.numel() == 0:
                     M_LV = 0
@@ -2228,7 +2232,7 @@ class SparseGrid(nn.Module):
             l = l[l_ids, :]
                   
         
-        elif self.surface_type == 'plane':
+        elif self.surface_type == SURFACE_TYPE_PLANE:
             # raise NotImplementedError
             # plane: ax + by + cz + d = 0
             a, b, c, d = torch.mean(torch.stack(
@@ -2275,7 +2279,7 @@ class SparseGrid(nn.Module):
         if allow_outside:
             torch.clamp_(wa, 0., 1.)
             torch.clamp_(wb, 0., 1.)
-        if self.surface_type == 'udf_alpha':
+        if self.surface_type == SURFACE_TYPE_UDF_ALPHA:
             _alpha = self.density_data[lv_set_ids]
         else:
             c00 = alpha000[l_ids] * wa[:, 2:] + alpha001[l_ids] * wb[:, 2:]
@@ -2430,7 +2434,7 @@ class SparseGrid(nn.Module):
 
             out['depth'] = out_depth
 
-        if self.surface_type == 'udf' or self.surface_type == 'udf_alpha':
+        if self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
             out['log_stats']['m_lv_sets'] = M_LV
 
             # caluclate udf_var_loss
@@ -3188,8 +3192,8 @@ class SparseGrid(nn.Module):
         }
         if self.surface_type is not None:
             data['surface_data'] = self.surface_data.data.cpu().numpy()
-        if self.level_sets is not None:
-            data['level_sets'] = self.level_sets.cpu().numpy()
+        if self.level_set_data is not None:
+            data['level_set_data'] = self.level_set_data.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -3209,7 +3213,7 @@ class SparseGrid(nn.Module):
         )
 
     def save_sdf(self, path: str = './sdf_grid.npy'):
-        assert self.surface_type == 'sdf', 'onlt supported for sdf surface_type!'
+        assert self.surface_type == SURFACE_TYPE_SDF, 'onlt supported for sdf surface_type!'
 
         sdf_voxel = {
             'sdf_data': self.sdf_data.data.cpu().numpy(),
@@ -3266,17 +3270,17 @@ class SparseGrid(nn.Module):
             sh_data = sh_data.astype(np.float32)
         if density_data.dtype != np.float32:
             density_data = density_data.astype(np.float32)
-        if surface_type is not None and surface_data.dtype != np.float32:
+        if surface_type != SURFACE_TYPE_NONE and surface_data.dtype != np.float32:
             surface_data = surface_data.astype(np.float32)
         sh_data = torch.from_numpy(sh_data).to(device=device)
         density_data = torch.from_numpy(density_data).to(device=device)
         grid.sh_data = nn.Parameter(sh_data)
         grid.density_data = nn.Parameter(density_data)
-        if surface_type is not None:
+        if surface_type != SURFACE_TYPE_NONE:
             surface_data = torch.from_numpy(surface_data).to(device=device)
             grid.surface_data = nn.Parameter(surface_data)
-        if 'level_sets' in z:
-            grid.level_sets = torch.from_numpy(z.f.level_sets.astype(np.float32)).to(device=device)
+        if 'level_set_data' in z:
+            grid.level_set_data = torch.from_numpy(z.f.level_sets.astype(np.float32)).to(device=device)
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.sh_data.size(0)
 
@@ -3353,7 +3357,7 @@ class SparseGrid(nn.Module):
 
         t[index, :-1] = self.sh_data.data.to(device=device)
         t[index, -1:] = self.density_data.data.to(device=device)
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             raise NotImplementedError
         return t
 
@@ -3371,7 +3375,7 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for total variation"
         assert not logalpha, "No longer supported"
 
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             raise NotImplementedError
 
         return _TotalVariationFunction.apply(
@@ -3426,7 +3430,7 @@ class SparseGrid(nn.Module):
         [Lombardi et al., ToG 2019]
         directly into the gradient tensor, multiplied by 'scaling'
         """
-        # if self.surface_type is not None:
+        # if self.surface_type != SURFACE_TYPE_NONE:
         #     raise NotImplementedError
 
         assert (
@@ -3740,7 +3744,7 @@ class SparseGrid(nn.Module):
         """
         Execute RMSprop or sgd step on density
         """
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             surface_data = self.surface_data
         else:
             # No surface data used!
@@ -3911,8 +3915,10 @@ class SparseGrid(nn.Module):
         """
         gspec = _C.SparseGridSpec()
         gspec.density_data = self.density_data
-        if self.surface_type is not None:
+        gspec.surface_type = self.surface_type
+        if self.surface_type != SURFACE_TYPE_NONE:
             gspec.surface_data = self.surface_data
+            gspec.level_set_data = self.level_set_data
         gspec.sh_data = self.sh_data
         gspec.links = self.links
         if grid_coords:

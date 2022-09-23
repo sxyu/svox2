@@ -23,7 +23,7 @@ config_util.define_common_args(parser)
 
 parser.add_argument('--n_eval', '-n', type=int, default=100000, help='images to evaluate (equal interval), at most evals every image')
 parser.add_argument('--traj_type',
-                    choices=['spiral', 'circle'],
+                    choices=['spiral', 'circle', 'test'],
                     default='spiral',
                     help="Render a spiral (doubles length, using 2 elevations), or just a cirle")
 parser.add_argument(
@@ -66,6 +66,12 @@ parser.add_argument(
     type=float,
     default=0.0,
     help="vertical shift by up axis"
+)
+parser.add_argument(
+    "--use_test_cams",
+    action='store_true', 
+    default=False,
+    help="Use test cameras to extract pts"
 )
 
 # Camera adjustment
@@ -117,6 +123,13 @@ if args.traj_type == 'spiral':
         )
         for ele, angle in zip(reversed(elevations), angles)
     ]
+    c2ws = np.stack(c2ws, axis=0)
+elif args.traj_type == 'test':
+    if args.num_views >= dset.c2w.shape[0]:
+        c2ws = dset.c2w.numpy()[:, :4, :4]
+    else:
+        test_cam_ids = np.round(np.linspace(0, dset.c2w.shape[0] - 1, args.num_views)).astype(int)
+        c2ws = dset.c2w.numpy()[test_cam_ids, :4, :4]
 else :
     c2ws = [
         pose_spherical(
@@ -128,7 +141,7 @@ else :
         )
         for angle in np.linspace(-180, 180, args.num_views + 1)[:-1]
     ]
-c2ws = np.stack(c2ws, axis=0)
+    c2ws = np.stack(c2ws, axis=0)
 if args.vert_shift != 0.0:
     c2ws[:, :3, 3] += np.array(args.vec_up) * args.vert_shift
 c2ws = torch.from_numpy(c2ws).to(device=device)
@@ -179,7 +192,7 @@ with torch.no_grad():
         # torch.cuda.synchronize()
         # depth = grid.volume_render_depth_image(cam)
         torch.cuda.synchronize()
-        pts = grid.volume_render_extract_pts(cam, intersect_th=0.1)
+        pts = grid.volume_render_extract_pts(cam, intersect_th=0.2)
         torch.cuda.synchronize()
 
         # depth.clamp_(0.0, 1.0)

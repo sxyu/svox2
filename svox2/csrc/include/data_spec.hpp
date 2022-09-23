@@ -13,10 +13,19 @@ enum BasisType {
   // BASIS_TYPE_ASG = 3
   BASIS_TYPE_3D_TEXTURE = 4,
   BASIS_TYPE_MLP = 255,
+
+  // for surface type
+  SURFACE_TYPE_NONE = 100,
+  SURFACE_TYPE_PLANE = 101,
+  SURFACE_TYPE_SDF = 102,
+  SURFACE_TYPE_UDF = 103,
+  SURFACE_TYPE_UDF_ALPHA = 104,
 };
 
 struct SparseGridSpec {
   Tensor density_data;
+  Tensor surface_data;
+  Tensor level_set_data;
   Tensor sh_data;
   Tensor links;
   Tensor _offset;
@@ -27,12 +36,17 @@ struct SparseGridSpec {
 
   int basis_dim;
   uint8_t basis_type;
+  uint8_t surface_type;
   Tensor basis_data;
 
   inline void check() {
     CHECK_INPUT(density_data);
     CHECK_INPUT(sh_data);
     CHECK_INPUT(links);
+    if (surface_type != SURFACE_TYPE_NONE){
+      CHECK_INPUT(surface_data);
+      CHECK_INPUT(level_set_data);
+    }
     if (background_links.defined()) {
       CHECK_INPUT(background_links);
       CHECK_INPUT(background_data);

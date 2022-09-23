@@ -42,8 +42,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 args = config_util.setup_train_conf()
 USE_KERNEL = not args.nokernel
-
-
+if args.surface_type is None:
+    args.surface_type = 'none'
 
 torch.manual_seed(20200823)
 np.random.seed(20200823)
@@ -51,11 +51,11 @@ np.random.seed(20200823)
 DATASET_TYPE = 'test'
 IMG_ID = 0
 P_COORD = torch.tensor([ # matlib [x, y]
-    [320, 332],
-    [335, 332],
+    [490, 237],
+    [491, 237],
     ])
 
-P_COORD = None
+# P_COORD = None
 
 factor = 1
 dset = datasets[args.dataset_type](
@@ -75,7 +75,7 @@ if path.isfile(ckpt_npz):
     print('#####################################################')
     print(f'Resume from ckpt at {ckpt_npz}')
     grid = svox2.SparseGrid.load(ckpt_npz, device=device)
-    assert args.surface_type == grid.surface_type, "Loaded ckpt incompatible with given configs"
+    assert svox2.__dict__['BASIS_TYPE_' + args.surface_type.upper()] == grid.surface_type, "Loaded ckpt incompatible with given configs"
     print(f'Loaded from step {grid.step_id}')
     print('#####################################################')
 else: 
@@ -133,7 +133,8 @@ with torch.no_grad():
     rgb_pred_test = torch.clamp_max(rgb_pred_test, 1.)
     rgb_pred_test = rgb_pred_test.cpu().detach().numpy()
 
-    imageio.imsave(path.join(args.train_dir, f'debug_{grid.step_id}.png'), rgb_pred_test)
+    if P_COORD is None:
+        imageio.imsave(path.join(args.train_dir, f'debug_{grid.step_id}.png'), rgb_pred_test)
 
 
 

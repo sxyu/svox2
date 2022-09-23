@@ -12,9 +12,12 @@ struct PackedSparseGridSpec {
     PackedSparseGridSpec(SparseGridSpec& spec)
         :
           density_data(spec.density_data.data_ptr<float>()),
+          surface_data(spec.surface_data.defined() ? spec.surface_data.data_ptr<float>() : nullptr),
+          level_set_data(spec.level_set_data.defined() ? spec.level_set_data.data_ptr<float>() : nullptr),
           sh_data(spec.sh_data.data_ptr<float>()),
           links(spec.links.data_ptr<int32_t>()),
           basis_type(spec.basis_type),
+          basis_type(spec.surface_type),
           basis_data(spec.basis_data.defined() ? spec.basis_data.data_ptr<float>() : nullptr),
           background_links(spec.background_links.defined() ?
                            spec.background_links.data_ptr<int32_t>() :

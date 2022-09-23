@@ -1,3 +1,20 @@
 {
-    "cmake.sourceDirectory": "${workspaceFolder}/svox2/csrc"
+    "cmake.sourceDirectory": "${workspaceFolder}/svox2/csrc",
+    "files.associations": {
+        "*.gin": "yaml",
+        "optional": "cpp",
+        "iostream": "cpp",
+        "array": "cpp",
+        "string_view": "cpp",
+        "initializer_list": "cpp",
+        "utility": "cpp",
+        "valarray": "cpp",
+        "string": "cpp",
+        "deque": "cpp",
+        "forward_list": "cpp",
+        "list": "cpp",
+        "unordered_map": "cpp",
+        "unordered_set": "cpp",
+        "vector": "cpp"
+    }
 }

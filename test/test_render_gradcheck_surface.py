@@ -16,7 +16,7 @@ torch.random.manual_seed(2)
 torch.autograd.set_detect_anomaly(True)
 
 device = 'cuda:0'
-backend = 'udf_alpha'
+backend = svox2.SURFACE_TYPE_UDF
 dtype = torch.float32
 grid = svox2.SparseGrid(
                      reso=16,

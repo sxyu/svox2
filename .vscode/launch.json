@@ -25,32 +25,33 @@
             "program": "exract_points.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            // "preLaunchTask": "updatesvox2",
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "ckpt/udf_lego_single_lv/ckpt.npz",
-                "../data/nerf_synthetic/lego"
+                "ckpt/dtu_scan63/reso_256_low_den_lr_2/ckpt.npz",
+                "../data/dtu/dtu_scan63",
+                "--traj_type", "test"
             ]
         },
         {
             "name": "train cpp",
             "type": "pythoncpp",
             "request": "launch",
-            "pythonLaunchName": "train_python",
+            "pythonLaunchName": "train py",
             "cppAttachName": "(gdb) Attach"
         },
         {
-            "name": "current file cpp",
+            "name": "test cuvol cpp",
             "type": "pythoncpp",
             "request": "launch",
-            "pythonLaunchName": "current file py",
+            "pythonLaunchName": "test cuvol py",
             "cppAttachName": "(gdb) Attach"
         },
         {
-            "name": "current file py",
+            "name": "test cuvol py",
             "type": "python",
+            "cwd": "/home/tw554/plenoxels/test",
             "request": "launch",
-            "program": "${file}",
+            "program": "test_render_gradcheck.py",
             "console": "integratedTerminal",
             "justMyCode": false
         },
@@ -114,8 +115,8 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "ckpt/dtu_test",
-                "../data/dtu/dtu_scan63"
+                "ckpt/reso_256_low_den_lr_2",
+                "../data/nerf_synthetic/lego"
             ]
         },
         {
@@ -127,7 +128,7 @@
             "justMyCode": false,
             "cwd": "/home/tw554/plenoxels/opt",
             "args": [
-                "-t", "ckpt/udf_debug",
+                "-t", "ckpt/reso_256_low_den_lr_2",
                 "../data/nerf_synthetic/lego",
                 "-c", "configs/udf_syn.yaml"
             ]
