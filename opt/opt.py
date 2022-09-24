@@ -121,7 +121,7 @@ else:
                             mlp_width=args.mlp_width,
                             background_nlayers=args.background_nlayers,
                             background_reso=args.background_reso,
-                            surface_type=svox2.__dict__['BASIS_TYPE_' + args.surface_type.upper()],
+                            surface_type=svox2.__dict__['SURFACE_TYPE_' + args.surface_type.upper()],
                             surface_init=args.surface_init)
 
     # DC -> gray; mind the SH scaling!
@@ -184,6 +184,8 @@ lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_si
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
 lr_surface_func = get_expon_lr_func(args.lr_surface, args.lr_surface_final, args.lr_surface_delay_steps,
                                   args.lr_surface_delay_mult, args.lr_surface_decay_steps)
+fake_sample_std_func = get_expon_lr_func(args.fake_sample_std, args.fake_sample_std_final, 0,
+                                  1., args.fake_sample_std_decay_steps)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_basis_func = get_expon_lr_func(args.lr_basis, args.lr_basis_final, args.lr_basis_delay_steps,
@@ -391,6 +393,12 @@ while True:
                 lr_sh = args.lr_sh * lr_sh_factor
                 lr_basis = args.lr_basis * lr_basis_factor
 
+            fake_sample_std = fake_sample_std_func(gstep_id)
+            # update fake_sample_std if needed
+            if grid.fake_sample_std is not None:
+                grid.fake_sample_std = torch.tensor(fake_sample_std, 
+                device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
+
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
@@ -453,6 +461,7 @@ while True:
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
+                summary_writer.add_scalar("fake_sample_std", fake_sample_std, global_step=gstep_id)
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
                 if grid.use_background:

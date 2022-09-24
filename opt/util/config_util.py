@@ -83,7 +83,7 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          default='cuvol',
                          help="Renderer backend")
     group.add_argument('--surface_type',
-                         choices=['sdf', 'plane', 'udf', 'udf_alpha'],
+                         choices=['sdf', 'plane', 'udf', 'udf_alpha', 'udf_fake_sample'],
                          default=None,
                          help="Renderer backend")
     group.add_argument('--random_sigma_std',
@@ -243,6 +243,10 @@ def setup_train_conf():
     group.add_argument('--lr_surface_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_surface_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+
+    group.add_argument('--fake_sample_std', type=float, default=1, help='std for fake samples')
+    group.add_argument('--fake_sample_std_final', type=float, default=1e-4)
+    group.add_argument('--fake_sample_std_decay_steps', type=lambda x: int(float(x)), default=50000)
 
 
     group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")

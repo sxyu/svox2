@@ -548,6 +548,7 @@ class SparseGrid(nn.Module):
         self.trainable_data = ["density_data", "sh_data", "basis_data", "background_data"]
 
         self.surface_data = None
+        self.fake_sample_std = None # variance parameter for fake samples
         surface_data = None
         self.level_set_data = None
         if surface_type == SURFACE_TYPE_SDF:
@@ -643,7 +644,8 @@ class SparseGrid(nn.Module):
 
             else:
                 raise NotImplementedError(f'Surface initialization [{surface_init}] is not supported for grid [{surface_type}]')
-        elif surface_type == SURFACE_TYPE_UDF or surface_type == SURFACE_TYPE_UDF_ALPHA:
+        elif surface_type == SURFACE_TYPE_UDF or surface_type == SURFACE_TYPE_UDF_ALPHA \
+            or surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
             # unsigned distance field with fixed level sets
             # udf_alpha: each level set has an alpha, instead of each vertex
             if surface_init == 'sphere' or surface_init is None:
@@ -704,6 +706,9 @@ class SparseGrid(nn.Module):
                 self.density_data = nn.Parameter(
                     torch.zeros(level_sets.numel(), 1, dtype=torch.float32, device=device)
                 )
+            
+            if surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
+                self.fake_sample_std = torch.tensor(1., device=device)
 
         elif False: # surface_type == 'alpha_surface':
             # use level set on alpha values to get surface and intersections
@@ -727,7 +732,7 @@ class SparseGrid(nn.Module):
             links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
             surface_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices] + level_sets[0]
 
-            
+        
         if surface_data is not None:
             self.surface_data = nn.Parameter(surface_data)
             self.trainable_data.append('surface_data')
@@ -796,7 +801,7 @@ class SparseGrid(nn.Module):
             results_sigma[mask] = self.density_data[idxs]
         results_sh[mask] = self.sh_data[idxs]
 
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             results_surface = torch.zeros(
                 (links.size(0), self.surface_data.shape[-1]), device=links.device, dtype=torch.float32
             )
@@ -827,7 +832,7 @@ class SparseGrid(nn.Module):
 
         :return: (density, color)
         """
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             raise NotImplementedError
 
         if use_kernel and self.links.is_cuda and _C is not None:
@@ -1194,6 +1199,7 @@ class SparseGrid(nn.Module):
         '''
         Find a list of voxels that given camera ray batch intersects with
         Re-arrange ray and voxels into a batch
+        https://stackoverflow.com/questions/33290838/find-if-a-ray-intersects-a-voxel-without-marching
         '''
         gsz = self._grid_size()
         gsz_cu = gsz.to(device=dirs.device)
@@ -1212,16 +1218,24 @@ class SparseGrid(nn.Module):
             # ray_d = -1 * ray_d
 
             # ugly work arounds to move ray_o outside [-1, +1]
-            ts = (torch.tensor([-1, -1, -1, 1, 1, 1], dtype=ray_o.dtype, device=ray_o.device) - ray_o.repeat([1,2])) /  ray_d.repeat([1,2])
-            near = ts.min(axis=-1).values
-            inside_o_mask = near <= 0.
+            inside_o_mask = ((ray_o >= -1.) & (ray_o <= 1.)).all(axis=-1)
+            ts = (torch.tensor([-1, -1, -1, 1, 1, 1], dtype=ray_o.dtype, device=ray_o.device) - ray_o[inside_o_mask].repeat([1,2])) /  ray_d[inside_o_mask].repeat([1,2])
+            ts[ts>0] = -torch.inf # ingore positive ts
+            near = torch.zeros_like(ray_o[:,0])
+            near[inside_o_mask] = ts.max(axis=-1).values
             ray_o[inside_o_mask] = ray_o[inside_o_mask] + (near[inside_o_mask]-1e-6)[:, None] * ray_d[inside_o_mask]
 
             
-            nugs_ridx, nugs_pidx, _ = \
+            nugs_ridx, nugs_pidx, nugs_depth = \
                 kaolin.render.spc.unbatched_raytrace(
                     self.spc.octree, self.spc.point_hierarchy, self.spc.pyramid, 
                     self.spc.exsum, ray_o.float(), ray_d.float(), self.spc.max_level)
+
+            # remove voxels that are behind the ray (needed due to the work arounds)
+            behind_intersect_mask = inside_o_mask[nugs_ridx.long()] & \
+                                    (nugs_depth[:, 0] < -near[nugs_ridx.long()])
+            nugs_ridx = nugs_ridx[~behind_intersect_mask]
+            nugs_pidx = nugs_pidx[~behind_intersect_mask]
 
             l = kaolin.ops.spc.morton_to_points(nugs_pidx.long() - self.spc.pyramid[1, self.spc.max_level]).long() 
             # filter boundary ls
@@ -1981,7 +1995,7 @@ class SparseGrid(nn.Module):
 
 
         ########### Find Ray-Voxel Intersections ###########
-
+        # with utils.Timing("Ray-voxel intersection finding"):
         l, ray_ids = self.find_ray_voxels_intersection(t, origins, dirs)
 
         ########### Fetch Vertices Data ###########
@@ -2016,8 +2030,9 @@ class SparseGrid(nn.Module):
 
 
         ########### Find Ray-Surface Intersections ###########
-        if self.surface_type == SURFACE_TYPE_SDF or self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
-            if self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
+        # with utils.Timing("Cubic root finding"):
+        if self.surface_type in [SURFACE_TYPE_SDF, SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+            if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
                 fn = torch.nn.Softplus()
                 surface000 = fn(surface000)
                 surface001 = fn(surface001)
@@ -2055,13 +2070,22 @@ class SparseGrid(nn.Module):
             f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
             f0 = c0*(1-ox+lx) + c1*(ox-lx)
 
-            if self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
+            if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
                 # find the list of possible level sets
                 udfs = torch.stack(
                         [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
                         dim=-1)
                 lv_set_mask = (self.level_set_data >= udfs.min(axis=-1).values) & \
                     (self.level_set_data <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
+
+                if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+                    # if no valid lv set in range, use closest one
+                    no_lv_mask = ~lv_set_mask.any(axis=-1)
+                    if torch.count_nonzero(no_lv_mask) > 0:
+                        udf_avgs = torch.mean(udfs[no_lv_mask], axis=-1)
+                        dists = torch.abs(self.level_set_data[None, :] - udf_avgs)
+                        lv_set_mask[no_lv_mask, dists.argmin(axis=-1)] = True # TODO check if this is ok!
+
                 lv_sets = self.level_set_data[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
                 lv_set_ids = torch.arange(self.level_set_data.shape[0], device=udfs.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
                 N_EQ = lv_sets.shape[0] # total number of equations to solve
@@ -2206,11 +2230,6 @@ class SparseGrid(nn.Module):
             l_ids = l_ids[:, None].repeat(1, N_INTERSECT)
             lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
 
-            ts = ts.reshape(-1) # [VEV * N_INTERSECT]
-            ray_ids = ray_ids.reshape(-1) # [VEV * N_INTERSECT]
-            l_ids = l_ids.reshape(-1) # [VEV * N_INTERSECT]
-            lv_set_ids = lv_set_ids.reshape(-1) # [VEV * N_INTERSECT]
-            samples = samples.reshape(-1, 3) # [VEV * N_INTERSECT, 3]
 
             # filter out roots with negative t
             neg_roots_mask = ts < 0
@@ -2224,11 +2243,42 @@ class SparseGrid(nn.Module):
             
             valid_sample_mask = (~neg_roots_mask) & (~invalid_sample_mask)
 
-            ts = ts[valid_sample_mask]
-            ray_ids = ray_ids[valid_sample_mask]
-            l_ids = l_ids[valid_sample_mask]
-            lv_set_ids = lv_set_ids[valid_sample_mask]
-            samples = samples[valid_sample_mask, :]
+
+            if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+                # mask of ray-voxel pair where no valid intersection exists
+                # where we take one fake sample at the mid of the ray passing through the voxel
+                fake_sample_mask = ~(valid_sample_mask.any(axis=-1, keepdim=True)).repeat(1,N_INTERSECT)
+                fake_sample_mask[:, 1:] = False
+                # find two intersections between ray and voxel surfaces
+                _l = l[l_ids[fake_sample_mask]]
+                _os = origins[ray_ids[fake_sample_mask]]
+                _ds = dirs[ray_ids[fake_sample_mask]]
+                
+                # if dirs is negative, closest plane has larger coord
+                close_planes = _l + (_ds<0).long()
+                far_planes = _l + (~(_ds<0)).long()
+
+                close_t = torch.nan_to_num((close_planes - _os) / _ds, -torch.inf).max(axis=-1).values
+                far_t = torch.nan_to_num((far_planes - _os) / _ds, torch.inf).min(axis=-1).values
+
+                ts[fake_sample_mask] = (close_t + far_t)/2
+                samples[fake_sample_mask, :] = _os + ts[fake_sample_mask][:, None] * _ds
+
+                valid_sample_mask = valid_sample_mask | fake_sample_mask
+
+                # store ids of fake samples
+                fake_sample_ids = torch.zeros(fake_sample_mask.numel(), device=fake_sample_mask.device, dtype=torch.long)
+                fake_sample_ids[valid_sample_mask.view(-1)] = torch.arange(
+                    torch.count_nonzero(valid_sample_mask),
+                    device=fake_sample_mask.device)
+
+                fake_sample_ids = fake_sample_ids.view(fake_sample_mask.shape)[fake_sample_mask]
+
+            ts = ts[valid_sample_mask] # [VEV * N_INTERSECT]
+            ray_ids = ray_ids[valid_sample_mask] # [VEV * N_INTERSECT]
+            l_ids = l_ids[valid_sample_mask] # [VEV * N_INTERSECT]
+            lv_set_ids = lv_set_ids[valid_sample_mask] # [VEV * N_INTERSECT]
+            samples = samples[valid_sample_mask, :] # [VEV * N_INTERSECT, 3]
             l = l[l_ids, :]
                   
         
@@ -2280,7 +2330,7 @@ class SparseGrid(nn.Module):
             torch.clamp_(wa, 0., 1.)
             torch.clamp_(wb, 0., 1.)
         if self.surface_type == SURFACE_TYPE_UDF_ALPHA:
-            _alpha = self.density_data[lv_set_ids]
+            alpha = self.density_data[lv_set_ids]
         else:
             c00 = alpha000[l_ids] * wa[:, 2:] + alpha001[l_ids] * wb[:, 2:]
             c01 = alpha010[l_ids] * wa[:, 2:] + alpha011[l_ids] * wb[:, 2:]
@@ -2288,9 +2338,30 @@ class SparseGrid(nn.Module):
             c11 = alpha110[l_ids] * wa[:, 2:] + alpha111[l_ids] * wb[:, 2:]
             c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
             c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-            _alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+            alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
         # post sigmoid activation
-        alpha = torch.sigmoid(_alpha)
+        alpha = torch.sigmoid(alpha)
+
+        if self.surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
+            # use naive biased formula to get alpha for fake samples
+            lv_sets = self.level_set_data[lv_set_ids[fake_sample_ids]]
+            
+            # find the UDF value at the fake sample
+            c00 = surface000[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface001[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
+            c01 = surface010[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface011[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
+            c10 = surface100[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface101[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
+            c11 = surface110[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface111[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
+            c0 = c00 * wa[fake_sample_ids, 1:2] + c01 * wb[fake_sample_ids, 1:2]
+            c1 = c10 * wa[fake_sample_ids, 1:2] + c11 * wb[fake_sample_ids, 1:2]
+            surface_scalar = c0 * wa[fake_sample_ids, :1] + c1 * wb[fake_sample_ids, :1]
+
+            surface_scalar = surface_scalar[:,0] - lv_sets # SDF-like values
+
+            fake_sample_reweight = torch.exp(-.5 * (surface_scalar/self.fake_sample_std)**2)
+            _alpha = alpha.clone()
+            _alpha[fake_sample_ids] = alpha[fake_sample_ids] * fake_sample_reweight[:, None]
+            alpha = _alpha
+
 
         # interpolate rgb
         c00 = rgb000[l_ids] * wa[:, 2:] + rgb001[l_ids] * wb[:, 2:]
@@ -2434,7 +2505,7 @@ class SparseGrid(nn.Module):
 
             out['depth'] = out_depth
 
-        if self.surface_type == SURFACE_TYPE_UDF or self.surface_type == SURFACE_TYPE_UDF_ALPHA:
+        if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
             out['log_stats']['m_lv_sets'] = M_LV
 
             # caluclate udf_var_loss
@@ -2654,7 +2725,7 @@ class SparseGrid(nn.Module):
             )}
         else:
             warn("Using slow volume rendering, should only be used for debugging")
-            if self.surface_type is not None:
+            if self.surface_type != SURFACE_TYPE_NONE:
                 return self._surface_render_gradcheck_lerp(rays, return_raylen=return_raylen, **kwargs)
             elif self.opt.backend == 'nvol':
                 return {'rgb': self._volume_render_gradcheck_nvol_lerp(rays, return_raylen=return_raylen)}
@@ -2689,7 +2760,7 @@ class SparseGrid(nn.Module):
         :return: (N, 3), predicted RGB
         """
 
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             raise NotImplementedError
         assert (
             _C is not None and self.sh_data.is_cuda
@@ -2798,7 +2869,7 @@ class SparseGrid(nn.Module):
 
         :return: (N,)
         """
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             out = self._surface_render_gradcheck_lerp(rays, return_depth=True)
             return out['depth']
 
@@ -2846,7 +2917,7 @@ class SparseGrid(nn.Module):
         :return: [N, 3] points array
         """
         rays = camera.gen_rays()
-        if self.surface_type is None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             # extrac points from depth
             all_depths = []
             for batch_start in range(0, camera.height * camera.width, batch_size):
@@ -2954,7 +3025,7 @@ class SparseGrid(nn.Module):
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
             self.density_data.grad = None
-            if self.surface_type is not None:
+            if self.surface_type != SURFACE_TYPE_NONE:
                 self.surface_data.grad = None
             self.sh_data.grad = None
             self.sparse_grad_indexer = None
@@ -3042,7 +3113,7 @@ class SparseGrid(nn.Module):
 
             sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
             del self.density_data
-            if self.surface_type is not None:
+            if self.surface_type != SURFACE_TYPE_NONE:
                 del self.surface_data
             del self.sh_data
             del all_sample_vals_sh
@@ -3068,7 +3139,7 @@ class SparseGrid(nn.Module):
             print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
             print('links', init_links.shape, init_links.dtype)
             self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
-            if self.surface_type is not None:
+            if self.surface_type != SURFACE_TYPE_NONE:
                 raise NotImplementedError
 
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
@@ -3190,10 +3261,12 @@ class SparseGrid(nn.Module):
             "sh_data":self.sh_data.data.cpu().numpy().astype(np.float16),
             "step_id": step_id
         }
-        if self.surface_type is not None:
+        if self.surface_type != SURFACE_TYPE_NONE:
             data['surface_data'] = self.surface_data.data.cpu().numpy()
         if self.level_set_data is not None:
             data['level_set_data'] = self.level_set_data.cpu().numpy()
+        if self.fake_sample_std is not None:
+            data['fake_sample_std'] = self.fake_sample_std.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -3238,7 +3311,7 @@ class SparseGrid(nn.Module):
             sh_data = z.f.sh_data
             density_data = z.f.density_data
             surface_type = z.f.surface_type.item()
-            if surface_type is not None:
+            if surface_type != SURFACE_TYPE_NONE:
                 surface_data = z.f.surface_data
 
         if 'background_data' in z:
@@ -3281,6 +3354,9 @@ class SparseGrid(nn.Module):
             grid.surface_data = nn.Parameter(surface_data)
         if 'level_set_data' in z:
             grid.level_set_data = torch.from_numpy(z.f.level_sets.astype(np.float32)).to(device=device)
+        if 'fake_sample_std' in z:
+            grid.fake_sample_std = torch.from_numpy(z.f.fake_sample_std.astype(np.float32)).to(device=device)
+
         grid.links = torch.from_numpy(links).to(device=device)
         grid.capacity = grid.sh_data.size(0)
 

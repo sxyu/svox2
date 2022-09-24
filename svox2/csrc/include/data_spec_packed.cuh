@@ -17,7 +17,7 @@ struct PackedSparseGridSpec {
           sh_data(spec.sh_data.data_ptr<float>()),
           links(spec.links.data_ptr<int32_t>()),
           basis_type(spec.basis_type),
-          basis_type(spec.surface_type),
+          surface_type(spec.surface_type),
           basis_data(spec.basis_data.defined() ? spec.basis_data.data_ptr<float>() : nullptr),
           background_links(spec.background_links.defined() ?
                            spec.background_links.data_ptr<int32_t>() :
@@ -47,10 +47,13 @@ struct PackedSparseGridSpec {
     }
 
     float* __restrict__ density_data;
+    float* __restrict__ surface_data;
+    float* __restrict__ level_set_data;
     float* __restrict__ sh_data;
     const int32_t* __restrict__ links;
 
     const uint8_t basis_type;
+    const uint8_t surface_type;
     float* __restrict__ basis_data;
 
     const int32_t* __restrict__ background_links;
