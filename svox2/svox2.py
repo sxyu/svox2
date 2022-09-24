@@ -3353,7 +3353,7 @@ class SparseGrid(nn.Module):
             surface_data = torch.from_numpy(surface_data).to(device=device)
             grid.surface_data = nn.Parameter(surface_data)
         if 'level_set_data' in z:
-            grid.level_set_data = torch.from_numpy(z.f.level_sets.astype(np.float32)).to(device=device)
+            grid.level_set_data = torch.from_numpy(z.f.level_set_data.astype(np.float32)).to(device=device)
         if 'fake_sample_std' in z:
             grid.fake_sample_std = torch.from_numpy(z.f.fake_sample_std.astype(np.float32)).to(device=device)
 
