@@ -2131,11 +2131,21 @@ class SparseGrid(nn.Module):
                 # https://github.com/shril/CubicEquationSolver/blob/master/CubicEquationSolver.py
 
                 # check for trivial a and b -- reduce to linear or polynomial solutions
-                no_solution_mask = (f3 == 0.) & (f2 == 0.) & (f1 == 0.)
-                linear_mask = (f3 == 0.) & (f2 == 0.) & (~no_solution_mask)
-                quad_mask = (f3 == 0.) & (~linear_mask) & (~no_solution_mask)
-                cubic_mask = (~quad_mask) & (~linear_mask) & (~no_solution_mask)
+                # no_solution_mask = (f3 == 0.) & (f2 == 0.) & (f1 == 0.)
+                # linear_mask = (f3 == 0.) & (f2 == 0.) & (~no_solution_mask)
+                # quad_mask = (f3 == 0.) & (~linear_mask) & (~no_solution_mask)
+                # cubic_mask = (~quad_mask) & (~linear_mask) & (~no_solution_mask)
 
+                atol = 1e-10
+                no_solution_mask = torch.isclose(f3, torch.zeros_like(f3), atol=atol) \
+                        & torch.isclose(f2, torch.zeros_like(f2), atol=atol) \
+                        & torch.isclose(f1, torch.zeros_like(f1), atol=atol)
+                linear_mask = torch.isclose(f3, torch.zeros_like(f3), atol=atol) \
+                        & torch.isclose(f2, torch.zeros_like(f2), atol=atol) \
+                        & (~no_solution_mask)
+                quad_mask = torch.isclose(f3, torch.zeros_like(f3), atol=atol) \
+                        & (~linear_mask) & (~no_solution_mask)
+                cubic_mask = (~quad_mask) & (~linear_mask) & (~no_solution_mask)
 
 
                 ##### Linear Roots #####
@@ -2148,7 +2158,7 @@ class SparseGrid(nn.Module):
                     D = _c**2 - 4.0 * _b * _d
 
                     # two real roots
-                    D_mask = D >+ 0 
+                    D_mask = D > 0 
                     sqrt_D = torch.sqrt(D[D_mask])
                     ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
                     ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
@@ -2161,14 +2171,15 @@ class SparseGrid(nn.Module):
                 cubic_ids = torch.arange(ts.shape[0])[cubic_mask]
 
                 # normalize 
-                a = f3[cubic_mask] / f3[cubic_mask]
-                b = f2[cubic_mask] / f3[cubic_mask]
-                c = f1[cubic_mask] / f3[cubic_mask]
-                d = f0[cubic_mask] / f3[cubic_mask]
+                norm_term = f3[cubic_mask]
+                a = f3[cubic_mask] / norm_term
+                b = f2[cubic_mask] / norm_term
+                c = f1[cubic_mask] / norm_term
+                d = f0[cubic_mask] / norm_term
 
                 # TODO: remove voxels with invalid SDFs as they can cause numerical issues
 
-                def cond_cbrt(x, eps=1e-6):
+                def cond_cbrt(x, eps=1e-10):
                     '''
                     Compute cubic root of x based on sign
                     '''
@@ -2179,10 +2190,7 @@ class SparseGrid(nn.Module):
 
                 f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
                 g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
-                h = ((g**2.) / 4. + (f**3.) / 27.)
-
-                # h = torch.clamp_max_(h, 1e10) # might need to clamp min as well
-                # h = torch.clamp(h, -1e12, 1e12) 
+                h = ((g**2.) / 4. + (f**3.) / 27.) 
 
                 # all three roots are real and equal
                 _mask = ((f == 0) & (g == 0) & (h == 0))
@@ -2194,8 +2202,9 @@ class SparseGrid(nn.Module):
                 
                 _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
                 _j = _i ** (1 / 3.)
-                eps = 1e-7
+                eps = 1e-10
                 _k = torch.acos(torch.clamp(-(_g / (2 * _i)), -1+eps, 1-eps))              
+                # _k = torch.acos(-(_g / (2 * _i)))        
                 _L = _j * -1                              
                 _M = torch.cos(_k / 3.)       
                 _N = np.sqrt(3) * torch.sin(_k / 3.)    
@@ -2229,6 +2238,10 @@ class SparseGrid(nn.Module):
             ray_ids = ray_ids[:, None].repeat(1, N_INTERSECT)
             l_ids = l_ids[:, None].repeat(1, N_INTERSECT)
             lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
+
+            def check_solution(ts=ts):
+                return ts**3 * f3[:, None].repeat(1, N_INTERSECT) + ts**2 * f2[:, None].repeat(1, N_INTERSECT) + \
+                    ts * f1[:, None].repeat(1, N_INTERSECT) + f0[:, None].repeat(1, N_INTERSECT)
 
 
             # filter out roots with negative t
@@ -2280,7 +2293,7 @@ class SparseGrid(nn.Module):
             lv_set_ids = lv_set_ids[valid_sample_mask] # [VEV * N_INTERSECT]
             samples = samples[valid_sample_mask, :] # [VEV * N_INTERSECT, 3]
             l = l[l_ids, :]
-                  
+
         
         elif self.surface_type == SURFACE_TYPE_PLANE:
             # raise NotImplementedError
@@ -2317,12 +2330,26 @@ class SparseGrid(nn.Module):
             ts = ts[valid_sample_mask]
             ray_ids = ray_ids[valid_sample_mask]
             samples = samples[valid_sample_mask, :]
-        
+
         else:
             raise NotImplementedError(f'Gird surface type {self.surface_type} is not supported for grad check rendering')
 
 
         ########### Interpolate Alpha & SH ###########
+
+        def check_sample_surface(samples=samples, l=l, l_ids=l_ids):
+            wa, wb = 1. - (samples - l), (samples - l)
+            if allow_outside:
+                torch.clamp_(wa, 0., 1.)
+                torch.clamp_(wb, 0., 1.)
+            c00 = surface000[l_ids] * wa[:, 2:] + surface001[l_ids] * wb[:, 2:]
+            c01 = surface010[l_ids] * wa[:, 2:] + surface011[l_ids] * wb[:, 2:]
+            c10 = surface100[l_ids] * wa[:, 2:] + surface101[l_ids] * wb[:, 2:]
+            c11 = surface110[l_ids] * wa[:, 2:] + surface111[l_ids] * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            surface = c0 * wa[:, :1] + c1 * wb[:, :1]
+            return surface
  
         # interpolate opacity
         wa, wb = 1. - (samples - l), (samples - l)
@@ -2341,6 +2368,7 @@ class SparseGrid(nn.Module):
             alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
         # post sigmoid activation
         alpha = torch.sigmoid(alpha)
+
 
         if self.surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
             # use naive biased formula to get alpha for fake samples
