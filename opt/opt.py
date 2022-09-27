@@ -122,7 +122,8 @@ else:
                             background_nlayers=args.background_nlayers,
                             background_reso=args.background_reso,
                             surface_type=svox2.__dict__['SURFACE_TYPE_' + args.surface_type.upper()],
-                            surface_init=args.surface_init)
+                            surface_init=args.surface_init,
+                            force_alpha=args.force_alpha)
 
     # DC -> gray; mind the SH scaling!
     grid.sh_data.data[:] = 0.0

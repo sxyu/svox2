@@ -385,12 +385,14 @@ class SparseGrid(nn.Module):
         device: Union[torch.device, str] = "cpu",
         surface_type: int = SURFACE_TYPE_NONE,
         surface_init: str = None, # methods used to init sdf data
-        use_octree: bool = True
+        use_octree: bool = True,
+        force_alpha: bool = False, # clamp alpha to be non-trivial to force surface learning
     ):
         super().__init__()
         self.basis_type = basis_type
         self.surface_type = surface_type
         self.step_id = 0
+        self.force_alpha = force_alpha
         if basis_type == BASIS_TYPE_SH:
             assert utils.isqrt(basis_dim) is not None, "basis_dim (SH) must be a square number"
         assert (
@@ -2368,6 +2370,10 @@ class SparseGrid(nn.Module):
             alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
         # post sigmoid activation
         alpha = torch.sigmoid(alpha)
+
+        # force alpha
+        if self.force_alpha:
+            alpha = torch.clamp(alpha, 0.05)
 
 
         if self.surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:

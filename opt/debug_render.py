@@ -38,7 +38,7 @@ from tqdm import tqdm
 from typing import NamedTuple, Optional, Union
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
+# torch.set_printoptions(sci_mode=False)
 
 args = config_util.setup_train_conf()
 USE_KERNEL = not args.nokernel
@@ -50,12 +50,12 @@ np.random.seed(20200823)
 
 DATASET_TYPE = 'test'
 IMG_ID = 0
-P_COORD = torch.tensor([ # matlib [x, y]
-    [490, 237],
-    [491, 237],
+P_COORD = torch.tensor([ # matlibplot [x, y]
+    [400, 467],
+    [425, 467]
     ])
 
-# P_COORD = None
+P_COORD = None
 
 factor = 1
 dset = datasets[args.dataset_type](
@@ -75,11 +75,13 @@ if path.isfile(ckpt_npz):
     print('#####################################################')
     print(f'Resume from ckpt at {ckpt_npz}')
     grid = svox2.SparseGrid.load(ckpt_npz, device=device)
-    assert svox2.__dict__['BASIS_TYPE_' + args.surface_type.upper()] == grid.surface_type, "Loaded ckpt incompatible with given configs"
+    assert svox2.__dict__['SURFACE_TYPE_' + args.surface_type.upper()] == grid.surface_type, "Loaded ckpt incompatible with given configs"
     print(f'Loaded from step {grid.step_id}')
     print('#####################################################')
 else: 
-    raise NotImplementedError(f'Ckpt {ckpt_npz} not found~')
+    raise NotImplementedError(f'Ckpt {ckpt_npz} not found')
+
+grid.density_data.data[:] = 1e8
 
 
 optim_basis_mlp = None

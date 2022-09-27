@@ -37,7 +37,7 @@ parser.add_argument(
                     "--height", "-H", type=float, default=None, help="Rendering image height (only if not --traj)"
                             )
 parser.add_argument(
-	"--num_views", "-N", type=int, default=50,
+	"--num_views", "-N", type=int, default=10,
     help="Number of frames to render"
 )
 
@@ -93,6 +93,10 @@ parser.add_argument('--blackbg',
                     action='store_true',
                     default=False,
                     help="Force a black BG (behind BG model) color; useful for debugging 'clouds'")
+parser.add_argument('--render_depth',
+                    action='store_true',
+                    default=False,
+                    help="Render depth images instead")
 
 args = parser.parse_args()
 USE_KERNEL = not args.nokernel
@@ -224,6 +228,8 @@ grid = svox2.SparseGrid.load(args.ckpt, device=device)
 # args.renderer_backend = grid.surface_type
 print(grid.center, grid.radius)
 
+# grid.density_data.data = torch.clamp_min(grid.density_data.data, torch.logit(torch.tensor(0.1)).to(grid.density_data.device))
+
 # DEBUG
 #  grid.background_data.data[:, 32:, -1] = 0.0
 #  render_out_path += '_front'
@@ -289,11 +295,18 @@ with torch.no_grad():
                            w, h,
                            ndc_coeffs=(-1.0, -1.0))
         torch.cuda.synchronize()
-        im = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
+        if args.render_depth:
+            im = grid.volume_render_depth_image(cam)
+        else:
+            im = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
         torch.cuda.synchronize()
-        im.clamp_(0.0, 1.0)
+        
+        if args.render_depth:
+            im = viridis_cmap(im.cpu())
+        else:
+            im.clamp_(0.0, 1.0)
+            im = im.cpu().numpy()
 
-        im = im.cpu().numpy()
         im = (im * 255).astype(np.uint8)
         frames.append(im)
         im = None
