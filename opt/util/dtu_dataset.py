@@ -70,7 +70,7 @@ class DTUDataset(DatasetBase):
         if scene_scale is None:
             scene_scale = 1.0
         if scale is None:
-            scale = 0.25
+            scale = 1.0
         
         self.scene_radius = [1., 1., 1.]
         self.device = device
