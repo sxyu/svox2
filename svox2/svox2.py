@@ -2562,7 +2562,7 @@ class SparseGrid(nn.Module):
             ids = torch.argmax(sample_mask.long(), dim=-1)
             intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
             intersects = intersects[sample_mask.any(axis=-1)]
-            out['intersections'] = intersects
+            out['intersections'] = self.grid2world(intersects)
 
         return out
 
@@ -2945,7 +2945,7 @@ class SparseGrid(nn.Module):
         :return: [N, 3] points array
         """
         rays = camera.gen_rays()
-        if self.surface_type != SURFACE_TYPE_NONE:
+        if self.surface_type == SURFACE_TYPE_NONE:
             # extrac points from depth
             all_depths = []
             for batch_start in range(0, camera.height * camera.width, batch_size):

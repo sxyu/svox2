@@ -12,6 +12,7 @@ from os import path
 from util.dataset import datasets
 from util.util import Timing, compute_ssim, viridis_cmap, pose_spherical
 from util import config_util
+import sklearn.neighbors as skln
 
 import imageio
 import cv2
@@ -72,6 +73,12 @@ parser.add_argument(
     action='store_true', 
     default=False,
     help="Use test cameras to extract pts"
+)
+parser.add_argument(
+    "--downsample_density",
+    type=float,
+    default=0.,
+    help="density for downsampling the pts, set to 0 to disable"
 )
 
 # Camera adjustment
@@ -198,6 +205,10 @@ with torch.no_grad():
         # depth.clamp_(0.0, 1.0)
         # depth = depth /depth.max()
         pts = pts.cpu().numpy()
+
+
+
+        
         # depth = depth.cpu().numpy()
         # depth = (depth * 255).astype(np.uint8)
         all_pts.append(pts)
@@ -209,8 +220,24 @@ with torch.no_grad():
         # raise NotImplementedError
 
         
+# for dtu dataset, need to rescale the pts
+all_pts = np.concatenate(all_pts, 0)
+if hasattr(dset, 'pt_rescale'):
+    rescale_mat = dset.pt_rescale
+    all_pts = all_pts * rescale_mat[0,0] + rescale_mat[:3,3][None]
 
-all_pts = np.concatenate(all_pts, 0).astype(np.half)
+if args.downsample_density > 0:
+    nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=args.downsample_density, algorithm='kd_tree', n_jobs=-1)
+    nn_engine.fit(all_pts)
+    rnn_idxs = nn_engine.radius_neighbors(all_pts, radius=args.downsample_density, return_distance=False)
+    mask = np.ones(all_pts.shape[0], dtype=np.bool_)
+    for curr, idxs in enumerate(rnn_idxs):
+        if mask[curr]:
+            mask[idxs] = 0
+            mask[curr] = 1
+    all_pts = all_pts[mask]
+
+
 np.save(path.join(path.dirname(args.ckpt), 'pts.npy'), all_pts)
 
 

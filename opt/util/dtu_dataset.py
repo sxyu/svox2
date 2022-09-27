@@ -93,6 +93,7 @@ class DTUDataset(DatasetBase):
         scale_mats = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
         world_mats = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
 
+        self.pt_rescale = scale_mats[0]
 
         intrinsics_all = []
 
