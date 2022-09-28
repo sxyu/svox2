@@ -2371,9 +2371,6 @@ class SparseGrid(nn.Module):
         # post sigmoid activation
         alpha = torch.sigmoid(alpha)
 
-        # force alpha
-        if self.force_alpha:
-            alpha = torch.clamp(alpha, 0.05)
 
 
         if self.surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
@@ -2396,6 +2393,9 @@ class SparseGrid(nn.Module):
             _alpha[fake_sample_ids] = alpha[fake_sample_ids] * fake_sample_reweight[:, None]
             alpha = _alpha
 
+        # force alpha
+        if self.force_alpha:
+            alpha = torch.clamp_min(alpha, 0.005)
 
         # interpolate rgb
         c00 = rgb000[l_ids] * wa[:, 2:] + rgb001[l_ids] * wb[:, 2:]
