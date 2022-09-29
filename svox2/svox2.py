@@ -2050,6 +2050,10 @@ class SparseGrid(nn.Module):
                 surface110 = fn(surface110)
                 surface111 = fn(surface111)
 
+            surface_values = torch.stack(
+                    [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
+                    dim=-1)
+
             ox, oy, oz = origins[ray_ids].to(dtype).unbind(-1)
             vx, vy, vz = dirs[ray_ids].to(dtype).unbind(-1)
 
@@ -2079,22 +2083,19 @@ class SparseGrid(nn.Module):
 
             if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
                 # find the list of possible level sets
-                udfs = torch.stack(
-                        [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
-                        dim=-1)
-                lv_set_mask = (self.level_set_data >= udfs.min(axis=-1).values) & \
-                    (self.level_set_data <= udfs.max(axis=-1).values) # [VEV, N_level_sets]
+                lv_set_mask = (self.level_set_data >= surface_values.min(axis=-1).values) & \
+                    (self.level_set_data <= surface_values.max(axis=-1).values) # [VEV, N_level_sets]
 
                 if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
                     # if no valid lv set in range, use closest one
                     no_lv_mask = ~lv_set_mask.any(axis=-1)
                     if torch.count_nonzero(no_lv_mask) > 0:
-                        udf_avgs = torch.mean(udfs[no_lv_mask], axis=-1)
+                        udf_avgs = torch.mean(surface_values[no_lv_mask], axis=-1)
                         dists = torch.abs(self.level_set_data[None, :] - udf_avgs)
                         lv_set_mask[no_lv_mask, dists.argmin(axis=-1)] = True # TODO check if this is ok!
 
                 lv_sets = self.level_set_data[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
-                lv_set_ids = torch.arange(self.level_set_data.shape[0], device=udfs.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
+                lv_set_ids = torch.arange(self.level_set_data.shape[0], device=surface_values.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
                 N_EQ = lv_sets.shape[0] # total number of equations to solve
                 if lv_set_mask.numel() == 0:
                     M_LV = 0
@@ -2553,7 +2554,7 @@ class SparseGrid(nn.Module):
             if N_lv_sets.numel() == 0:
                 udf_var_loss = 0.
             else:
-                udf_vars = torch.var(udfs,dim=-1)[:,0]
+                udf_vars = torch.var(surface_values,dim=-1)[:,0]
                 udf_var_loss = torch.mean(torch.clamp_min((N_lv_sets - 1), 0.) * udf_vars)
             out['extra_loss']['udf_var_loss'] = udf_var_loss
             out['log_stats']['udf_var_loss'] = udf_var_loss
@@ -2568,6 +2569,93 @@ class SparseGrid(nn.Module):
             density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
         out['extra_loss']['density_lap_loss'] = density_lap_loss
         out['log_stats']['density_lap_loss'] = density_lap_loss
+
+        # compute normal loss
+        # note that this should be replaced by a special form of TV loss really...
+        if alpha.numel() == 0:
+            normal_loss = 0.
+        else:
+            def find_normal(xyz, surfaces):
+                x,y,z = xyz.unbind(-1)
+                surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111 = \
+                    surfaces.unbind(-1)
+
+                c00 = surface000 * (1-z) + surface001 * z
+                c01 = surface010 * (1-z) + surface011 * z
+                c10 = surface100 * (1-z) + surface101 * z
+                c11 = surface110 * (1-z) + surface111 * z
+                c0 = c00 * (1-y) + c01 * y
+                c1 = c10 * (1-y) + c11 * y
+                # surface = c0 * (1-x) + c1 * x
+                
+                ds_dx = c1 - c0
+                ds_dy = (c01-c00)*(1-x) + (c11-c10)*x
+
+                dc00_dz = surface001 - surface000
+                dc01_dz = surface011 - surface010
+                dc10_dz = surface101 - surface100
+                dc11_dz = surface111 - surface110
+                ds_dz = (dc00_dz * (1-y) + dc01_dz * y)*(1-x) + (dc10_dz * (1-y) + dc11_dz * y)*x
+
+                normals = torch.stack([ds_dx, ds_dy, ds_dz], dim=-1)
+                normals = normals / torch.norm(normals, dim=-1, keepdim=True)
+                return normals
+            
+            # find normal at intersections
+            surfaces = surface_values[l_ids][:,0,:]
+            # TODO: might want to disable gradient flowing back from samples
+            normals = find_normal(samples.detach().clone()-l, surfaces) 
+
+            # find nearby voxels
+            # randomly sample a nearby voxel
+            nearby_ls = l + torch.randint(3, [l.shape[0],3]).to(l.device) - 1
+            nearby_ls = torch.clamp(nearby_ls, 0, gsz_cu[0]-2)
+            # for now, just take sample at mid of voxel instead of intersections
+            nearby_l_samples = l + 0.5
+
+            lx, ly, lz = nearby_ls.unbind(-1) 
+            links000 = self.links[lx, ly, lz]
+            links001 = self.links[lx, ly, lz + 1]
+            links010 = self.links[lx, ly + 1, lz]
+            links011 = self.links[lx, ly + 1, lz + 1]
+            links100 = self.links[lx + 1, ly, lz]
+            links101 = self.links[lx + 1, ly, lz + 1]
+            links110 = self.links[lx + 1, ly + 1, lz]
+            links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+            # mask out voxels that don't exist
+            none_l_mask = [links < 0 for links in [links000, links001, links010, links011, links100, links101, links110, links111]]
+            none_l_mask = torch.stack(none_l_mask).T.any(axis=-1)
+
+            nb_alpha000, _, nb_surface000 = self._fetch_links(links000)
+            nb_alpha001, _, nb_surface001 = self._fetch_links(links001)
+            nb_alpha010, _, nb_surface010 = self._fetch_links(links010)
+            nb_alpha011, _, nb_surface011 = self._fetch_links(links011)
+            nb_alpha100, _, nb_surface100 = self._fetch_links(links100)
+            nb_alpha101, _, nb_surface101 = self._fetch_links(links101)
+            nb_alpha110, _, nb_surface110 = self._fetch_links(links110)
+            nb_alpha111, _, nb_surface111 = self._fetch_links(links111)
+
+            # find normal of nearby voxel surfaces
+            nb_surfaces = torch.stack(
+                    [nb_surface000, nb_surface001, nb_surface010, nb_surface011, nb_surface100, nb_surface101, nb_surface110, nb_surface111],
+                    dim=-1)[:,0,:]
+                    
+            nb_normals = find_normal(nearby_l_samples - nearby_ls, nb_surfaces)
+            # for mid samples, alphas are simply average
+            nb_alphas = torch.stack(
+                    [nb_alpha000, nb_alpha001, nb_alpha010, nb_alpha011, nb_alpha100, nb_alpha101, nb_alpha110, nb_alpha111],
+                    dim=-1).mean(axis=-1)[:,0]
+            nb_alphas = torch.sigmoid(nb_alphas)
+
+            # calculate difference of normals, weighted by alphas
+            # i.e., for transparent surfaces, we don't need to ensure smooth surfaces
+            normal_loss = torch.norm(normals - nb_normals, dim=-1) * alpha[:,0] *  nb_alphas
+            normal_loss[none_l_mask] = 0.
+            normal_loss = normal_loss.mean()
+
+        out['extra_loss']['normal_loss'] = normal_loss
+        out['log_stats']['normal_loss'] = normal_loss
 
         if B_alpha.numel() == 0:
             out['intersections'] = torch.ones((0, 3), device=origins.device)

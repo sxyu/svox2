@@ -434,6 +434,7 @@ while True:
                     #     loss += out['extra_loss'][k]
                     loss += args.lambda_udf_var_loss * out['extra_loss'].get('udf_var_loss', 0.)
                     loss += args.lambda_density_lap_loss * out['extra_loss'].get('density_lap_loss', 0.)
+                    loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
                 loss.backward()
                 # normalize surface gradient:
                 # grid.surface_data.grad[:, 0] / (torch.prod(torch.stack(svox2.utils.inv_morton_code_3(torch.arange(grid.surface_data.shape[0]).cuda()),dim=-1),axis=-1)+1)
@@ -450,10 +451,6 @@ while True:
                 for k in out['log_stats'].keys():
                     v = out['log_stats'][k]
                     stats[k] = v + stats[k] if k in stats else v
-
-            # if 'outside_loss' in out:
-            #     loss += args.lambda_outside_loss * out['ouside_loss']
-            #     stats['ouside_loss'] = (args.lambda_outside_loss * out['ouside_loss']).detach().item()
 
             if (gstep_id + 1) % args.print_every == 0:
                 # Print averaged stats
