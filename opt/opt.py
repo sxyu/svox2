@@ -563,7 +563,7 @@ while True:
             
             if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode and gstep_id > 0:
                 if args.save_all_ckpt:
-                    ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
+                    ckpt_path = path.join(args.train_dir, f'ckpt_{gstep_id:05d}.npz')
                 else:
                     ckpt_path = path.join(args.train_dir, f'ckpt.npz')
                 print('Saving', ckpt_path)
