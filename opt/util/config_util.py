@@ -119,6 +119,9 @@ def define_common_args(parser : configargparse.ArgumentParser):
     group.add_argument('--force_alpha', action='store_true', default=False,
                         help='clamp alpha to be non-trivial during training to force surface learning')
 
+    group.add_argument('--save_all_ckpt', action='store_true', default=False,
+                        help='Save all ckpts during training')
+
     group.add_argument('--refresh_iter', 
                         type=int,
                         default=1,

@@ -435,6 +435,9 @@ while True:
                     loss += args.lambda_udf_var_loss * out['extra_loss'].get('udf_var_loss', 0.)
                     loss += args.lambda_density_lap_loss * out['extra_loss'].get('density_lap_loss', 0.)
                 loss.backward()
+                # normalize surface gradient:
+                # grid.surface_data.grad[:, 0] / (torch.prod(torch.stack(svox2.utils.inv_morton_code_3(torch.arange(grid.surface_data.shape[0]).cuda()),dim=-1),axis=-1)+1)
+                # grid.surface_data.grad.max() / torch.prod((grid._scaling * grid._grid_size())).cuda()
 
             # Stats
             mse_num : float = mse.detach().item()
@@ -554,10 +557,15 @@ while True:
                 timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
                 timings_file.write(f"{secs / 60}\n")
                 if not args.tune_nosave:
+                    ckpt_path = path.join(args.train_dir, f'ckpt.npz')
                     grid.save(ckpt_path, step_id=gstep_id)
                 exit(0)
             
             if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode and gstep_id > 0:
+                if args.save_all_ckpt:
+                    ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
+                else:
+                    ckpt_path = path.join(args.train_dir, f'ckpt.npz')
                 print('Saving', ckpt_path)
                 grid.save(ckpt_path, step_id=gstep_id)
 

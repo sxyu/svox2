@@ -667,6 +667,11 @@ class SparseGrid(nn.Module):
                 # surface_data = surface_data + torch.log(-torch.expm1(-surface_data))
             elif surface_init == 'single_lv':
                 # single level set with single sphere
+
+                # level_sets = torch.norm(grid_center, keepdim=True) / 2.
+                level_sets = torch.tensor([64.])
+                level_sets = level_sets.to(device)
+
                 surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
                 coords = torch.stack(coords).view(3, -1).T
@@ -674,14 +679,14 @@ class SparseGrid(nn.Module):
                 rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
 
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
-                surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])]
+                surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])] - (torch.norm(grid_center, keepdim=True).to(device) / 2. - level_sets[0])
 
-                level_sets = torch.norm(grid_center, keepdim=True) / 2.
-                level_sets = level_sets.to(device)
+
             elif surface_init == 'single_lv_multi_sphere':
                 # single level set with multi sphere
                 grid_center = (torch.tensor(reso)) / 2
-                level_sets = torch.norm(grid_center, keepdim=True) / 2.
+                # level_sets = torch.norm(grid_center, keepdim=True) / 2.
+                level_sets = torch.tensor([64.])
                 level_sets = level_sets.to(device)
 
                 surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
@@ -2545,16 +2550,22 @@ class SparseGrid(nn.Module):
             # caluclate udf_var_loss
             # this loss is to reduce variance in UDF values in the same voxel
             N_lv_sets = torch.count_nonzero(lv_set_mask, dim=-1)
-            udf_vars = torch.var(udfs,dim=-1)[:,0]
-            udf_var_loss = torch.mean(torch.clamp_min((N_lv_sets - 1), 0.) * udf_vars)
+            if N_lv_sets.numel() == 0:
+                udf_var_loss = 0.
+            else:
+                udf_vars = torch.var(udfs,dim=-1)[:,0]
+                udf_var_loss = torch.mean(torch.clamp_min((N_lv_sets - 1), 0.) * udf_vars)
             out['extra_loss']['udf_var_loss'] = udf_var_loss
             out['log_stats']['udf_var_loss'] = udf_var_loss
 
         # compute density lap loss
-        p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
-        density_lap_loss = torch.mean(-torch.log(p_lap))
-        # make positive
-        density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
+        if alpha.numel() == 0:
+            density_lap_loss = 0.
+        else:
+            p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
+            density_lap_loss = torch.mean(-torch.log(p_lap))
+            # make positive
+            density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
         out['extra_loss']['density_lap_loss'] = density_lap_loss
         out['log_stats']['density_lap_loss'] = density_lap_loss
 
