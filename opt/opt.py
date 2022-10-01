@@ -429,16 +429,21 @@ while True:
 
             if not USE_KERNEL:
                 loss = mse
+
+                # # normalize surface gradient:
+                # mse.backward(retain_graph=True)
+                # # grid.surface_data.grad.max() / torch.prod((grid._scaling * grid._grid_size())).cuda()
+                # # grid.surface_data.grad = grid.surface_data.grad[:, 0] / (torch.prod(torch.stack(svox2.utils.inv_morton_code_3(torch.arange(grid.surface_data.shape[0]).cuda()),dim=-1),axis=-1)+1)
+                # grid.surface_data.grad = grid.surface_data.grad / torch.prod(torch.tensor(grid.links.shape, device=device))
+                # loss = 0
                 if 'extra_loss' in out:
                     # for k in out['extra_loss'].keys():
                     #     loss += out['extra_loss'][k]
                     loss += args.lambda_udf_var_loss * out['extra_loss'].get('udf_var_loss', 0.)
                     loss += args.lambda_density_lap_loss * out['extra_loss'].get('density_lap_loss', 0.)
                     loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
+                
                 loss.backward()
-                # normalize surface gradient:
-                # grid.surface_data.grad[:, 0] / (torch.prod(torch.stack(svox2.utils.inv_morton_code_3(torch.arange(grid.surface_data.shape[0]).cuda()),dim=-1),axis=-1)+1)
-                # grid.surface_data.grad.max() / torch.prod((grid._scaling * grid._grid_size())).cuda()
 
             # Stats
             mse_num : float = mse.detach().item()

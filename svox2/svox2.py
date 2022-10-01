@@ -2023,7 +2023,6 @@ class SparseGrid(nn.Module):
         VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
         ray_ids = ray_ids[exist_l_mask]
         l = l[exist_l_mask]
-        lx, ly, lz = l.unbind(-1) 
         l_ids = torch.arange(l.shape[0]).to(l.device)
 
         alpha000, rgb000, surface000 = self._fetch_links(links000[exist_l_mask]) # [VEV, ...]
@@ -2054,9 +2053,21 @@ class SparseGrid(nn.Module):
                     [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
                     dim=-1)
 
-            ox, oy, oz = origins[ray_ids].to(dtype).unbind(-1)
-            vx, vy, vz = dirs[ray_ids].to(dtype).unbind(-1)
+            # re-scale all coordinates to [0,1]
+            # this prevents grad scale issue
+            grid_rescale = 256. / gsz_cu
+            # scale = 256. / gsz_cu
+            l = l * grid_rescale
+            origins = origins * grid_rescale
+            dirs = dirs * grid_rescale
+            lx, ly, lz = (l).unbind(-1)
+            ox, oy, oz = (origins[ray_ids].to(dtype)).unbind(-1)
+            vx, vy, vz = (dirs[ray_ids].to(dtype)).unbind(-1)
 
+
+            # ox, oy, oz: ray origins
+            # vx, vy, vz: ray dirs
+            # lx, ly, lz: voxel coordinates
             a00 = surface000[:,0].to(dtype) * (1-oz+lz) + surface001[:,0].to(dtype) * (oz-lz)
             a01 = surface010[:,0].to(dtype) * (1-oz+lz) + surface011[:,0].to(dtype) * (oz-lz)
             a10 = surface100[:,0].to(dtype) * (1-oz+lz) + surface101[:,0].to(dtype) * (oz-lz)
@@ -2080,6 +2091,7 @@ class SparseGrid(nn.Module):
             f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
             f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
             f0 = c0*(1-ox+lx) + c1*(ox-lx)
+            # f3 * t^3 + f2 * t^2 + f1 * t + f0 = level_set gives the surface
 
             if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
                 # find the list of possible level sets
@@ -2260,7 +2272,7 @@ class SparseGrid(nn.Module):
                 invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
             else:
                 # remove all samples outside of the voxel
-                invalid_sample_mask = (samples < l[l_ids]).any(axis=-1) | (samples > l[l_ids]+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+                invalid_sample_mask = (samples < l[l_ids]).any(axis=-1) | (samples > l[l_ids]+grid_rescale).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
             
             valid_sample_mask = (~neg_roots_mask) & (~invalid_sample_mask)
 
@@ -2346,10 +2358,8 @@ class SparseGrid(nn.Module):
         ########### Interpolate Alpha & SH ###########
 
         def check_sample_surface(samples=samples, l=l, l_ids=l_ids):
-            wa, wb = 1. - (samples - l), (samples - l)
-            if allow_outside:
-                torch.clamp_(wa, 0., 1.)
-                torch.clamp_(wb, 0., 1.)
+            wa, wb = grid_rescale - (samples - l), (samples - l)
+            wa, wb = wa / (wa + wb), wb / (wa + wb)
             c00 = surface000[l_ids] * wa[:, 2:] + surface001[l_ids] * wb[:, 2:]
             c01 = surface010[l_ids] * wa[:, 2:] + surface011[l_ids] * wb[:, 2:]
             c10 = surface100[l_ids] * wa[:, 2:] + surface101[l_ids] * wb[:, 2:]
@@ -2360,10 +2370,8 @@ class SparseGrid(nn.Module):
             return surface
  
         # interpolate opacity
-        wa, wb = 1. - (samples - l), (samples - l)
-        if allow_outside:
-            torch.clamp_(wa, 0., 1.)
-            torch.clamp_(wb, 0., 1.)
+        wa, wb = grid_rescale - (samples - l), (samples - l)
+        wa, wb = wa / (wa + wb), wb / (wa + wb)
         if self.surface_type == SURFACE_TYPE_UDF_ALPHA:
             alpha = self.density_data[lv_set_ids]
         else:
@@ -2577,25 +2585,26 @@ class SparseGrid(nn.Module):
         else:
             def find_normal(xyz, surfaces):
                 x,y,z = xyz.unbind(-1)
+                _x,_y,_z = (grid_rescale - xyz).unbind(-1)
                 surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111 = \
                     surfaces.unbind(-1)
 
-                c00 = surface000 * (1-z) + surface001 * z
-                c01 = surface010 * (1-z) + surface011 * z
-                c10 = surface100 * (1-z) + surface101 * z
-                c11 = surface110 * (1-z) + surface111 * z
-                c0 = c00 * (1-y) + c01 * y
-                c1 = c10 * (1-y) + c11 * y
-                # surface = c0 * (1-x) + c1 * x
+                c00 = surface000 * _z + surface001 * z
+                c01 = surface010 * _z + surface011 * z
+                c10 = surface100 * _z + surface101 * z
+                c11 = surface110 * _z + surface111 * z
+                c0 = c00 * _y + c01 * y
+                c1 = c10 * _y + c11 * y
+                # surface = c0 * _x + c1 * x
                 
                 ds_dx = c1 - c0
-                ds_dy = (c01-c00)*(1-x) + (c11-c10)*x
+                ds_dy = (c01-c00)*_x + (c11-c10)*x
 
                 dc00_dz = surface001 - surface000
                 dc01_dz = surface011 - surface010
                 dc10_dz = surface101 - surface100
                 dc11_dz = surface111 - surface110
-                ds_dz = (dc00_dz * (1-y) + dc01_dz * y)*(1-x) + (dc10_dz * (1-y) + dc11_dz * y)*x
+                ds_dz = (dc00_dz * _y + dc01_dz * y)*_x + (dc10_dz * _y + dc11_dz * y)*x
 
                 normals = torch.stack([ds_dx, ds_dy, ds_dz], dim=-1)
                 normals = normals / torch.norm(normals, dim=-1, keepdim=True)
@@ -2608,12 +2617,12 @@ class SparseGrid(nn.Module):
 
             # find nearby voxels
             # randomly sample a nearby voxel
-            nearby_ls = l + torch.randint(3, [l.shape[0],3]).to(l.device) - 1
+            nearby_ls = l / grid_rescale + torch.randint(3, [l.shape[0],3]).to(l.device) - 1
             nearby_ls = torch.clamp(nearby_ls, 0, gsz_cu[0]-2)
             # for now, just take sample at mid of voxel instead of intersections
             nearby_l_samples = l + 0.5
 
-            lx, ly, lz = nearby_ls.unbind(-1) 
+            lx, ly, lz = nearby_ls.long().unbind(-1) 
             links000 = self.links[lx, ly, lz]
             links001 = self.links[lx, ly, lz + 1]
             links010 = self.links[lx, ly + 1, lz]
@@ -2641,7 +2650,7 @@ class SparseGrid(nn.Module):
                     [nb_surface000, nb_surface001, nb_surface010, nb_surface011, nb_surface100, nb_surface101, nb_surface110, nb_surface111],
                     dim=-1)[:,0,:]
                     
-            nb_normals = find_normal(nearby_l_samples - nearby_ls, nb_surfaces)
+            nb_normals = find_normal((nearby_l_samples - nearby_ls) * grid_rescale, nb_surfaces)
             # for mid samples, alphas are simply average
             nb_alphas = torch.stack(
                     [nb_alpha000, nb_alpha001, nb_alpha010, nb_alpha011, nb_alpha100, nb_alpha101, nb_alpha110, nb_alpha111],
@@ -2650,7 +2659,7 @@ class SparseGrid(nn.Module):
 
             # calculate difference of normals, weighted by alphas
             # i.e., for transparent surfaces, we don't need to ensure smooth surfaces
-            normal_loss = torch.norm(normals - nb_normals, dim=-1) * alpha[:,0] *  nb_alphas
+            normal_loss = torch.norm(normals - nb_normals, dim=-1) * alpha[:,0].detach().clone() *  nb_alphas.detach().clone()
             normal_loss[none_l_mask] = 0.
             normal_loss = normal_loss.mean()
 
@@ -2661,7 +2670,7 @@ class SparseGrid(nn.Module):
             out['intersections'] = torch.ones((0, 3), device=origins.device)
         else:
             B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
-            B_samples[B_to_sample_mask] = samples.to(B_rgb.dtype)
+            B_samples[B_to_sample_mask] = (samples / grid_rescale).to(B_samples.dtype)
             sample_mask = B_alpha > intersect_th
             B_samples[~sample_mask, :] = -1.
             ids = torch.argmax(sample_mask.long(), dim=-1)
@@ -3700,6 +3709,41 @@ class SparseGrid(nn.Module):
         else:
             _C.tv_grad(self.links, self.surface_data, 0, 1, scaling,
                     logalpha, logalpha_delta,
+                    False,
+                    ndc_coeffs[0], ndc_coeffs[1],
+                    grad)
+            self.sparse_grad_indexer : Optional[torch.Tensor] = None
+
+    def inplace_surface_normal_grad(self, grad: torch.Tensor,
+                                scaling: float = 1.0,
+                                sparse_frac: float = 0.01,
+                                ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
+                                contiguous: bool = True
+                            ):
+        """
+        Add gradient of total variation for sigma as in Neural Volumes
+        [Lombardi et al., ToG 2019]
+        directly into the gradient tensor, multiplied by 'scaling'
+        """
+
+        assert (
+            _C is not None and self.surface_data.is_cuda and grad.is_cuda
+        ), "CUDA extension is currently required for total variation"
+
+        rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+        if rand_cells is not None:
+            if rand_cells.size(0) > 0:
+                raise NotImplementedError('Sparse normal loss currently not supported')
+                _C.tv_grad_sparse(self.links, self.surface_data,
+                        rand_cells,
+                        self._get_sparse_grad_indexer(),
+                        0, 1, scaling,
+                        False,
+                        self.opt.last_sample_opaque,
+                        ndc_coeffs[0], ndc_coeffs[1],
+                        grad)
+        else:
+            _C.tv_grad(self.links, self.surface_data, 0, 1, scaling,
                     False,
                     ndc_coeffs[0], ndc_coeffs[1],
                     grad)
