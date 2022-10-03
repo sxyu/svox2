@@ -428,14 +428,13 @@ while True:
             mse = F.mse_loss(rgb_gt, out['rgb'])
 
             if not USE_KERNEL:
-                loss = mse
-
                 # # normalize surface gradient:
                 # mse.backward(retain_graph=True)
                 # # grid.surface_data.grad.max() / torch.prod((grid._scaling * grid._grid_size())).cuda()
                 # # grid.surface_data.grad = grid.surface_data.grad[:, 0] / (torch.prod(torch.stack(svox2.utils.inv_morton_code_3(torch.arange(grid.surface_data.shape[0]).cuda()),dim=-1),axis=-1)+1)
                 # grid.surface_data.grad = grid.surface_data.grad / torch.prod(torch.tensor(grid.links.shape, device=device))
-                # loss = 0
+                loss = 0
+                loss = loss + mse
                 if 'extra_loss' in out:
                     # for k in out['extra_loss'].keys():
                     #     loss += out['extra_loss'][k]
