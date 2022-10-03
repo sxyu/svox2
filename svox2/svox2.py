@@ -1214,15 +1214,12 @@ class SparseGrid(nn.Module):
         voxels_i = torch.zeros(B, device=origins.device, dtype=torch.long)
 
         if self.use_octree:
+            # move camera origin to near clip
+            ray_o = origins + dirs * self.opt.near_clip * self._scaling.to(device=dirs.device) * gsz_cu.mean()
             # re-scale and shift camera pos to [-1, +1]
-            ray_o = origins / (gsz_cu/2) - 1.
-            # only necessary if grid size is not the same for each axis
+            ray_o = ray_o / (gsz_cu/2) - 1.
             ray_d = dirs / (gsz_cu/2)
             ray_d = ray_d / torch.norm(ray_d, dim=-1, keepdim=True)
-
-            # # FIXME kaolin seems to sort depth in wrong way, work around to solve this
-            # ray_o = -1 * ray_o
-            # ray_d = -1 * ray_d
 
             # ugly work arounds to move ray_o outside [-1, +1]
             inside_o_mask = ((ray_o >= -1.) & (ray_o <= 1.)).all(axis=-1)
@@ -2264,8 +2261,9 @@ class SparseGrid(nn.Module):
                     ts * f1[:, None].repeat(1, N_INTERSECT) + f0[:, None].repeat(1, N_INTERSECT)
 
 
-            # filter out roots with negative t
-            neg_roots_mask = ts < 0
+            # filter out roots with t that's smaller than near clip
+            # Note that scaling is not exactly correct when grid reso are not the same
+            neg_roots_mask = ts < self.opt.near_clip * self._scaling.to(device=ts.device) * gsz_cu.mean()
 
 
             if allow_outside:
