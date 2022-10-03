@@ -2659,7 +2659,8 @@ class SparseGrid(nn.Module):
 
             # calculate difference of normals, weighted by alphas
             # i.e., for transparent surfaces, we don't need to ensure smooth surfaces
-            normal_loss = torch.norm(normals - nb_normals, dim=-1) * alpha[:,0].detach().clone() *  nb_alphas.detach().clone()
+            # normal_loss = torch.norm(normals - nb_normals, dim=-1) * alpha[:,0].detach().clone() *  nb_alphas.detach().clone()
+            normal_loss = torch.norm(normals - nb_normals, dim=-1)
             normal_loss[none_l_mask] = 0.
             normal_loss = normal_loss.mean()
 
