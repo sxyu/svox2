@@ -141,8 +141,6 @@ class DTUDataset(DatasetBase):
 
         _, self.h_full, self.w_full, _ = self.gt.shape
 
-        # TODO: deal with train test split
-
         intrinsics_all = torch.stack(intrinsics_all)
         self.intrins_full : Intrin = Intrin(intrinsics_all[:, 0, 0], 
                                             intrinsics_all[:, 1, 1],
@@ -159,19 +157,6 @@ class DTUDataset(DatasetBase):
             self.intrins : Intrin = self.intrins_full
 
         self.should_use_background = False  # Give warning
-
-
-        # self.rgb_images = []
-        # for path in image_paths:
-        #     rgb = rend_util.load_rgb(path)
-        #     rgb = rgb.reshape(3, -1).transpose(1, 0)
-        #     self.rgb_images.append(torch.from_numpy(rgb).float())
-
-        # self.object_masks = []
-        # for path in mask_paths:
-        #     object_mask = rend_util.load_mask(path)
-        #     object_mask = object_mask.reshape(-1)
-        #     self.object_masks.append(torch.from_numpy(object_mask).bool())
 
     def __len__(self):
         return self.n_images
@@ -212,6 +197,20 @@ class DTUDataset(DatasetBase):
 
         self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
         self.rays = self.rays_init
+
+    def world2rescale(self, pts: np.ndarray):
+        '''
+        Transform points in world space to DTU GT space
+        '''
+        return pts * self.pt_rescale[0,0] + self.pt_rescale[:3,3][None]
+
+    def rescale2world(self, pts: np.ndarray):
+        '''
+        Transform points in DTU GT space to world space
+        '''
+        return (pts - self.pt_rescale[:3,3][None]) / self.pt_rescale[0,0]
+    
+
 
 
 

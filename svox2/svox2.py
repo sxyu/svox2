@@ -696,7 +696,7 @@ class SparseGrid(nn.Module):
                 grid_center = (torch.tensor(reso)) / 2
                 rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
 
-                sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 2) + 0.5
+                sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 4) + 0.5
                 sphere_rs = sphere_rs.to(device)
                 dists = rs[:, None] - sphere_rs[None, :]
 
@@ -2053,6 +2053,7 @@ class SparseGrid(nn.Module):
             # re-scale all coordinates to [0,1]
             # this prevents grad scale issue
             grid_rescale = 256. / gsz_cu
+            grid_rescale = gsz_cu / gsz_cu
             # scale = 256. / gsz_cu
             l = l * grid_rescale
             origins = origins * grid_rescale

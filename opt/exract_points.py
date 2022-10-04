@@ -220,11 +220,10 @@ with torch.no_grad():
         # raise NotImplementedError
 
         
-# for dtu dataset, need to rescale the pts
 all_pts = np.concatenate(all_pts, 0)
+# for dtu dataset, need to rescale the pts
 if hasattr(dset, 'pt_rescale'):
-    rescale_mat = dset.pt_rescale
-    all_pts = all_pts * rescale_mat[0,0] + rescale_mat[:3,3][None]
+    all_pts = dset.world2rescale(all_pts)
 
 if args.downsample_density > 0:
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=args.downsample_density, algorithm='kd_tree', n_jobs=-1)
