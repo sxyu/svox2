@@ -66,6 +66,7 @@ def morton_code_3(x, y, z):
     return (xx << 2) + (yy << 1) + zz
 
 def inv_morton_code_3(code):
+    # note that if use_sphere=True, this function cannot invert links to coords
     x = _unexpand_bits(code >> 2)
     y = _unexpand_bits(code >> 1)
     z = _unexpand_bits(code)
