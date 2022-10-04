@@ -2742,12 +2742,41 @@ class SparseGrid(nn.Module):
             norm010, mask010 = find_normal(norm_xyzs[2])
             norm100, mask100 = find_normal(norm_xyzs[3])
 
+            # # fix the direction of norms
+            # # completly opposite norms would now give 0 loss
+            # norm000 = norm000 * torch.where(norm000[:,:,0] > 0., 1., -1.)[:,None]
+            # norm001 = norm001 * torch.where(norm001[:,:,0] > 0., 1., -1.)[:,None]
+            # norm010 = norm010 * torch.where(norm010[:,:,0] > 0., 1., -1.)[:,None]
+            # norm100 = norm100 * torch.where(norm100[:,:,0] > 0., 1., -1.)[:,None]
+
+
+            # check connectivity of surfaces
+            face001 = torch.concat([surfaces[0,0,1], surfaces[0,1,1], surfaces[1,0,1], surfaces[1,1,1]], axis=-1)
+            face010 = torch.concat([surfaces[0,1,0], surfaces[0,1,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+            face100 = torch.concat([surfaces[1,0,0], surfaces[1,0,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+            con001 = torch.count_nonzero(
+                (self.level_set_data[None, :] >= face001.min(axis=-1, keepdim=True).values) & \
+                (self.level_set_data[None, :] <= face001.max(axis=-1, keepdim=True).values),
+                axis=-1
+                ) > 0
+            con010 = torch.count_nonzero(
+                (self.level_set_data[None, :] >= face010.min(axis=-1, keepdim=True).values) & \
+                (self.level_set_data[None, :] <= face010.max(axis=-1, keepdim=True).values),
+                axis=-1
+                ) > 0
+            con100 = torch.count_nonzero(
+                (self.level_set_data[None, :] >= face100.min(axis=-1, keepdim=True).values) & \
+                (self.level_set_data[None, :] <= face100.max(axis=-1, keepdim=True).values),
+                axis=-1
+                ) > 0
+
             norm_dx = torch.norm(norm001 - norm000, dim=-1)
             norm_dy = torch.norm(norm010 - norm000, dim=-1)
             norm_dz = torch.norm(norm100 - norm000, dim=-1)
-            norm_dx[(~mask001)|(~mask000)] = 0.
-            norm_dy[(~mask010)|(~mask000)] = 0.
-            norm_dz[(~mask100)|(~mask000)] = 0.
+            # filter out gradients on non-exist voxel or non-connected surfaces
+            norm_dx[(~mask001)|(~mask000)|(~con001)] = 0.
+            norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
+            norm_dz[(~mask100)|(~mask000)|(~con100)] = 0.
 
             normal_loss = torch.mean(torch.concat([norm_dx,norm_dy,norm_dz],axis=-1))
 
