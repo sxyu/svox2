@@ -2737,7 +2737,7 @@ class SparseGrid(nn.Module):
                 alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
                 alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
 
-                return normals, valid_mask, alpha_v.detach().clone()
+                return normals, valid_mask, torch.sigmoid(alpha_v.detach().clone())
 
             # find normals
             norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=l.device)
