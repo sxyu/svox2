@@ -660,7 +660,7 @@ class SparseGrid(nn.Module):
                 links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
                 surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])]
 
-                level_sets = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)), 1) + 0.5
+                level_sets = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)), 4) + 0.5
                 level_sets = level_sets.to(device)
 
                 # # invert softplus activation
@@ -2784,9 +2784,9 @@ class SparseGrid(nn.Module):
 
             if alpha_weighted_norm_loss:
                 # use alpha value to re-weight the normal loss
-                norm_dz = norm_dz * alpha_v000 * alpha_v001
-                norm_dy = norm_dy * alpha_v000 * alpha_v010
-                norm_dx = norm_dx * alpha_v100 * alpha_v100
+                norm_dz = norm_dz * alpha_v000[:, None] * alpha_v001[:, None]
+                norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
+                norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
 
             normal_loss = torch.mean(torch.concat([norm_dx,norm_dy,norm_dz],axis=-1))
 
