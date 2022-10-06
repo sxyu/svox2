@@ -1911,6 +1911,7 @@ class SparseGrid(nn.Module):
         sparsity_loss: float = 0.0,
         return_raylen: bool = False,
         return_depth: bool = False,
+        alpha_weighted_norm_loss: bool = False,
         numerical_solution: bool = False, # no gradient flow!
         dtype = torch.double,
         allow_outside: bool = False, # allow intersections outside of voxel
@@ -2733,14 +2734,17 @@ class SparseGrid(nn.Module):
                 for i in range(ver_xyzs.shape[0]):
                     valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
 
-                return normals, valid_mask
+                alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
+                alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
+
+                return normals, valid_mask, alpha_v.detach().clone()
 
             # find normals
             norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=l.device)
-            norm000, mask000 = find_normal(norm_xyzs[0])
-            norm001, mask001 = find_normal(norm_xyzs[1])
-            norm010, mask010 = find_normal(norm_xyzs[2])
-            norm100, mask100 = find_normal(norm_xyzs[3])
+            norm000, mask000, alpha_v000 = find_normal(norm_xyzs[0])
+            norm001, mask001, alpha_v001 = find_normal(norm_xyzs[1])
+            norm010, mask010, alpha_v010 = find_normal(norm_xyzs[2])
+            norm100, mask100, alpha_v100 = find_normal(norm_xyzs[3])
 
             # # fix the direction of norms
             # # completly opposite norms would now give 0 loss
@@ -2770,13 +2774,19 @@ class SparseGrid(nn.Module):
                 axis=-1
                 ) > 0
 
-            norm_dx = torch.norm(norm001 - norm000, dim=-1)
+            norm_dz = torch.norm(norm001 - norm000, dim=-1)
             norm_dy = torch.norm(norm010 - norm000, dim=-1)
-            norm_dz = torch.norm(norm100 - norm000, dim=-1)
+            norm_dx = torch.norm(norm100 - norm000, dim=-1)
             # filter out gradients on non-exist voxel or non-connected surfaces
-            norm_dx[(~mask001)|(~mask000)|(~con001)] = 0.
+            norm_dz[(~mask001)|(~mask000)|(~con001)] = 0.
             norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
-            norm_dz[(~mask100)|(~mask000)|(~con100)] = 0.
+            norm_dx[(~mask100)|(~mask000)|(~con100)] = 0.
+
+            if alpha_weighted_norm_loss:
+                # use alpha value to re-weight the normal loss
+                norm_dz = norm_dz * alpha_v000 * alpha_v001
+                norm_dy = norm_dy * alpha_v000 * alpha_v010
+                norm_dx = norm_dx * alpha_v100 * alpha_v100
 
             normal_loss = torch.mean(torch.concat([norm_dx,norm_dy,norm_dz],axis=-1))
 

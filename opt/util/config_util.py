@@ -358,6 +358,8 @@ def setup_train_conf():
     group.add_argument('--lambda_udf_var_loss', type=float, default=0)
     group.add_argument('--lambda_density_lap_loss', type=float, default=0)
     group.add_argument('--lambda_normal_loss', type=float, default=0)
+    group.add_argument('--alpha_weighted_norm_loss', action='store_true', default=False,
+                        help='Use alpha value to re-weight the normal loss')
     # Foreground TV
     group.add_argument('--lambda_tv', type=float, default=1e-5)
     group.add_argument('--lambda_tv_surface', type=float, default=0)

@@ -103,7 +103,7 @@ if path.isfile(ckpt_npz) and args.load_ckpt:
     print('#####################################################')
     print(f'Resume from ckpt at {ckpt_npz}')
     grid = svox2.SparseGrid.load(ckpt_npz, device=device)
-    assert svox2.__dict__['BASIS_TYPE_' + args.surface_type.upper()] == grid.surface_type, "Loaded ckpt incompatible with given configs"
+    assert svox2.__dict__['SURFACE_TYPE_' + args.surface_type.upper()] == grid.surface_type, "Loaded ckpt incompatible with given configs"
     gstep_id_base = grid.step_id + 1
     print(f'Starting from step {gstep_id_base}')
     print('#####################################################')
@@ -415,7 +415,8 @@ while True:
                     out = grid._surface_render_gradcheck_lerp(rays, rgb_gt,
                             beta_loss=args.lambda_beta,
                             sparsity_loss=args.lambda_sparsity,
-                            randomize=args.enable_random)
+                            randomize=args.enable_random,
+                            alpha_weighted_norm_loss=args.alpha_weighted_norm_loss)
                 else:
                     raise NotImplementedError
             else:
