@@ -205,6 +205,9 @@ last_upsamp_step = args.init_iters
 if args.enable_random:
     warn("Randomness is enabled for training (normal for LLFF & scenes with background)")
 
+if args.lambda_tv > 0.0 and args.surface_type in ['udf_alpha']:
+    raise NotImplementedError(f'Surface type [{args.surface_type}] must not use density tv!')
+
 epoch_id = -1
 while True:
     dset.shuffle_rays()
