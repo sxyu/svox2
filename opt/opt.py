@@ -127,7 +127,7 @@ else:
 
     # DC -> gray; mind the SH scaling!
     grid.sh_data.data[:] = 0.0
-    if args.surface_type != 'none':
+    if args.surface_type != 'none' and args.no_surface_init_iters <= 0:
         grid.density_data.data[:] = -1e8 if args.lr_fg_begin_step > 0 else torch.logit(torch.tensor(args.init_sigma))
     else:
         grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
@@ -218,6 +218,7 @@ while True:
     def eval_step(step_id=gstep_id_base):
         # Put in a function to avoid memory leak
         print('Eval step')
+        no_surface = step_id < args.no_surface_init_iters
         with torch.no_grad():
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
@@ -257,7 +258,7 @@ while True:
                 #                    width=100,
                 #                    height=100,
                 #                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, no_surface=no_surface)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -273,7 +274,8 @@ while True:
                         depth_img = grid.volume_render_depth_image(cam,
                                     args.log_depth_map_use_thresh if
                                     args.log_depth_map_use_thresh else None,
-                                    batch_size=10000
+                                    batch_size=10000,
+                                    no_surface=no_surface
                                 )
                         depth_img = viridis_cmap(depth_img.cpu())
                         summary_writer.add_image(f'test/depth_map_{img_id:04d}',
@@ -341,7 +343,7 @@ while True:
                                    width=dset.get_image_size(img_id)[1],
                                    height=dset.get_image_size(img_id)[0],
                                    ndc_coeffs=dset.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL,no_surface=no_surface)
                 rgb_gt_test = dset.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -357,7 +359,8 @@ while True:
                         depth_img = grid.volume_render_depth_image(cam,
                                     args.log_depth_map_use_thresh if
                                     args.log_depth_map_use_thresh else None,
-                                    batch_size=10000
+                                    batch_size=10000,
+                                    no_surface=no_surface
                                 )
                         depth_img = viridis_cmap(depth_img.cpu())
                         summary_writer.add_image(f'train/depth_map_{img_id:04d}',
@@ -403,6 +406,23 @@ while True:
                 grid.fake_sample_std = torch.tensor(fake_sample_std, 
                 device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
 
+            no_surface = gstep_id < args.no_surface_init_iters
+
+            if gstep_id == args.no_surface_init_iters:
+                # run density based surface init
+                # _density_backup = grid.density_data.data.detach().clone()
+                eval_step(step_id=gstep_id-1)
+                grid._init_surface_from_density(
+                    alpha_lv_sets=args.alpha_lv_sets,
+                    reset_alpha=args.surface_init_reset_alpha,
+                    init_alpha=0.1,
+                    surface_rescale=args.surface_init_rescale,
+                    )
+                eval_step(step_id=gstep_id)
+                gc.collect()
+
+                # torch.autograd.set_detect_anomaly(True)
+
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
@@ -419,7 +439,8 @@ while True:
                             beta_loss=args.lambda_beta,
                             sparsity_loss=args.lambda_sparsity,
                             randomize=args.enable_random,
-                            alpha_weighted_norm_loss=args.alpha_weighted_norm_loss)
+                            alpha_weighted_norm_loss=args.alpha_weighted_norm_loss,
+                            no_surface=no_surface)
                 else:
                     raise NotImplementedError
             else:
@@ -447,6 +468,8 @@ while True:
                     loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
                 
                 loss.backward()
+
+                # assert not torch.isnan(grid.surface_data.grad).any()
 
             # Stats
             mse_num : float = mse.detach().item()
@@ -500,7 +523,7 @@ while True:
                         sparse_frac=args.tv_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
-            if args.lambda_tv_surface > 0.0:
+            if args.lambda_tv_surface > 0.0 and not no_surface:
                 #  with Timing("tv_inpl"):
                 grid.inplace_tv_surface_grad(grid.surface_data.grad,
                         scaling=args.lambda_tv_surface,
@@ -540,7 +563,8 @@ while True:
             # Manual SGD/rmsprop step
             if gstep_id >= args.lr_fg_begin_step:
                 grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
-                grid.optim_surface_step(lr_surface, beta=args.rms_beta, optim=args.surface_optim)
+                if not no_surface:
+                    grid.optim_surface_step(lr_surface, beta=args.rms_beta, optim=args.surface_optim)
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
                 grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)

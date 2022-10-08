@@ -1912,13 +1912,20 @@ class SparseGrid(nn.Module):
         return_raylen: bool = False,
         return_depth: bool = False,
         alpha_weighted_norm_loss: bool = False,
-        numerical_solution: bool = False, # no gradient flow!
+        numerical_solution: bool = False,
         dtype = torch.double,
-        allow_outside: bool = False, # allow intersections outside of voxel
-        intersect_th: float = 0.1, # threshold for determining intersections 
+        allow_outside: bool = False, 
+        intersect_th: float = 0.1,
+        no_surface: bool = False,
     ):
         """
         gradcheck version for surface rendering
+
+        alpha_weighted_norm_loss: use alpha value to re-weight the surface normal loss
+        numerical_solution: use numerical solver to find cubic roots. Currently has no gradient flow!
+        allow_outside: allow intersections outside of voxel. Deprecated
+        intersect_th: threshold for determining intersections. Used when converting to point clouds
+        no_surface: do not use surface to take samples. Use for no_surface_init_iters
         """
         
         # # debug helpers:
@@ -1998,6 +2005,226 @@ class SparseGrid(nn.Module):
         if return_raylen:
             return tmax - t
 
+        if no_surface and False:
+            log_light_intensity = torch.zeros(B, device=origins.device)
+            out_rgb = torch.zeros((B, 3), device=origins.device)
+            good_indices = torch.arange(B, device=origins.device)
+
+            origins_ini = origins
+            dirs_ini = dirs
+
+            mask = t <= tmax
+            good_indices = good_indices[mask]
+            origins = origins[mask]
+            dirs = dirs[mask]
+
+            #  invdirs = invdirs[mask]
+            t = t[mask]
+            sh_mult = sh_mult[mask]
+            tmax = tmax[mask]
+
+            while good_indices.numel() > 0:
+                pos = origins + t[:, None] * dirs
+                pos = pos.clamp_min_(0.0)
+                pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
+                pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
+                pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
+                #  print('pym', pos, log_light_intensity)
+
+                l = pos.to(torch.long)
+                l.clamp_min_(0)
+                l[:, 0] = torch.clamp_max(l[:, 0], (gsz_cu[0]).long() - 2)
+                l[:, 1] = torch.clamp_max(l[:, 1], (gsz_cu[1]).long() - 2)
+                l[:, 2] = torch.clamp_max(l[:, 2], (gsz_cu[2]).long() - 2)
+                pos -= l
+
+                # BEGIN CRAZY TRILERP
+                lx, ly, lz = l.unbind(-1)
+                links000 = self.links[lx, ly, lz]
+                links001 = self.links[lx, ly, lz + 1]
+                links010 = self.links[lx, ly + 1, lz]
+                links011 = self.links[lx, ly + 1, lz + 1]
+                links100 = self.links[lx + 1, ly, lz]
+                links101 = self.links[lx + 1, ly, lz + 1]
+                links110 = self.links[lx + 1, ly + 1, lz]
+                links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+                sigma000, rgb000, _ = self._fetch_links(links000)
+                sigma001, rgb001, _ = self._fetch_links(links001)
+                sigma010, rgb010, _ = self._fetch_links(links010)
+                sigma011, rgb011, _ = self._fetch_links(links011)
+                sigma100, rgb100, _ = self._fetch_links(links100)
+                sigma101, rgb101, _ = self._fetch_links(links101)
+                sigma110, rgb110, _ = self._fetch_links(links110)
+                sigma111, rgb111, _ = self._fetch_links(links111)
+
+                wa, wb = 1.0 - pos, pos
+                c00 = sigma000 * wa[:, 2:] + sigma001 * wb[:, 2:]
+                c01 = sigma010 * wa[:, 2:] + sigma011 * wb[:, 2:]
+                c10 = sigma100 * wa[:, 2:] + sigma101 * wb[:, 2:]
+                c11 = sigma110 * wa[:, 2:] + sigma111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                sigma = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+                c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+                c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+                c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+                c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+                # END CRAZY TRILERP
+
+                log_att = (
+                    -self.opt.step_size
+                    * torch.relu(sigma[..., 0])
+                    * delta_scale[good_indices]
+                ) # alpha
+                weight = torch.exp(log_light_intensity[good_indices]) * (
+                    1.0 - torch.exp(log_att)
+                )
+                # [B', 3, n_sh_coeffs]
+                rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
+                rgb = torch.clamp_min(
+                    torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
+                    0.0,
+                )  # [B', 3]
+                rgb = weight[:, None] * rgb[:, :3]
+
+                out_rgb[good_indices] += rgb
+                log_light_intensity[good_indices] += log_att
+                t += self.opt.step_size
+
+                mask = t <= tmax
+                good_indices = good_indices[mask]
+                origins = origins[mask]
+                dirs = dirs[mask]
+                #  invdirs = invdirs[mask]
+                t = t[mask]
+                sh_mult = sh_mult[mask]
+                tmax = tmax[mask]
+
+            # Add background color
+            if self.opt.background_brightness:
+                out_rgb += (
+                    torch.exp(log_light_intensity).unsqueeze(-1)
+                    * self.opt.background_brightness
+                )
+            return out_rgb
+
+
+        if no_surface:
+            # take samples at fixed step intervals
+            valid_mask = tmax < t
+            MAX_N_SAMPLES = ((tmax - t) / self.opt.step_size).long().max()
+
+            ts = torch.arange(1, MAX_N_SAMPLES, device=t.device)[None, :].repeat(B,1)
+            ts = ts * self.opt.step_size + t[:,None]
+            valid_ts_mask = ts < tmax[:,None]
+
+            ts = ts[valid_ts_mask]
+            ray_ids = torch.repeat_interleave(torch.arange(B, device=t.device), torch.count_nonzero(valid_ts_mask,dim=-1))
+
+            # Interpolation
+            pos = origins[ray_ids] + ts[:, None] * dirs[ray_ids]
+            pos = pos.clamp_min_(0.0)
+            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
+            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
+            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
+
+            l = pos.to(torch.long)
+            l.clamp_min_(0)
+            l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0].long() - 2)
+            l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1].long() - 2)
+            l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2].long() - 2)
+            pos -= l
+
+            lx, ly, lz = l.unbind(-1)
+            links000 = self.links[lx, ly, lz]
+            links001 = self.links[lx, ly, lz + 1]
+            links010 = self.links[lx, ly + 1, lz]
+            links011 = self.links[lx, ly + 1, lz + 1]
+            links100 = self.links[lx + 1, ly, lz]
+            links101 = self.links[lx + 1, ly, lz + 1]
+            links110 = self.links[lx + 1, ly + 1, lz]
+            links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+            sigma000, rgb000, _ = self._fetch_links(links000)
+            sigma001, rgb001, _ = self._fetch_links(links001)
+            sigma010, rgb010, _ = self._fetch_links(links010)
+            sigma011, rgb011, _ = self._fetch_links(links011)
+            sigma100, rgb100, _ = self._fetch_links(links100)
+            sigma101, rgb101, _ = self._fetch_links(links101)
+            sigma110, rgb110, _ = self._fetch_links(links110)
+            sigma111, rgb111, _ = self._fetch_links(links111)
+
+            wa, wb = 1.0 - pos, pos
+            c00 = sigma000 * wa[:, 2:] + sigma001 * wb[:, 2:]
+            c01 = sigma010 * wa[:, 2:] + sigma011 * wb[:, 2:]
+            c10 = sigma100 * wa[:, 2:] + sigma101 * wb[:, 2:]
+            c11 = sigma110 * wa[:, 2:] + sigma111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            sigma = c0 * wa[:, :1] + c1 * wb[:, :1]
+            sigma = torch.relu(sigma)
+
+            c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+            c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+            c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+            c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+            # split and pad samples into 2d arrays
+            # where first dim is B
+            ray_bin = torch.zeros((B), device=origins.device)
+            bincount = torch.bincount(ray_ids)
+            ray_bin[:bincount.shape[0]] = bincount
+            MS = ray_bin.max().long().item() # maximum number of samples per-ray 
+
+            B_rgb = torch.zeros((B, MS, 3), device=origins.device)
+            B_alpha = torch.zeros((B, MS), device=origins.device)
+
+            B_to_sample_mask = (torch.arange(MS)[None, :].repeat([B, 1]).to(origins.device) < ray_bin[:, None])
+
+            d = torch.tensor([1.,1.,1.])
+            d = d / torch.norm(d)
+            delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
+
+            B_alpha[B_to_sample_mask] = 1 - torch.exp(-sigma[:,0] * delta_scale * self.opt.step_size).to(B_rgb.dtype) # [N_samples]
+
+            rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
+            B_rgb[B_to_sample_mask,:] = torch.clamp_min(
+                torch.sum(sh_mult[ray_ids, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
+                0.0,
+            ) # [N_samples, 3]
+
+            assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
+
+            B_weights = B_alpha * torch.cumprod(
+                torch.cat([torch.ones((B_alpha.shape[0], 1)).to(B_alpha.device), torch.clamp(1.-B_alpha, 1e-7, 1-1e-7)], -1), -1
+                )[:, :-1] # [B, MS, 3]
+            
+            out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
+
+            B_ts = torch.zeros((B, MS), device=origins.device)
+            B_ts[B_to_sample_mask] = ts.to(B_ts.dtype) # [N_samples]
+
+            out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
+
+            # Add background color
+            if self.opt.background_brightness:
+                out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
+
+            return {
+                'rgb': out_rgb,
+                'depth': out_depth
+            }
+
+
 
         ########### Find Ray-Voxel Intersections ###########
         # with utils.Timing("Ray-voxel intersection finding"):
@@ -2038,6 +2265,7 @@ class SparseGrid(nn.Module):
         if self.surface_type in [SURFACE_TYPE_SDF, SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
             if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
                 fn = torch.nn.Softplus()
+                # fn = torch.relu
                 surface000 = fn(surface000)
                 surface001 = fn(surface001)
                 surface010 = fn(surface010)
@@ -2386,7 +2614,6 @@ class SparseGrid(nn.Module):
         alpha = torch.sigmoid(alpha)
 
 
-
         if self.surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
             # use naive biased formula to get alpha for fake samples
             lv_sets = self.level_set_data[lv_set_ids[fake_sample_ids]]
@@ -2716,7 +2943,7 @@ class SparseGrid(nn.Module):
                     (surfaces[x,y,z]+surfaces[x,y+1,z]+surfaces[x+1,y,z]+surfaces[x+1,y+1,z]))/4
 
                 normals = torch.stack([dx, dy, dz], dim=-1)
-                normals = normals / torch.norm(normals, dim=-1, keepdim=True)
+                normals = normals / torch.clamp(torch.norm(normals, dim=-1, keepdim=True), 1e-10)
 
                 # check if there is non-exist vertex
                 coords = torch.tensor([
@@ -2745,13 +2972,6 @@ class SparseGrid(nn.Module):
             norm001, mask001, alpha_v001 = find_normal(norm_xyzs[1])
             norm010, mask010, alpha_v010 = find_normal(norm_xyzs[2])
             norm100, mask100, alpha_v100 = find_normal(norm_xyzs[3])
-
-            # # fix the direction of norms
-            # # completly opposite norms would now give 0 loss
-            # norm000 = norm000 * torch.where(norm000[:,:,0] > 0., 1., -1.)[:,None]
-            # norm001 = norm001 * torch.where(norm001[:,:,0] > 0., 1., -1.)[:,None]
-            # norm010 = norm010 * torch.where(norm010[:,:,0] > 0., 1., -1.)[:,None]
-            # norm100 = norm100 * torch.where(norm100[:,:,0] > 0., 1., -1.)[:,None]
 
 
             # check connectivity of surfaces
@@ -2806,6 +3026,39 @@ class SparseGrid(nn.Module):
             out['intersections'] = self.grid2world(intersects)
 
         return out
+
+
+    def _init_surface_from_density(self, alpha_lv_sets=0.5, reset_alpha=False, init_alpha=0.1, surface_rescale=0.1):
+        '''
+        Initialize surface data from density values
+        '''
+        with torch.no_grad():
+            device = self.level_set_data.device
+            # reset surface level set
+            # currently only support UDF single lv set
+            self.level_set_data = torch.tensor([64.], device=device)
+            # convert alpha lv set into alpha raw values
+            alpha_lv_sets = torch.tensor(alpha_lv_sets, device=device)
+            alpha_lv_sets = torch.logit(alpha_lv_sets)
+
+            # convert density to alphas
+            d = torch.tensor([1.,1.,1.])
+            d = d / torch.norm(d)
+            delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
+
+            alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 1e-6) * delta_scale * self.opt.step_size)
+            raw_alpha_data = torch.logit(alpha_data)
+            if reset_alpha:
+                self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha))
+            else:
+                self.density_data = nn.Parameter(raw_alpha_data.detach().clone())
+
+
+            # copy alpha data then shift according to lv set
+            surface_data = raw_alpha_data.detach().clone()
+            surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
+            self.surface_data = nn.Parameter(surface_data)
+
 
 
     def _volume_render_gradcheck_nvol_lerp(self, rays: Rays, return_raylen: bool=False):
@@ -3085,6 +3338,7 @@ class SparseGrid(nn.Module):
         batch_size : int = 5000,
         return_raylen: bool=False,
         debug_pixels: list=None, # a list of pixel coords to render, only for debugging
+        **kwargs,
     ):
         """
         Standard volume rendering (entire image version).
@@ -3114,7 +3368,8 @@ class SparseGrid(nn.Module):
                     rgb_out_part = self.volume_render(rays[batch_start:batch_start+batch_size],
                                                     use_kernel=use_kernel,
                                                     randomize=randomize,
-                                                    return_raylen=return_raylen)['rgb']
+                                                    return_raylen=return_raylen,
+                                                    **kwargs)['rgb']
                     all_rgb_out.append(rgb_out_part)
 
                 all_rgb_out = torch.cat(all_rgb_out, dim=0)
@@ -3124,10 +3379,11 @@ class SparseGrid(nn.Module):
                 rgb_out_part = self.volume_render(rays[ray_ids],
                                 use_kernel=use_kernel,
                                 randomize=randomize,
-                                return_raylen=return_raylen)['rgb']
+                                return_raylen=return_raylen,
+                                **kwargs)['rgb']
                 return rgb_out_part
 
-    def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None):
+    def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None, **kwargs):
         """
         Volumetric depth rendering for rays
 
@@ -3139,7 +3395,7 @@ class SparseGrid(nn.Module):
         :return: (N,)
         """
         if self.surface_type != SURFACE_TYPE_NONE:
-            out = self._surface_render_gradcheck_lerp(rays, return_depth=True)
+            out = self._surface_render_gradcheck_lerp(rays, return_depth=True, **kwargs)
             return out['depth']
 
         if sigma_thresh is None:
@@ -3154,7 +3410,7 @@ class SparseGrid(nn.Module):
                     self.opt._to_cpp(),
                     sigma_thresh)
 
-    def volume_render_depth_image(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000):
+    def volume_render_depth_image(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
         """
         Volumetric depth rendering for full image
 
@@ -3168,7 +3424,7 @@ class SparseGrid(nn.Module):
         rays = camera.gen_rays()
         all_depths = []
         for batch_start in range(0, camera.height * camera.width, batch_size):
-            depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh)
+            depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh, **kwargs)
             all_depths.append(depths)
         all_depth_out = torch.cat(all_depths, dim=0)
         return all_depth_out.view(camera.height, camera.width)
@@ -3190,7 +3446,7 @@ class SparseGrid(nn.Module):
             # extrac points from depth
             all_depths = []
             for batch_start in range(0, camera.height * camera.width, batch_size):
-                depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh)
+                depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh, **kwargs)
                 all_depths.append(depths)
             all_depth_out = torch.cat(all_depths, dim=0)
             

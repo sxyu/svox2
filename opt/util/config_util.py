@@ -201,6 +201,19 @@ def setup_train_conf():
     group.add_argument('--init_iters', type=lambda x: int(float(x)), default=
                         0,
                         help='do not upsample for first x iters')
+    group.add_argument('--no_surface_init_iters', type=lambda x: int(float(x)), default=
+                        0,
+                        help='Do not use surface for first x iters, then init surface from learned alpha values')
+    group.add_argument('--alpha_lv_sets', type=float, default=
+                        0.1,
+                        help='Value of alpha used to init surface')
+    group.add_argument('--surface_init_rescale', type=float, default=
+                        0.1,
+                        help='Rescale the raw values of surfaces')
+    group.add_argument('--surface_init_reset_alpha',action='store_true', default=False,
+                        help='Reset alpha value after no surface init')
+    # group.add_argument('--init_surface_with_alpha',action='store_true', default=False,
+    #                     help='During no surface init, directly train with alpha instead of density')
     group.add_argument('--upsample_density_add', type=float, default=
                         0.0,
                         help='add the remaining density by this amount when upsampling')
