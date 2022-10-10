@@ -3046,18 +3046,18 @@ class SparseGrid(nn.Module):
             d = d / torch.norm(d)
             delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
 
-            alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 1e-6) * delta_scale * self.opt.step_size)
-            raw_alpha_data = torch.logit(alpha_data)
+            alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 0) * delta_scale * self.opt.step_size)
+            raw_alpha_data = torch.logit(torch.clamp_min(alpha_data, 1e-8))
             if reset_alpha:
-                self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha))
+                self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha).to(torch.float32))
             else:
-                self.density_data = nn.Parameter(raw_alpha_data.detach().clone())
+                self.density_data = nn.Parameter(raw_alpha_data.detach().clone().to(torch.float32))
 
 
             # copy alpha data then shift according to lv set
             surface_data = raw_alpha_data.detach().clone()
             surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
-            self.surface_data = nn.Parameter(surface_data)
+            self.surface_data = nn.Parameter(surface_data.to(torch.float32))
 
 
 
