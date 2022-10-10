@@ -2194,7 +2194,8 @@ class SparseGrid(nn.Module):
             d = d / torch.norm(d)
             delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
 
-            B_alpha[B_to_sample_mask] = 1 - torch.exp(-sigma[:,0] * delta_scale * self.opt.step_size).to(B_rgb.dtype) # [N_samples]
+            alpha = 1 - torch.exp(-sigma[:,0] * delta_scale * self.opt.step_size).to(B_rgb.dtype) # [N_samples]
+            B_alpha[B_to_sample_mask] = alpha # [N_samples]
 
             rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
             B_rgb[B_to_sample_mask,:] = torch.clamp_min(
@@ -2219,10 +2220,25 @@ class SparseGrid(nn.Module):
             if self.opt.background_brightness:
                 out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
 
-            return {
+            out = {
                 'rgb': out_rgb,
-                'depth': out_depth
+                'depth': out_depth,
+                'extra_loss': {},
+                'log_stats': {},
             }
+
+            # compute density lap loss
+            if alpha.numel() == 0:
+                density_lap_loss = 0.
+            else:
+                p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
+                density_lap_loss = torch.mean(-torch.log(p_lap))
+                # make positive
+                density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
+            out['extra_loss']['density_lap_loss'] = density_lap_loss
+            out['log_stats']['density_lap_loss'] = density_lap_loss
+
+            return out
 
 
 
