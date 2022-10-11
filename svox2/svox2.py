@@ -1172,7 +1172,7 @@ class SparseGrid(nn.Module):
 
         # check whether intersection goes outside of voxel
         next_pos = origins + next_t[:, None] * dirs
-        next_t[~self.within_grid(next_pos)] = torch.nan
+        next_t[~self.within_grid(next_pos, atol=-1e-8)] = torch.nan
 
         return next_t
     
@@ -1977,7 +1977,7 @@ class SparseGrid(nn.Module):
 
         # remove intersections outside of voxel
         for i in range(ts_bd.shape[1]):
-            ts_bd[~self.within_grid(ts_bd[:, i, None] * dirs + origins), i] = torch.nan
+            ts_bd[~self.within_grid(ts_bd[:, i, None] * dirs + origins, atol=-1e-6), i] = torch.nan
 
         t = torch.nan_to_num(ts_bd, torch.inf).min(axis=-1).values
         tmax = torch.nan_to_num(ts_bd, -torch.inf).max(axis=-1).values
