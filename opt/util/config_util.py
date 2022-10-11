@@ -204,6 +204,8 @@ def setup_train_conf():
     group.add_argument('--no_surface_init_iters', type=lambda x: int(float(x)), default=
                         0,
                         help='Do not use surface for first x iters, then init surface from learned alpha values')
+    group.add_argument('--no_surface_init_debug_ckpt', action='store_true', default=False,
+                        help='Save a ckpt for no surface init')
     group.add_argument('--alpha_lv_sets', type=float, default=
                         0.1,
                         help='Value of alpha used to init surface')

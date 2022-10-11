@@ -412,6 +412,11 @@ while True:
                 # run density based surface init
                 # _density_backup = grid.density_data.data.detach().clone()
                 eval_step(step_id=gstep_id-1)
+                if args.no_surface_init_debug_ckpt:
+                    ckpt_path = path.join(args.train_dir, f'ckpt_no_surface.npz')
+                    print('Saving for no surface init', ckpt_path)
+                    grid.save(ckpt_path, step_id=gstep_id)
+
                 grid._init_surface_from_density(
                     alpha_lv_sets=args.alpha_lv_sets,
                     reset_alpha=args.surface_init_reset_alpha,
