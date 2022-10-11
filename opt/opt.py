@@ -408,7 +408,7 @@ while True:
 
             no_surface = gstep_id < args.no_surface_init_iters
 
-            if gstep_id == args.no_surface_init_iters:
+            if (gstep_id == args.no_surface_init_iters) and (args.no_surface_init_iters > 0):
                 # run density based surface init
                 # _density_backup = grid.density_data.data.detach().clone()
                 eval_step(step_id=gstep_id-1)

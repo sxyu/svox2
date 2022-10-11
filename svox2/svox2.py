@@ -717,27 +717,9 @@ class SparseGrid(nn.Module):
             if surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
                 self.fake_sample_std = torch.tensor(1., device=device)
 
-        elif False: # surface_type == 'alpha_surface':
-            # use level set on alpha values to get surface and intersections
-            # self.
-            raise NotImplementedError
-            grid_center = (torch.tensor(reso)) / 2
-            level_sets = torch.norm(grid_center, keepdim=True) / 2.
-            level_sets = level_sets.to(device)
-
+        elif surface_type == SURFACE_TYPE_VOXEL_FACE:
             surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
-            coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
-            coords = torch.stack(coords).view(3, -1).T
-            # grid_center = (torch.tensor(reso) - 1.) / 2
-            grid_center = (torch.tensor(reso)) / 2
-            rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
 
-            sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 2) + 0.5
-            sphere_rs = sphere_rs.to(device)
-            dists = rs[:, None] - sphere_rs[None, :]
-
-            links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
-            surface_data[links.long(), 0] = dists[torch.arange(dists.shape[0]), torch.abs(dists).min(axis=-1).indices] + level_sets[0]
 
         
         if surface_data is not None:
@@ -1130,13 +1112,13 @@ class SparseGrid(nn.Module):
             )
         return out_rgb
 
-    def within_grid(self, pts, atol=1e-6): # FIXME eps needed?
+    def within_grid(self, pts, atol=1e-6):
         '''
         Check whether the given pts is within the voxel grid
         '''
         gsz_cu = self._grid_size().to(pts.dtype).to(device=pts.device)
-        return (((pts <= gsz_cu-1.) | (torch.isclose(pts, gsz_cu-1., atol=atol))).all(axis=-1) & \
-                ((pts >= gsz_cu*0.) | (torch.isclose(pts, gsz_cu*0., atol=atol))).all(axis=-1))
+        return ((pts <= gsz_cu-1. - atol).all(axis=-1) & \
+                (pts >= gsz_cu*0. + atol).all(axis=-1))
 
     def find_next_intersection(self, t, origins, dirs):
         '''
@@ -2113,6 +2095,128 @@ class SparseGrid(nn.Module):
                     * self.opt.background_brightness
                 )
             return out_rgb
+
+
+        if self.surface_type == SURFACE_TYPE_VOXEL_FACE:
+            # take samples at ray-voxel intersections
+            # l, ray_ids = self.find_ray_voxels_intersection(t, origins, dirs)
+
+            plane_xs = torch.arange(0, gsz[0], device=origins.device)
+            plane_ys = torch.arange(0, gsz[1], device=origins.device)
+            plane_zs = torch.arange(0, gsz[2], device=origins.device)
+
+            ts_x = (plane_xs[None, :] - origins[:, 0, None])/dirs[:, 0, None]
+            ts_y = (plane_ys[None, :] - origins[:, 1, None])/dirs[:, 1, None]
+            ts_z = (plane_zs[None, :] - origins[:, 2, None])/dirs[:, 2, None]
+
+            ts = torch.concat([ts_x, ts_y, ts_z], axis=-1)
+            samples = origins[:, None, :] + dirs[:, None, :] * ts[..., None]
+
+            valid_sample_mask = self.within_grid(samples)
+
+            ts = ts[valid_sample_mask]
+            samples = samples[valid_sample_mask]
+            ray_ids = torch.repeat_interleave(torch.arange(B, device=t.device), torch.count_nonzero(valid_sample_mask,dim=-1))
+
+
+            l = samples.long()
+            lx, ly, lz = l.unbind(-1) 
+            links000 = self.links[lx, ly, lz]
+            links001 = self.links[lx, ly, lz + 1]
+            links010 = self.links[lx, ly + 1, lz]
+            links011 = self.links[lx, ly + 1, lz + 1]
+            links100 = self.links[lx + 1, ly, lz]
+            links101 = self.links[lx + 1, ly, lz + 1]
+            links110 = self.links[lx + 1, ly + 1, lz]
+            links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+            alpha000, rgb000, _ = self._fetch_links(links000)
+            alpha001, rgb001, _ = self._fetch_links(links001)
+            alpha010, rgb010, _ = self._fetch_links(links010)
+            alpha011, rgb011, _ = self._fetch_links(links011)
+            alpha100, rgb100, _ = self._fetch_links(links100)
+            alpha101, rgb101, _ = self._fetch_links(links101)
+            alpha110, rgb110, _ = self._fetch_links(links110)
+            alpha111, rgb111, _ = self._fetch_links(links111)
+
+            pos = samples - l
+
+            wa, wb = 1.0 - pos, pos
+            c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
+            c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
+            c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
+            c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+            alpha = torch.sigmoid(alpha)
+
+            c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+            c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+            c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+            c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+
+            # split and pad samples into 2d arrays
+            # where first dim is B
+            ray_bin = torch.zeros((B), device=origins.device)
+            bincount = torch.bincount(ray_ids)
+            ray_bin[:bincount.shape[0]] = bincount
+            MS = ray_bin.max().long().item() # maximum number of samples per-ray 
+
+            B_rgb = torch.zeros((B, MS, 3), device=origins.device)
+            B_alpha = torch.zeros((B, MS), device=origins.device)
+
+            B_to_sample_mask = (torch.arange(MS)[None, :].repeat([B, 1]).to(origins.device) < ray_bin[:, None])
+
+            B_alpha[B_to_sample_mask] = alpha[:, 0].to(B_alpha.dtype) # [N_samples]
+
+            rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
+            B_rgb[B_to_sample_mask,:] = torch.clamp_min(
+                torch.sum(sh_mult[ray_ids, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
+                0.0,
+            ) # [N_samples, 3]
+
+            assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
+
+            B_weights = B_alpha * torch.cumprod(
+                torch.cat([torch.ones((B_alpha.shape[0], 1)).to(B_alpha.device), torch.clamp(1.-B_alpha, 1e-7, 1-1e-7)], -1), -1
+                )[:, :-1] # [B, MS, 3]
+            
+            out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
+
+            B_ts = torch.zeros((B, MS), device=origins.device)
+            B_ts[B_to_sample_mask] = ts.to(B_ts.dtype) # [N_samples]
+
+            out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
+
+            # Add background color
+            if self.opt.background_brightness:
+                out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
+
+            out = {
+                'rgb': out_rgb,
+                'depth': out_depth,
+                'extra_loss': {},
+                'log_stats': {},
+            }
+
+            # compute density lap loss
+            if alpha.numel() == 0:
+                density_lap_loss = 0.
+            else:
+                p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
+                density_lap_loss = torch.mean(-torch.log(p_lap))
+                # make positive
+                density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
+            out['extra_loss']['density_lap_loss'] = density_lap_loss
+            out['log_stats']['density_lap_loss'] = density_lap_loss
+
+            return out
+
 
 
         if no_surface:
@@ -4551,7 +4655,7 @@ class SparseGrid(nn.Module):
         """
         Execute RMSprop or sgd step on density
         """
-        if self.surface_type != SURFACE_TYPE_NONE:
+        if self.surface_type != SURFACE_TYPE_NONE and self.surface_type != SURFACE_TYPE_VOXEL_FACE:
             surface_data = self.surface_data
         else:
             # No surface data used!
