@@ -254,7 +254,7 @@ class _VolumeRenderFunction(autograd.Function):
     def backward(ctx, grad_out): 
         # this backward is only used for testing. Use fused MSE method in actual training instead
         # grad_out is the gradient for color
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         (color_cache,) = ctx.saved_tensors
         cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_backward"]
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
@@ -555,6 +555,8 @@ class SparseGrid(nn.Module):
         self.level_set_data = None
         if surface_type == SURFACE_TYPE_SDF:
             # surface_init = None
+            level_sets = torch.tensor([0.])
+            level_sets = level_sets.to(device)
             if surface_init == 'sphere' or surface_init is None:
                 # method 1: initialize with distance to grid center, then reduce each vertices by the mean from the 8?
                 surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
@@ -942,16 +944,16 @@ class SparseGrid(nn.Module):
         while good_indices.numel() > 0:
             pos = origins + t[:, None] * dirs
             pos = pos.clamp_min_(0.0)
-            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz[0] - 1)
-            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz[1] - 1)
-            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz[2] - 1)
+            pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
+            pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
+            pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
             #  print('pym', pos, log_light_intensity)
 
             l = pos.to(torch.long)
             l.clamp_min_(0)
-            l[:, 0] = torch.clamp_max(l[:, 0], gsz[0] - 2)
-            l[:, 1] = torch.clamp_max(l[:, 1], gsz[1] - 2)
-            l[:, 2] = torch.clamp_max(l[:, 2], gsz[2] - 2)
+            l[:, 0] = torch.clamp_max(l[:, 0], gsz_cu[0].long() - 2)
+            l[:, 1] = torch.clamp_max(l[:, 1], gsz_cu[1].long() - 2)
+            l[:, 2] = torch.clamp_max(l[:, 2], gsz_cu[2].long() - 2)
             pos -= l
 
             # BEGIN CRAZY TRILERP
@@ -2142,14 +2144,15 @@ class SparseGrid(nn.Module):
             pos = samples - l
 
             wa, wb = 1.0 - pos, pos
-            c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
-            c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
-            c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
-            c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
-            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-            alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
-            alpha = torch.sigmoid(alpha)
+            # c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
+            # c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
+            # c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
+            # c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
+            # c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            # c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            # alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
+            # alpha = torch.sigmoid(alpha)
+            alpha = torch.sigmoid(alpha000)
 
             c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
             c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
@@ -2204,16 +2207,16 @@ class SparseGrid(nn.Module):
                 'log_stats': {},
             }
 
-            # compute density lap loss
-            if alpha.numel() == 0:
-                density_lap_loss = 0.
-            else:
-                p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
-                density_lap_loss = torch.mean(-torch.log(p_lap))
-                # make positive
-                density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
-            out['extra_loss']['density_lap_loss'] = density_lap_loss
-            out['log_stats']['density_lap_loss'] = density_lap_loss
+            # # compute density lap loss
+            # if alpha.numel() == 0:
+            #     density_lap_loss = 0.
+            # else:
+            #     p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
+            #     density_lap_loss = torch.mean(-torch.log(p_lap))
+            #     # make positive
+            #     density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
+            # out['extra_loss']['density_lap_loss'] = density_lap_loss
+            # out['log_stats']['density_lap_loss'] = density_lap_loss
 
             return out
 
