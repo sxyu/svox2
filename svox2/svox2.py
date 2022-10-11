@@ -2333,14 +2333,14 @@ class SparseGrid(nn.Module):
 
             # compute density lap loss
             if alpha.numel() == 0:
-                density_lap_loss = 0.
+                no_surf_init_density_lap_loss = 0.
             else:
                 p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
-                density_lap_loss = torch.mean(-torch.log(p_lap))
+                no_surf_init_density_lap_loss = torch.mean(-torch.log(p_lap))
                 # make positive
-                density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
-            out['extra_loss']['density_lap_loss'] = density_lap_loss
-            out['log_stats']['density_lap_loss'] = density_lap_loss
+                no_surf_init_density_lap_loss = no_surf_init_density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
+            out['extra_loss']['no_surf_init_density_lap_loss'] = no_surf_init_density_lap_loss
+            out['log_stats']['no_surf_init_density_lap_loss'] = no_surf_init_density_lap_loss
 
             return out
 

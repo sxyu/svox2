@@ -465,6 +465,7 @@ while True:
                     #     loss += out['extra_loss'][k]
                     loss += args.lambda_udf_var_loss * out['extra_loss'].get('udf_var_loss', 0.)
                     loss += args.lambda_density_lap_loss * out['extra_loss'].get('density_lap_loss', 0.)
+                    loss += args.lambda_no_surf_init_density_lap_loss * out['extra_loss'].get('no_surf_init_density_lap_loss', 0.)
                     loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
                 
                 loss.backward()
