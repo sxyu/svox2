@@ -105,6 +105,27 @@ class Rays:
     def is_cuda(self) -> bool:
         return self.origins.is_cuda and self.dirs.is_cuda
 
+@dataclass
+class RayVoxIntersecs:
+    voxel_ls: torch.Tensor
+    ray_bin: torch.Tensor
+
+    def _to_cpp(self):
+        """
+        Generate object to pass to C++
+        """
+        spec = _C.RayVoxIntersecSpec()
+        spec.voxel_ls = self.voxel_ls
+        spec.ray_bin = self.ray_bin
+        return spec
+
+    def __getitem__(self, key):
+        return RayVoxIntersecs(self.voxel_ls[key], self.ray_bin[key])
+
+    @property
+    def is_cuda(self) -> bool:
+        return self.voxel_ls.is_cuda and self.ray_bin.is_cuda
+
 
 @dataclass
 class Camera:
@@ -239,12 +260,82 @@ class _VolumeRenderFunction(autograd.Function):
         rays,
         opt,
         backend: str,
+        ray_vox=None,
     ):
         cu_fn = _C.__dict__[f"volume_render_{backend}"]
         color = cu_fn(grid, rays, opt)
         ctx.save_for_backward(color)
         ctx.grid = grid
         ctx.rays = rays
+        ctx.opt = opt
+        ctx.backend = backend
+        ctx.basis_data = data_basis
+        return color
+
+    @staticmethod
+    def backward(ctx, grad_out): 
+        # this backward is only used for testing. Use fused MSE method in actual training instead
+        # grad_out is the gradient for color
+        # import pdb; pdb.set_trace()
+        (color_cache,) = ctx.saved_tensors
+        cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_backward"]
+        grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
+        grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        if ctx.grid.basis_type == BASIS_TYPE_MLP:
+            grad_basis = torch.zeros_like(ctx.basis_data)
+        elif ctx.grid.basis_type == BASIS_TYPE_3D_TEXTURE:
+            grad_basis = torch.zeros_like(ctx.grid.basis_data.data)
+        if ctx.grid.background_data is not None:
+            grad_background = torch.zeros_like(ctx.grid.background_data.data)
+        grad_holder = _C.GridOutputGrads()
+        grad_holder.grad_density_out = grad_density_grid
+        grad_holder.grad_sh_out = grad_sh_grid
+        if ctx.needs_input_grad[2]:
+            grad_holder.grad_basis_out = grad_basis # for SH type, basis needs no grad
+        if ctx.grid.background_data is not None and ctx.needs_input_grad[3]:
+            grad_holder.grad_background_out = grad_background
+        cu_fn(
+            ctx.grid,
+            ctx.rays,
+            ctx.opt,
+            grad_out.contiguous(),
+            color_cache,
+            grad_holder
+        )
+        ctx.grid = ctx.rays = ctx.opt = None
+        if not ctx.needs_input_grad[0]:
+            grad_density_grid = None
+        if not ctx.needs_input_grad[1]:
+            grad_sh_grid = None
+        if not ctx.needs_input_grad[2]:
+            grad_basis = None
+        if not ctx.needs_input_grad[3]:
+            grad_background = None
+        ctx.basis_data = None
+
+        return grad_density_grid, grad_sh_grid, grad_basis, grad_background, \
+               None, None, None, None
+
+class _SurfaceRenderFunction(autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        data_density: torch.Tensor,
+        data_sh: torch.Tensor,
+        data_basis: torch.Tensor,
+        data_background: torch.Tensor,
+        grid,
+        rays,
+        ray_vox,
+        opt,
+        backend: str,
+    ):
+        cu_fn = _C.__dict__[f"volume_render_{backend}"]
+        color = cu_fn(grid, rays, ray_vox, opt)
+        ctx.save_for_backward(color)
+        ctx.grid = grid
+        ctx.rays = rays
+        ctx.ray_vox = ray_vox
         ctx.opt = opt
         ctx.backend = backend
         ctx.basis_data = data_basis
@@ -2547,8 +2638,6 @@ class SparseGrid(nn.Module):
                 c = f1[cubic_mask] / norm_term
                 d = f0[cubic_mask] / norm_term
 
-                # TODO: remove voxels with invalid SDFs as they can cause numerical issues
-
                 def cond_cbrt(x, eps=1e-10):
                     '''
                     Compute cubic root of x based on sign
@@ -2578,7 +2667,7 @@ class SparseGrid(nn.Module):
                 _L = _j * -1                              
                 _M = torch.cos(_k / 3.)       
                 _N = np.sqrt(3) * torch.sin(_k / 3.)    
-                _P = (_b / (3. * _a)) * -1                
+                _P = (_b / (3. * _a)) * -1
 
                 ts[cubic_ids[_mask], 0] = 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
                 ts[cubic_ids[_mask], 1] = _L * (_M + _N) + _P
@@ -3358,16 +3447,40 @@ class SparseGrid(nn.Module):
             assert rays.is_cuda
             basis_data = self._eval_basis_mlp(rays.dirs) if self.basis_type == BASIS_TYPE_MLP \
                                                          else None
-            return {'rgb':  _VolumeRenderFunction.apply(
-                self.density_data,
-                self.sh_data,
-                basis_data,
-                self.background_data if self.use_background else None,
-                self._to_cpp(replace_basis_data=basis_data),
-                rays._to_cpp(),
-                self.opt._to_cpp(randomize=randomize),
-                self.opt.backend,
-            )}
+            if self.opt.backend == 'surface':
+                B = rays.origins.shape[0]
+                device = rays.origins.device
+                l, ray_ids = self.find_ray_voxels_intersection(None, rays.origins, rays.dirs)
+                ray_bin = torch.bincount(ray_ids, minlength=B)
+                MS = ray_bin.max().item()
+                voxel_ls = torch.zeros([B, MS, 3], dtype=torch.int32, device=device)
+                mask = torch.arange(MS)[None, :].repeat([B, 1]).to(device) < ray_bin[:, None]
+                voxel_ls[mask] = l.to(torch.int32)
+
+                ray_vox = RayVoxIntersecs(voxel_ls, ray_bin.to(torch.int32))
+
+                return {'rgb':  _SurfaceRenderFunction.apply(
+                    self.density_data,
+                    self.sh_data,
+                    basis_data,
+                    self.background_data if self.use_background else None,
+                    self._to_cpp(replace_basis_data=basis_data),
+                    rays._to_cpp(),
+                    ray_vox._to_cpp(),
+                    self.opt._to_cpp(randomize=randomize),
+                    self.opt.backend,
+                )}
+            else:
+                return {'rgb':  _VolumeRenderFunction.apply(
+                    self.density_data,
+                    self.sh_data,
+                    basis_data,
+                    self.background_data if self.use_background else None,
+                    self._to_cpp(replace_basis_data=basis_data),
+                    rays._to_cpp(),
+                    self.opt._to_cpp(randomize=randomize),
+                    self.opt.backend
+                )}
         else:
             warn("Using slow volume rendering, should only be used for debugging")
             if self.surface_type != SURFACE_TYPE_NONE:

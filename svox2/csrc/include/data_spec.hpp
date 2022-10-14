@@ -130,6 +130,16 @@ struct RaysSpec {
   }
 };
 
+// struct to store interesctions between ray and voxels
+struct RayVoxIntersecSpec {
+  Tensor voxel_ls;
+  Tensor ray_bin;
+  inline void check() {
+    CHECK_INPUT(voxel_ls);
+    CHECK_INPUT(ray_bin);
+  }
+};
+
 struct RenderOptions {
   float background_brightness;
   // float step_epsilon;

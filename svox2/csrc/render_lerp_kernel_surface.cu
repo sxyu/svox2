@@ -7,6 +7,12 @@
 #include <iostream>
 #include <cstdint>
 #include <tuple>
+// #include <math.h>
+#include <bits/stdc++.h>
+#include <thrust/extrema.h>
+#include <thrust/sort.h>
+#include <assert.h>
+#include <thrust/execution_policy.h>
 
 namespace {
 const int WARP_SIZE = 32;
@@ -27,9 +33,12 @@ namespace device {
 
 
 // * For ray rendering
-__device__ __inline__ void trace_ray_cuvol(
+__device__ __inline__ void trace_ray_surface(
         const PackedSparseGridSpec& __restrict__ grid,
         SingleRaySpec& __restrict__ ray,
+        const int32_t* __restrict__ voxel_ls,
+        const int32_t vox_num,
+        // const PackedRayVoxIntersecSpec& __restrict__ ray_vox,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
         float* __restrict__ sphfunc_val,
@@ -53,57 +62,292 @@ __device__ __inline__ void trace_ray_cuvol(
     float log_transmit = 0.f;
     // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
 
-    while (t <= ray.tmax) {
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
-            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]); // fmaf(x,y,z) = (x*y)+z
-            ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f); // clamp to fit within grid
-            ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2); // get l
-            ray.pos[j] -= static_cast<float>(ray.l[j]); // get trilinear interpolate distances
-        }
+//     while (t <= ray.tmax) {
+// #pragma unroll 3
+//         for (int j = 0; j < 3; ++j) {
+//             ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]); // fmaf(x,y,z) = (x*y)+z
+//             ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f); // clamp to fit within grid
+//             ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2); // get l
+//             ray.pos[j] -= static_cast<float>(ray.l[j]); // get trilinear interpolate distances
+//         }
 
-        const float skip = compute_skip_dist(ray,
-                       grid.links, grid.stride_x,
-                       grid.size[2], 0);
+//         const float skip = compute_skip_dist(ray,
+//                        grid.links, grid.stride_x,
+//                        grid.size[2], 0);
 
-        if (skip >= opt.step_size) {
-            // For consistency, we skip the by step size
-            t += ceilf(skip / opt.step_size) * opt.step_size;
+//         if (skip >= opt.step_size) {
+//             // For consistency, we skip the by step size
+//             t += ceilf(skip / opt.step_size) * opt.step_size;
+//             continue;
+//         }
+//         // skip voxel if any of the vertices is turned off
+//         int offx = grid.stride_x, offy = grid.size[2];
+//         const int32_t* __restrict__ link_ptr = grid.links + (offx * ray.l[0] + offy * ray.l[1] + ray.l[2]);
+//         if ((link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) || \
+//             (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
+//         ){
+//             t += opt.step_size;
+//             continue;
+//         }
+
+    // if (threadIdx.x == 0){
+    //     printf("vox_num=%i\n", vox_num);
+    // }
+
+    for (int v_i=0; v_i<vox_num; ++v_i){
+        // skip voxel if any of the vertices is turned off
+        int offx = grid.stride_x, offy = grid.size[2];
+
+        const int32_t voxel_l[3] = {voxel_ls[3*v_i+0], voxel_ls[3*v_i+1], voxel_ls[3*v_i+2]};
+
+        // check if correct!
+        const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
+
+        if ((link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) || \
+            (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
+        ){
+            // t += opt.step_size;
             continue;
         }
-        float sigma = trilerp_cuvol_one(
-                grid.links, grid.density_data,
-                grid.stride_x,
-                grid.size[2],
-                1,
-                ray.l, ray.pos,
-                0);
-        if (opt.last_sample_opaque && t + opt.step_size > ray.tmax) {
-            ray.world_step = 1e9;
-        }
-        // if (opt.randomize && opt.random_sigma_std > 0.0) sigma += ray.rng.randn() * opt.random_sigma_std;
 
-        if (sigma > opt.sigma_thresh) {
-            float lane_color = trilerp_cuvol_one(
-                            grid.links,
-                            grid.sh_data,
-                            grid.stride_x,
-                            grid.size[2],
-                            grid.sh_data_dim,
-                            ray.l, ray.pos, lane_id);
-            lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
+        // find intersections
+        float const surface[8] = {
+            grid.surface_data[link_ptr[0]],
+            grid.surface_data[link_ptr[1]],
+            grid.surface_data[link_ptr[offy]],
+            grid.surface_data[link_ptr[offy+1]],
+            grid.surface_data[link_ptr[offx]],
+            grid.surface_data[link_ptr[offx+1]],
+            grid.surface_data[link_ptr[offx+offy]],
+            grid.surface_data[link_ptr[offx+offy+1]],
+        };
 
-            const float pcnt = ray.world_step * sigma;
-            const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
-            log_transmit -= pcnt;
+        // surface_data[0b000] = grid.surface_data[link_ptr[0]]
+        // surface_data[0b001] = grid.surface_data[link_ptr[1]]
+        // surface_data[0b010] = grid.surface_data[link_ptr[offy]]
+        // surface_data[0b011] = grid.surface_data[link_ptr[offy+1]]
+        // surface_data[0b100] = grid.surface_data[link_ptr[offx]]
+        // surface_data[0b101] = grid.surface_data[link_ptr[offx+1]]
+        // surface_data[0b110] = grid.surface_data[link_ptr[offx+offy]]
+        // surface_data[0b111] = grid.surface_data[link_ptr[offx+offy+1]]
 
-            float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                           lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
-            outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
-            if (_EXP(log_transmit) < opt.stop_thresh) {
-                log_transmit = -1e3f;
-                break;
+        float const a00 = surface[0b000] * (1-ray.origin[2]+ray.l[2]) + surface[0b001] * (ray.origin[2]-ray.l[2]);
+        float const a01 = surface[0b010] * (1-ray.origin[2]+ray.l[2]) + surface[0b011] * (ray.origin[2]-ray.l[2]);
+        float const a10 = surface[0b100] * (1-ray.origin[2]+ray.l[2]) + surface[0b101] * (ray.origin[2]-ray.l[2]);
+        float const a11 = surface[0b110] * (1-ray.origin[2]+ray.l[2]) + surface[0b111] * (ray.origin[2]-ray.l[2]);
+
+        float const b00 = -surface[0b000] + surface[0b001];
+        float const b01 = -surface[0b010] + surface[0b011];
+        float const b10 = -surface[0b100] + surface[0b101];
+        float const b11 = -surface[0b110] + surface[0b111];
+
+        float const c0 = a00*(1-ray.origin[1]+ray.l[1]) + a01*(ray.origin[1]-ray.l[1]);
+        float const c1 = a10*(1-ray.origin[1]+ray.l[1]) + a11*(ray.origin[1]-ray.l[1]);
+
+        float const d0 = -(a00*ray.dir[1] - ray.dir[2]*b00*(1-ray.origin[1]+ray.l[1])) + (a01*ray.dir[1] + ray.dir[2]*b01*(ray.origin[1]-ray.l[1]));
+        float const d1 = -(a10*ray.dir[1] - ray.dir[2]*b10*(1-ray.origin[1]+ray.l[1])) + (a11*ray.dir[1] + ray.dir[2]*b11*(ray.origin[1]-ray.l[1]));
+
+        float const e0 = -ray.dir[1]*ray.dir[2]*b00 + ray.dir[1]*ray.dir[2]*b01;
+        float const e1 = -ray.dir[1]*ray.dir[2]*b10 + ray.dir[1]*ray.dir[2]*b11;
+
+        float const f3 = -e0*ray.dir[0] + e1*ray.dir[0];
+        float const f2 = -d0*ray.dir[0]+e0*(1-ray.origin[0]+ray.l[0]) + d1*ray.dir[0]+e1*(ray.origin[0]-ray.l[0]);
+        float const f1 = -c0*ray.dir[0] + d0*(1-ray.origin[0]+ray.l[0]) + c1*ray.dir[0] + d1*(ray.origin[0]-ray.l[0]);
+        float const f0 = c0*(1-ray.origin[0]+ray.l[0]) + c1*(ray.origin[0]-ray.l[0]);
+
+        // only supports single level set!
+        const int level_set_num = 1;
+        
+
+        const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
+        for (int i=0; i < level_set_num; ++i){
+            float const lv_set = grid.level_set_data[i];
+            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+                continue;
             }
+            float const f0_lv = f0 - lv_set;
+
+            // probably better ways to find roots
+            // https://stackoverflow.com/questions/4906556/what-is-a-simple-way-to-find-real-roots-of-a-cubic-polynomial
+            // https://www.sciencedirect.com/science/article/pii/B9780125434577500097
+            // https://stackoverflow.com/questions/13328676/c-solving-cubic-equations
+
+
+            ////////////// CUBIC ROOT SOLVING //////////////
+            float const eps = 1e-8;
+            float st[3] = {-1, -1, -1}; // sample t
+            if (_CLOSE_TO_ZERO(f3, eps)){
+                if (_CLOSE_TO_ZERO(f2, eps)){
+                    if (_CLOSE_TO_ZERO(f1, eps)){
+                        // no solution
+                    } else {
+                        // linear case
+                        st[0] = -f0_lv / f1;
+                        assert(!isnan(st[0]));
+                    }
+                } else {
+                    // polynomial case
+                    // _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
+                    float const D = _SQR(f1) - 4.0 * f2 * f0_lv;
+                    float const sqrt_D = sqrtf(D);
+                    if (D > 0){
+                        st[0] = (-f1 + sqrt_D) / (2 * f2);
+                        st[1] = (-f1 - sqrt_D) / (2 * f2);
+                        // assert(!isnan(st[0]));
+                        // assert(!isnan(st[1]));
+                    }
+                }
+            } else {
+                // cubic case
+                double const eps_double = 1e-10;
+                double const volatile norm_term = static_cast<double>(f3);
+                double const volatile a = static_cast<double>(f3) / norm_term;
+                double const volatile b = static_cast<double>(f2) / norm_term;
+                double const volatile c = static_cast<double>(f1) / norm_term;
+                double const volatile d = static_cast<double>(f0_lv) / norm_term;
+
+                double const volatile f = ((3*c/a) - (_SQR(b) / _SQR(a))) / 3;                      
+                double const volatile g = (((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27;                 
+                double const volatile h = (_SQR(g) / 4 + _CUBIC(f) / 27);
+                // -inf + inf create nan!
+
+                if ((_CLOSE_TO_ZERO(f, eps_double)) & (_CLOSE_TO_ZERO(g, eps_double)) & (_CLOSE_TO_ZERO(h, eps_double))){
+                    // all three roots are real and equal
+                    st[0] = static_cast<float>(_COND_CBRT(d/a));
+                    // if ((isnan(st[0])) | (!isfinite(st[0]))){
+                    //     printf("a=%f\n", a);
+                    //     printf("b=%f\n", b);
+                    //     printf("c=%f\n", c);
+                    //     printf("d=%f\n", d);
+                    //     printf("g=%f\n", g);
+                    //     printf("h=%f\n", h);
+                    //     printf("f=%f\n", f);
+                    // }
+                    // assert(!isnan(st[0]));
+
+                } else if (h <= 0){
+                    // all three roots are real and distinct
+
+                    double const volatile _i = sqrt((_SQR(g) / 4.) - h);   
+                    double const volatile _j = cbrt(_i);
+                    double const volatile _k = acos(-(g / (2 * _i))); // TODO: might need clamp
+                    double const volatile _M = cos(_k / 3.);       
+                    double const volatile _N = sqrt(3) * sin(_k / 3.);
+                    double const volatile _P = (b / (3. * a)) * -1;                
+
+                    st[0] = static_cast<float>(2 * _j * cos(_k / 3.) - (b / (3. * a)));
+                    st[1] = static_cast<float>(-1 *_j * (_M + _N) + _P);
+                    st[2] = static_cast<float>(-1 *_j * (_M - _N) + _P);
+                    // if (isnan(st[0]) | isnan(st[1]) | isnan(st[2]) | (!isfinite(st[0])) | (!isfinite(st[1])) | (!isfinite(st[2]))){
+                    //     printf("a=%f\n", a);
+                    //     printf("b=%f\n", b);
+                    //     printf("c=%f\n", c);
+                    //     printf("d=%f\n", d);
+                    //     printf("g=%f\n", g);
+                    //     printf("h=%f\n", h);
+                    //     printf("f=%f\n", f);
+
+                    //     printf("_i=%f\n", _i);
+                    //     printf("_j=%f\n", _j);
+                    //     printf("_k=%f\n", _k);
+                    //     printf("_M=%f\n", _M);
+                    //     printf("_N=%f\n", _N);
+                    //     printf("_P=%f\n", _P);
+                    // }
+                    // assert(!isnan(st[0]));
+                    // assert(!isnan(st[1]));
+                    // assert(!isnan(st[2]));
+                } else {
+                    // only one real root
+                    double const volatile _R = -(g / 2.) + sqrt(h);
+                    double const volatile _S = _COND_CBRT(_R);
+
+                    double const volatile _T = -(g / 2.) - sqrt(h);
+                    double const volatile _U = _COND_CBRT(_T);
+
+                    st[0] = static_cast<float>((_S + _U) - (b / (3. * a)));
+
+                    // if ((isnan(st[0])) | (!isfinite(st[0]))){
+                    //     printf("a=%f\n", a);
+                    //     printf("b=%f\n", b);
+                    //     printf("c=%f\n", c);
+                    //     printf("d=%f\n", d);
+                    //     printf("g=%f\n", g);
+                    //     printf("h=%f\n", h);
+                    //     printf("f=%f\n", f);
+                    //     printf("_R=%f\n", _R);
+                    //     printf("_S=%f\n", _S);
+                    //     printf("_T=%f\n", _T);
+                    //     printf("_U=%f\n", _U);
+                    // }
+                    //     assert(!isnan(st[0]));
+                    
+                }
+
+            }
+            
+            // sort intersections by depth
+            thrust::sort(thrust::device, st, st + 3);
+
+            ////////////// TRILINEAR INTERPOLATE //////////////
+            for (int j=0; j < 3; ++j){
+                if (st[j] <= 0){
+                    // ignore intersection at negative direction
+                    continue;
+                }
+
+#pragma unroll 3
+                for (int k=0; k < 3; ++k){
+                    assert(!isnan(st[j]));
+                    ray.pos[k] = fmaf(st[j], ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.l[k] = voxel_l[k]; // get l
+                    ray.l[k] = min(static_cast<int32_t>(ray.pos[k]), grid.size[k] - 2); // get l
+                    ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
+                }
+
+                // check if intersection is within grid
+                if ((ray.pos[0] < 0) | (ray.pos[0] > 1) | (ray.pos[1] < 0) | (ray.pos[1] > 1) | (ray.pos[2] < 0) | (ray.pos[2] > 1)){
+                    continue;
+                }
+
+
+                float alpha = _SIGMOID(trilerp_cuvol_one(
+                        grid.links, grid.density_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        1,
+                        ray.l, ray.pos,
+                        0));
+
+                // if (sigma > opt.sigma_thresh) {
+                if (true) {
+                    float lane_color = trilerp_cuvol_one(
+                                    grid.links,
+                                    grid.sh_data,
+                                    grid.stride_x,
+                                    grid.size[2],
+                                    grid.sh_data_dim,
+                                    ray.l, ray.pos, lane_id);
+                    lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
+
+                    // const float pcnt = ray.world_step * sigma;
+                    const float pcnt = -1 * _LOG(1 - alpha);
+                    const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+                    log_transmit -= pcnt;
+
+                    float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
+                                                lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
+                    outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
+                }
+            }
+
+
+
+        }
+
+        if (_EXP(log_transmit) < opt.stop_thresh) {
+            log_transmit = -1e3f;
+            break;
         }
         t += opt.step_size;
     }
@@ -224,7 +468,7 @@ __device__ __inline__ void trace_ray_sigma_thresh(
     }
 }
 
-__device__ __inline__ void trace_ray_cuvol_backward(
+__device__ __inline__ void trace_ray_surface_backward(
         const PackedSparseGridSpec& __restrict__ grid,
         const float* __restrict__ grad_output, // array[3], MSE gradient wrt rgb channel
         const float* __restrict__ color_cache,
@@ -245,11 +489,9 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim; // rgb channel id
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim)); // mask for RGB channels of same basis
 
-    // sum(d_mse/d_pred_c * pred_c)
-    // = sum(d_mse/d_pred_c * sum(wi * ci))
     float accum = fmaf(color_cache[0], grad_output[0],
                       fmaf(color_cache[1], grad_output[1],
-                           color_cache[2] * grad_output[2])); 
+                           color_cache[2] * grad_output[2])); // sum(d_mse/d_pred_rgb * pred_rgb)
 
     if (beta_loss > 0.f) {
         const float transmit_in = _EXP(log_transmit_in);
@@ -266,7 +508,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
     }
     float t = ray.tmin;
 
-    const float gout = grad_output[lane_colorgrp]; // get gradient (d_mse/d_pred_c) of corresponding RGB channel
+    const float gout = grad_output[lane_colorgrp]; // get gradient of corresponding RGB channel
 
     float log_transmit = 0.f;
 
@@ -312,26 +554,21 @@ __device__ __inline__ void trace_ray_cuvol_backward(
 
             const float pcnt = ray.world_step * sigma;
             const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
-            log_transmit -= pcnt; // log_transmit = log(T), now its T_i+1
+            log_transmit -= pcnt;
 
             const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                            weighted_lane_color, lane_colorgrp_id == 0) + 0.5f; // TODO: why +0.5f???
             float total_color = fmaxf(lane_color_total, 0.f); // ci -- one channel of radiance of the sample
             float color_in_01 = total_color == lane_color_total; // 1 if color >= 0.
             total_color *= gout; // Clamp to [+0, infty), d_mse/d_pred_c * ci
-            // total_color = gout;
 
             float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim); // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-description 
-            // taking d_mse/d_pred_c * ci of each RGB channels
-            total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim); 
+            total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim); // taking RGB channels
             total_color += total_color_c1; // add from c2 then c1 ... what's the point?
 
-            // get color_in_01 from 'parent' lane in the color group where the channel color is computed
-            color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim); 
-            // d_mse/d_ci in the final computed color is within clamp range, compute proper gradient 
-            const float grad_common = weight * color_in_01 * gout; 
-            // gradient wrt sh coefficient (d_mse/d_sh)
-            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
+            color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim); // get color_in_01 from 'parent' lane in the color group where the channel color is computed
+            const float grad_common = weight * color_in_01 * gout; // d_mse/d_ci * ci in the final computed color is within clamp range, compute proper gradient 
+            const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; // d_mse/d_sh * ci gradient wrt sh coefficient
 
             if (grid.basis_type != BASIS_TYPE_SH) {
                 float curr_grad_sphfunc = lane_color * grad_common;
@@ -345,10 +582,8 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                 }
             }
 
-            // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current~N]
             accum -= weight * total_color;
-            // compute d_mes/d_sigma_i
-            float curr_grad_sigma = ray.world_step * ( 
+            float curr_grad_sigma = ray.world_step * ( // TODO: not sure why...
                     total_color * _EXP(log_transmit) - accum);
             if (sparsity_loss > 0.f) {
                 // Cauchy version (from SNeRG)
@@ -620,12 +855,13 @@ __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_kernel(
         PackedSparseGridSpec grid,
         PackedRaysSpec rays,
+        PackedRayVoxIntersecSpec ray_vox,
         RenderOptions opt,
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out,
         float* __restrict__ log_transmit_out = nullptr) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5; // same as / 32, which is the WARP_SIZE
-    const int ray_blk_id = threadIdx.x >> 5;
+    const int ray_blk_id = threadIdx.x >> 5; // difference between tid and threadIdx.x? --> tid is the total id (batch/ray id)
     const int lane_id = threadIdx.x & 0x1F; // take only last 5 digits
 
     if (lane_id >= grid.sh_data_dim)  // Bad, but currently the best way due to coalesced memory access
@@ -644,21 +880,28 @@ __global__ void render_ray_kernel(
     ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     __syncwarp((1U << grid.sh_data_dim) - 1); // make sure all rays are loaded and sh computed?
 
-    trace_ray_cuvol(
-        grid,
-        ray_spec[ray_blk_id],
-        opt,
-        lane_id,
-        sphfunc_val[ray_blk_id],
-        temp_storage[ray_blk_id],
-        out[ray_id].data(),
-        log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
+    // if (ray_id==2537){
+    // }
+        trace_ray_surface(
+            grid,
+            ray_spec[ray_blk_id],
+            ray_vox.voxel_ls[ray_id].data(),
+            ray_vox.ray_bin[ray_id],
+            // ray_vox,
+            opt,
+            lane_id,
+            sphfunc_val[ray_blk_id],
+            temp_storage[ray_blk_id],
+            out[ray_id].data(),
+            log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
+
 }
 
 __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_image_kernel(
         PackedSparseGridSpec grid,
         PackedCameraSpec cam,
+        PackedRayVoxIntersecSpec ray_vox,
         RenderOptions opt,
         float* __restrict__ out,
         float* __restrict__ log_transmit_out = nullptr) {
@@ -686,9 +929,11 @@ __global__ void render_ray_image_kernel(
     ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     __syncwarp((1U << grid.sh_data_dim) - 1);
 
-    trace_ray_cuvol(
+    trace_ray_surface(
         grid,
         ray_spec[ray_blk_id],
+        ray_vox.voxel_ls[ray_id].data(),
+        ray_vox.ray_bin[ray_id],
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
@@ -755,7 +1000,7 @@ __global__ void render_ray_backward_kernel(
     }
 
     __syncwarp((1U << grid.sh_data_dim) - 1);
-    trace_ray_cuvol_backward(
+    trace_ray_surface_backward(
         grid,
         grad_out,
         color_cache + ray_id * 3,
@@ -923,7 +1168,7 @@ torch::Tensor _get_empty_1d(const torch::Tensor& origins) {
 
 }  // namespace
 
-torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOptions& opt) {
+torch::Tensor volume_render_surface(SparseGridSpec& grid, RaysSpec& rays, RayVoxIntersecSpec& ray_vox, RenderOptions& opt) {
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     rays.check();
@@ -944,7 +1189,7 @@ torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOp
         const int cuda_n_threads = TRACE_RAY_CUDA_THREADS;
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads);
         device::render_ray_kernel<<<blocks, cuda_n_threads>>>(
-                grid, rays, opt,
+                grid, rays, ray_vox, opt,
                 // Output
                 results.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 use_background ? log_transmit.data_ptr<float>() : nullptr);
@@ -965,7 +1210,7 @@ torch::Tensor volume_render_cuvol(SparseGridSpec& grid, RaysSpec& rays, RenderOp
     return results;
 }
 
-torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, RenderOptions& opt) {
+torch::Tensor volume_render_surface_image(SparseGridSpec& grid, CameraSpec& cam, RayVoxIntersecSpec& ray_vox, RenderOptions& opt) {
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     cam.check();
@@ -994,6 +1239,7 @@ torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, R
         device::render_ray_image_kernel<<<blocks, cuda_n_threads>>>(
                 grid,
                 cam,
+                ray_vox,
                 opt,
                 // Output
                 results.data_ptr<float>(),
@@ -1015,7 +1261,7 @@ torch::Tensor volume_render_cuvol_image(SparseGridSpec& grid, CameraSpec& cam, R
     return results;
 }
 
-void volume_render_cuvol_backward(
+void volume_render_surface_backward(
         SparseGridSpec& grid,
         RaysSpec& rays,
         RenderOptions& opt,
@@ -1075,9 +1321,10 @@ void volume_render_cuvol_backward(
     CUDA_CHECK_ERRORS;
 }
 
-void volume_render_cuvol_fused(
+void volume_render_surface_fused(
         SparseGridSpec& grid,
         RaysSpec& rays,
+        RayVoxIntersecSpec& ray_vox,
         RenderOptions& opt,
         torch::Tensor rgb_gt,
         float beta_loss, // beta loss and sparsity loss are just weights for those loss
@@ -1107,7 +1354,7 @@ void volume_render_cuvol_fused(
     {
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_CUDA_THREADS);
         device::render_ray_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
-                grid, rays, opt,
+                grid, rays, ray_vox, opt,
                 // Output
                 rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(), // <dtype, dim, __restrict__>
                 need_log_transmit ? log_transmit.data_ptr<float>() : nullptr);
@@ -1159,7 +1406,7 @@ void volume_render_cuvol_fused(
     CUDA_CHECK_ERRORS;
 }
 
-torch::Tensor volume_render_expected_term(SparseGridSpec& grid,
+torch::Tensor volume_render_expected_term_surface(SparseGridSpec& grid,
         RaysSpec& rays, RenderOptions& opt) {
     auto options =
         torch::TensorOptions()
@@ -1179,7 +1426,7 @@ torch::Tensor volume_render_expected_term(SparseGridSpec& grid,
     return results;
 }
 
-torch::Tensor volume_render_sigma_thresh(SparseGridSpec& grid,
+torch::Tensor volume_render_sigma_thresh_surface(SparseGridSpec& grid,
         RaysSpec& rays,
         RenderOptions& opt,
         float sigma_thresh) {

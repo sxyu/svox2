@@ -116,6 +116,15 @@ struct PackedRaysSpec {
     { }
 };
 
+struct PackedRayVoxIntersecSpec {
+    const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> voxel_ls;
+    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> ray_bin;
+    PackedRayVoxIntersecSpec(RayVoxIntersecSpec& spec) :
+        voxel_ls(spec.voxel_ls.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>()),
+        ray_bin(spec.ray_bin.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>())
+    { }
+};
+
 struct SingleRaySpec {
     SingleRaySpec() = default;
     __device__ SingleRaySpec(const float* __restrict__ origin, const float* __restrict__ dir)
