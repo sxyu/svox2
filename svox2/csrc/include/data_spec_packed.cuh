@@ -70,10 +70,10 @@ struct PackedSparseGridSpec {
 struct PackedGridOutputGrads {
     PackedGridOutputGrads(GridOutputGrads& grads) :
         grad_density_out(grads.grad_density_out.defined() ? grads.grad_density_out.data_ptr<float>() : nullptr),
+        grad_surface_out(grads.grad_surface_out.defined() ? grads.grad_surface_out.data_ptr<float>() : nullptr),
         grad_sh_out(grads.grad_sh_out.defined() ? grads.grad_sh_out.data_ptr<float>() : nullptr),
         grad_basis_out(grads.grad_basis_out.defined() ? grads.grad_basis_out.data_ptr<float>() : nullptr),
         grad_background_out(grads.grad_background_out.defined() ? grads.grad_background_out.data_ptr<float>() : nullptr),
-        grad_surface_out(grads.grad_surface_out.defined() ? grads.grad_surface_out.data_ptr<float>() : nullptr),
         mask_out((grads.mask_out.defined() && grads.mask_out.size(0) > 0) ? grads.mask_out.data_ptr<bool>() : nullptr),
         mask_background_out((grads.mask_background_out.defined() && grads.mask_background_out.size(0) > 0) ? grads.mask_background_out.data_ptr<bool>() : nullptr)
         {}

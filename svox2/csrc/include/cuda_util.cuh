@@ -5,7 +5,7 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAContext.h>
 #include "util.hpp"
-
+#include "data_spec.hpp"
 
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
@@ -137,4 +137,174 @@ __host__ __inline__ cudaError_t cuda_assert(
 }
 
 #define cuda(...) cuda_assert((cuda##__VA_ARGS__), __FILE__, __LINE__, true);
+
+
+
+__device__ __inline__ void surface_to_cubic_equation(
+    const float* __restrict__ surface,
+    const float* __restrict__ origin,
+    const float* __restrict__ dir,
+    const int32_t* __restrict__ l,
+    float* __restrict__ outs
+){
+
+    float const a00 = surface[0b000] * (1-origin[2]+l[2]) + surface[0b001] * (origin[2]-l[2]);
+    float const a01 = surface[0b010] * (1-origin[2]+l[2]) + surface[0b011] * (origin[2]-l[2]);
+    float const a10 = surface[0b100] * (1-origin[2]+l[2]) + surface[0b101] * (origin[2]-l[2]);
+    float const a11 = surface[0b110] * (1-origin[2]+l[2]) + surface[0b111] * (origin[2]-l[2]);
+
+    float const b00 = -surface[0b000] + surface[0b001];
+    float const b01 = -surface[0b010] + surface[0b011];
+    float const b10 = -surface[0b100] + surface[0b101];
+    float const b11 = -surface[0b110] + surface[0b111];
+
+    float const c0 = a00*(1-origin[1]+l[1]) + a01*(origin[1]-l[1]);
+    float const c1 = a10*(1-origin[1]+l[1]) + a11*(origin[1]-l[1]);
+
+    float const d0 = -(a00*dir[1] - dir[2]*b00*(1-origin[1]+l[1])) + (a01*dir[1] + dir[2]*b01*(origin[1]-l[1]));
+    float const d1 = -(a10*dir[1] - dir[2]*b10*(1-origin[1]+l[1])) + (a11*dir[1] + dir[2]*b11*(origin[1]-l[1]));
+
+    float const e0 = -dir[1]*dir[2]*b00 + dir[1]*dir[2]*b01;
+    float const e1 = -dir[1]*dir[2]*b10 + dir[1]*dir[2]*b11;
+
+    outs[3] = -e0*dir[0] + e1*dir[0];
+    outs[2] = -d0*dir[0]+e0*(1-origin[0]+l[0]) + d1*dir[0]+e1*(origin[0]-l[0]);
+    outs[1] = -c0*dir[0] + d0*(1-origin[0]+l[0]) + c1*dir[0] + d1*(origin[0]-l[0]);
+    outs[0] = c0*(1-origin[0]+l[0]) + c1*(origin[0]-l[0]);
+}
+
+
+__device__ __inline__ enum BasisType cubic_equation_solver(
+    float const f0,
+    float const f1,
+    float const f2,
+    float const f3,
+    float const eps,
+    double const eps_double,
+    float* __restrict__ outs
+){
+    if (_CLOSE_TO_ZERO(f3, eps)){
+        if (_CLOSE_TO_ZERO(f2, eps)){
+            if (_CLOSE_TO_ZERO(f1, eps)){
+                // no solution
+                return CUBIC_TYPE_NO_ROOT; 
+            } else {
+                // linear case
+                outs[0] = -f0 / f1;
+                assert(!isnan(outs[0]));
+                return CUBIC_TYPE_LINEAR;
+            }
+        } else {
+            // polynomial case
+            // _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
+            float const D = _SQR(f1) - 4.0 * f2 * f0;
+            float const sqrt_D = sqrtf(D);
+            if (D > 0){
+                outs[0] = (-f1 + sqrt_D) / (2 * f2);
+                outs[1] = (-f1 - sqrt_D) / (2 * f2);
+                // assert(!isnan(outs[0]));
+                // assert(!isnan(outs[1]));
+                if (_CLOSE_TO_ZERO(outs[0] - outs[1], eps)){
+                    // if two roots are too similiar (D==0), then just take one
+                    outs[1] = -1;
+                    return CUBIC_TYPE_POLY_ONE_R;
+                }
+                return CUBIC_TYPE_POLY;
+            }
+            return CUBIC_TYPE_NO_ROOT;
+        }
+    } else {
+        // cubic case
+        double const eps_double = 1e-10;
+        double const norm_term = static_cast<double>(f3);
+        double const a = static_cast<double>(f3) / norm_term;
+        double const b = static_cast<double>(f2) / norm_term;
+        double const c = static_cast<double>(f1) / norm_term;
+        double const d = static_cast<double>(f0) / norm_term;
+
+        double const f = ((3*c/a) - (_SQR(b) / _SQR(a))) / 3;                      
+        double const g = (((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27;                 
+        double const h = (_SQR(g) / 4 + _CUBIC(f) / 27);
+        // -inf + inf create nan!
+
+        if ((_CLOSE_TO_ZERO(f, eps_double)) & (_CLOSE_TO_ZERO(g, eps_double)) & (_CLOSE_TO_ZERO(h, eps_double))){
+            // all three roots are real and equal
+            outs[0] = static_cast<float>(_COND_CBRT(d/a));
+            // if ((isnan(outs[0])) | (!isfinite(outs[0]))){
+            //     printf("a=%f\n", a);
+            //     printf("b=%f\n", b);
+            //     printf("c=%f\n", c);
+            //     printf("d=%f\n", d);
+            //     printf("g=%f\n", g);
+            //     printf("h=%f\n", h);
+            //     printf("f=%f\n", f);
+            // }
+            // assert(!isnan(outs[0]));
+
+            return CUBIC_TYPE_CUBIC_ONE_R;
+
+        } else if (h <= 0){
+            // all three roots are real and distinct
+
+            double const _i = sqrt((_SQR(g) / 4.) - h);   
+            double const _j = cbrt(_i);
+            double const _k = acos(-(g / (2 * _i))); // TODO: might need clamp
+            double const _M = cos(_k / 3.);       
+            double const _N = sqrt(3) * sin(_k / 3.);
+            double const _P = (b / (3. * a)) * -1;                
+
+            outs[0] = static_cast<float>(2 * _j * cos(_k / 3.) - (b / (3. * a)));
+            outs[1] = static_cast<float>(-1 *_j * (_M + _N) + _P);
+            outs[2] = static_cast<float>(-1 *_j * (_M - _N) + _P);
+            // if (isnan(outs[0]) | isnan(outs[1]) | isnan(outs[2]) | (!isfinite(outs[0])) | (!isfinite(outs[1])) | (!isfinite(outs[2]))){
+            //     printf("a=%f\n", a);
+            //     printf("b=%f\n", b);
+            //     printf("c=%f\n", c);
+            //     printf("d=%f\n", d);
+            //     printf("g=%f\n", g);
+            //     printf("h=%f\n", h);
+            //     printf("f=%f\n", f);
+
+            //     printf("_i=%f\n", _i);
+            //     printf("_j=%f\n", _j);
+            //     printf("_k=%f\n", _k);
+            //     printf("_M=%f\n", _M);
+            //     printf("_N=%f\n", _N);
+            //     printf("_P=%f\n", _P);
+            // }
+            // assert(!isnan(outs[0]));
+            // assert(!isnan(outs[1]));
+            // assert(!isnan(outs[2]));
+
+            return CUBIC_TYPE_CUBIC_THREE_R;
+        } else {
+            // only one real root
+            double const _R = -(g / 2.) + sqrt(h);
+            double const _S = _COND_CBRT(_R);
+
+            double const _T = -(g / 2.) - sqrt(h);
+            double const _U = _COND_CBRT(_T);
+
+            outs[0] = static_cast<float>((_S + _U) - (b / (3. * a)));
+
+            // if ((isnan(outs[0])) | (!isfinite(outs[0]))){
+            //     printf("a=%f\n", a);
+            //     printf("b=%f\n", b);
+            //     printf("c=%f\n", c);
+            //     printf("d=%f\n", d);
+            //     printf("g=%f\n", g);
+            //     printf("h=%f\n", h);
+            //     printf("f=%f\n", f);
+            //     printf("_R=%f\n", _R);
+            //     printf("_S=%f\n", _S);
+            //     printf("_T=%f\n", _T);
+            //     printf("_U=%f\n", _U);
+            // }
+            //     assert(!isnan(outs[0]));
+
+            return CUBIC_TYPE_CUBIC_ONE_R_;
+        }
+
+    }
+}
 

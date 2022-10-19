@@ -321,6 +321,7 @@ class _SurfaceRenderFunction(autograd.Function):
     def forward(
         ctx,
         data_density: torch.Tensor,
+        data_surface: torch.Tensor,
         data_sh: torch.Tensor,
         data_basis: torch.Tensor,
         data_background: torch.Tensor,
@@ -349,6 +350,7 @@ class _SurfaceRenderFunction(autograd.Function):
         (color_cache,) = ctx.saved_tensors
         cu_fn = _C.__dict__[f"volume_render_{ctx.backend}_backward"]
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
+        grad_surface_grid = torch.zeros_like(ctx.grid.surface_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
         if ctx.grid.basis_type == BASIS_TYPE_MLP:
             grad_basis = torch.zeros_like(ctx.basis_data)
@@ -358,14 +360,16 @@ class _SurfaceRenderFunction(autograd.Function):
             grad_background = torch.zeros_like(ctx.grid.background_data.data)
         grad_holder = _C.GridOutputGrads()
         grad_holder.grad_density_out = grad_density_grid
+        grad_holder.grad_surface_out = grad_surface_grid
         grad_holder.grad_sh_out = grad_sh_grid
-        if ctx.needs_input_grad[2]:
+        if ctx.needs_input_grad[3]:
             grad_holder.grad_basis_out = grad_basis # for SH type, basis needs no grad
-        if ctx.grid.background_data is not None and ctx.needs_input_grad[3]:
+        if ctx.grid.background_data is not None and ctx.needs_input_grad[4]:
             grad_holder.grad_background_out = grad_background
         cu_fn(
             ctx.grid,
             ctx.rays,
+            ctx.ray_vox,
             ctx.opt,
             grad_out.contiguous(),
             color_cache,
@@ -375,15 +379,17 @@ class _SurfaceRenderFunction(autograd.Function):
         if not ctx.needs_input_grad[0]:
             grad_density_grid = None
         if not ctx.needs_input_grad[1]:
-            grad_sh_grid = None
+            grad_surface_grid = None
         if not ctx.needs_input_grad[2]:
-            grad_basis = None
+            grad_sh_grid = None
         if not ctx.needs_input_grad[3]:
+            grad_basis = None
+        if not ctx.needs_input_grad[4]:
             grad_background = None
         ctx.basis_data = None
 
-        return grad_density_grid, grad_sh_grid, grad_basis, grad_background, \
-               None, None, None, None
+        return grad_density_grid, grad_surface_grid, grad_sh_grid, grad_basis, grad_background, \
+               None, None, None, None, None
 
 
 
@@ -3450,7 +3456,16 @@ class SparseGrid(nn.Module):
             if self.opt.backend == 'surface':
                 B = rays.origins.shape[0]
                 device = rays.origins.device
-                l, ray_ids = self.find_ray_voxels_intersection(None, rays.origins, rays.dirs)
+
+                # convert ray o/d to grid space
+                # TODO: do it only once here?
+                origins = self.world2grid(rays.origins)
+                dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True)
+                dirs = dirs * (self._scaling * self._grid_size()).to(device=dirs.device)
+                delta_scale = 1.0 / dirs.norm(dim=1)
+                dirs *= delta_scale.unsqueeze(-1)
+
+                l, ray_ids = self.find_ray_voxels_intersection(None, origins, dirs)
                 ray_bin = torch.bincount(ray_ids, minlength=B)
                 MS = ray_bin.max().item()
                 voxel_ls = torch.zeros([B, MS, 3], dtype=torch.int32, device=device)
@@ -3461,6 +3476,7 @@ class SparseGrid(nn.Module):
 
                 return {'rgb':  _SurfaceRenderFunction.apply(
                     self.density_data,
+                    self.surface_data,
                     self.sh_data,
                     basis_data,
                     self.background_data if self.use_background else None,

@@ -152,6 +152,49 @@ __device__ __inline__ void trilerp_backward_cuvol_one_density(
 #undef MAYBE_ADD_LINK_DEN
 }
 
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ float trilerp_backward_one_pos(
+        const data_type_t* __restrict__ data,
+        int offx, int offy, size_t stride,
+        const voxel_index_t* __restrict__ l,
+        const float* __restrict__ pos,
+        const int idx,
+        float grad_in, // d_mse/d_sh or d_mse/d_alpha
+        data_type_t* __restrict__ grad_out
+        )
+/*
+Find gradient wrt to the sample location (pos)
+*/  
+{
+    const int offz = stride;
+
+    const data_type_t* __restrict__ data_ptr = data + (offx * l[0] +
+                                                    offy * l[1] +
+                                                    offz * l[2]
+                                                    + idx);
+
+    const float ix0y0 = lerp(data_ptr[0], data_ptr[offz], pos[2]);
+    const float ix0y1 = lerp(data_ptr[offy], data_ptr[offy + offz], pos[2]);
+    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+    const float ix1y0 = lerp(data_ptr[offx], data_ptr[offx + offz], pos[2]);
+    const float ix1y1 = lerp(data_ptr[offy + offx],
+                             data_ptr[offy + offx + offz], pos[2]);
+    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+
+    // s000 = data_ptr[0], s001 = data_ptr[offz]
+    // s010 = data_ptr[offy], s011 = data_ptr[offy+offz]
+    // s100 = data_ptr[offx], s101 = data_ptr[offx+offz]
+    // s110 = data_ptr[offx+offy], s111 = data_ptr[offx+offy+offz]
+
+    // dx
+    grad_out[0] += grad_in * (ix1 - ix0);
+    // dy
+    grad_out[1] += grad_in * ((1-pos[0]) * (ix0y1-ix0y0) + (pos[0]) * (ix1y1-ix1y0));
+    // dz
+    grad_out[2] += grad_in * ((1-pos[0]) * ((1-pos[1])*(data_ptr[offz]-data_ptr[0]) + (pos[1])*(data_ptr[offy+offz]-data_ptr[offy])) +
+                             (pos[0]) * ((1-pos[1])*(data_ptr[offx+offz]-data_ptr[offx]) + (pos[1])*(data_ptr[offx+offy+offz]-data_ptr[offx+offy])));
+}
+
 // Trilerp with xy links & wrapping (background)
 template<class data_type_t, class voxel_index_t>
 __device__ __inline__ float trilerp_bg_one(
