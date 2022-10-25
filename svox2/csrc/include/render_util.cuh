@@ -127,7 +127,7 @@ __device__ __inline__ void trilerp_backward_cuvol_one_density(
         bool* __restrict__ mask_out,
         int offx, int offy,
         const voxel_index_t* __restrict__ l,
-        const float* __restrict__ pos,
+        const float* __restrict__ pos, // pos changes during running... because of shared memory?
         float grad_out) {
     const float ay = 1.f - pos[1], az = 1.f - pos[2];
     float xo = (1.0f - pos[0]) * grad_out; // used as if az * d_mse/d_sig
@@ -154,6 +154,7 @@ __device__ __inline__ void trilerp_backward_cuvol_one_density(
 
 template<class data_type_t, class voxel_index_t>
 __device__ __inline__ float trilerp_backward_one_pos(
+        const int32_t* __restrict__ links,
         const data_type_t* __restrict__ data,
         int offx, int offy, size_t stride,
         const voxel_index_t* __restrict__ l,
@@ -168,31 +169,36 @@ Find gradient wrt to the sample location (pos)
 {
     const int offz = stride;
 
-    const data_type_t* __restrict__ data_ptr = data + (offx * l[0] +
-                                                    offy * l[1] +
-                                                    offz * l[2]
-                                                    + idx);
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
 
-    const float ix0y0 = lerp(data_ptr[0], data_ptr[offz], pos[2]);
-    const float ix0y1 = lerp(data_ptr[offy], data_ptr[offy + offz], pos[2]);
+#define READ_LINK(u) (data[link_ptr[u] * stride + idx])
+
+    // const data_type_t* __restrict__ data_ptr = data + (offx * l[0] +
+    //                                                 offy * l[1] +
+    //                                                 offz * l[2]
+    //                                                 + idx);
+
+    const float ix0y0 = lerp(READ_LINK(0), READ_LINK(1), pos[2]);
+    const float ix0y1 = lerp(READ_LINK(offy), READ_LINK(offy + 1), pos[2]);
     const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
-    const float ix1y0 = lerp(data_ptr[offx], data_ptr[offx + offz], pos[2]);
-    const float ix1y1 = lerp(data_ptr[offy + offx],
-                             data_ptr[offy + offx + offz], pos[2]);
+    const float ix1y0 = lerp(READ_LINK(offx), READ_LINK(offx + 1), pos[2]);
+    const float ix1y1 = lerp(READ_LINK(offy + offx),
+                             READ_LINK(offy + offx + 1), pos[2]);
     const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
 
-    // s000 = data_ptr[0], s001 = data_ptr[offz]
-    // s010 = data_ptr[offy], s011 = data_ptr[offy+offz]
-    // s100 = data_ptr[offx], s101 = data_ptr[offx+offz]
-    // s110 = data_ptr[offx+offy], s111 = data_ptr[offx+offy+offz]
+    // s000 = READ_LINK[0], s001 = READ_LINK[1]
+    // s010 = READ_LINK[offy], s011 = READ_LINK[offy+1]
+    // s100 = READ_LINK[offx], s101 = READ_LINK[offx+1]
+    // s110 = READ_LINK[offx+offy], s111 = READ_LINK[offx+offy+1]
 
     // dx
     grad_out[0] += grad_in * (ix1 - ix0);
     // dy
     grad_out[1] += grad_in * ((1-pos[0]) * (ix0y1-ix0y0) + (pos[0]) * (ix1y1-ix1y0));
     // dz
-    grad_out[2] += grad_in * ((1-pos[0]) * ((1-pos[1])*(data_ptr[offz]-data_ptr[0]) + (pos[1])*(data_ptr[offy+offz]-data_ptr[offy])) +
-                             (pos[0]) * ((1-pos[1])*(data_ptr[offx+offz]-data_ptr[offx]) + (pos[1])*(data_ptr[offx+offy+offz]-data_ptr[offx+offy])));
+    grad_out[2] += grad_in * ((1-pos[0]) * ((1-pos[1])*(READ_LINK(1)-READ_LINK(0)) + (pos[1])*(READ_LINK(offy+1)-READ_LINK(offy))) +
+                             (pos[0]) * ((1-pos[1])*(READ_LINK(offx+1)-READ_LINK(offx)) + (pos[1])*(READ_LINK(offx+offy+1)-READ_LINK(offx+offy))));
+#undef READ_LINK
 }
 
 // Trilerp with xy links & wrapping (background)

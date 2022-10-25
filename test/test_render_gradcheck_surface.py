@@ -46,6 +46,9 @@ grid.sh_data.data[..., 0] = 0.5
 grid.sh_data.data[..., 1:].normal_(std=0.1)
 grid.density_data.data[:] = 0.001
 
+# grid.sh_data.data[:].normal_(std=0.1)
+# grid.density_data.data[:].normal_(mean=-0.1, std=0.1)
+
 if grid.use_background:
 	grid.background_data.data[..., -1] = 0.5
 	grid.background_data.data[..., :-1] = torch.randn_like(
@@ -76,10 +79,11 @@ dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 rays = svox2.Rays(origins, dirs)
 
 
-IDX = torch.tensor([18], dtype=torch.long) # 
-# IDX = torch.arange(0,10000, dtype=torch.long)
-rays.origins = rays.origins[IDX, ...]
-rays.dirs = rays.dirs[IDX, ...]
+# IDX = torch.tensor([
+#         34161], dtype=torch.long) # 
+# # IDX = torch.arange(0,10000, dtype=torch.long)
+# rays.origins = rays.origins[IDX, ...]
+# rays.dirs = rays.dirs[IDX, ...]
 
 rgb_gt = torch.zeros((rays.origins.size(0), 3), device=device, dtype=dtype)
 
@@ -120,8 +124,8 @@ if ENABLE_TORCH_CHECK:
         sampt = out['rgb']
     s = F.mse_loss(sampt, rgb_gt)
     print(s)
-    with Timing("torch_backward"):
-        s.backward()
+    # with Timing("torch_backward"):
+    #     s.backward()
     grid_sh_grad_t = grid.sh_data.grad.clone().cpu() if grid.sh_data.grad is not None else torch.zeros_like(grid_sh_grad_s)
     grid_density_grad_t = grid.density_data.grad.clone().cpu() if grid.density_data.grad is not None else torch.zeros_like(grid_density_grad_s)
     grid_surface_grad_t = grid.surface_data.grad.clone().cpu() if grid.surface_data.grad is not None else torch.zeros_like(grid_surface_grad_s)

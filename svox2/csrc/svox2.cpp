@@ -17,7 +17,7 @@ void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
 Tensor volume_render_surface(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec&, RenderOptions &);
 Tensor volume_render_surface_image(SparseGridSpec &, CameraSpec &, RayVoxIntersecSpec&,
                                  RenderOptions &);
-void volume_render_surface_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
+void volume_render_surface_backward(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 void volume_render_surface_fused(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec&, RenderOptions &,
                                Tensor, float, float, Tensor, GridOutputGrads &);
@@ -193,6 +193,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(py::init<>())
       .def_readwrite("grad_density_out", &GridOutputGrads::grad_density_out)
       .def_readwrite("grad_sh_out", &GridOutputGrads::grad_sh_out)
+      .def_readwrite("grad_surface_out", &GridOutputGrads::grad_surface_out)
       .def_readwrite("grad_basis_out", &GridOutputGrads::grad_basis_out)
       .def_readwrite("grad_background_out",
                      &GridOutputGrads::grad_background_out)

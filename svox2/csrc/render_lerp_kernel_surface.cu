@@ -226,7 +226,8 @@ __device__ __inline__ void trace_ray_surface(
                     // const float pcnt = ray.world_step * sigma;
                     const float pcnt = -1 * _LOG(1 - alpha);
                     const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
-                    log_transmit -= pcnt;
+                    log_transmit -= pcnt; // log_trans = sum(log(1-alpha)) = log(prod(1-alpha))
+                    // log_transmit is now T_{i+1}
 
                     float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                                 lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
@@ -246,7 +247,7 @@ __device__ __inline__ void trace_ray_surface(
     }
 
     if (grid.background_nlayers == 0) {
-        outv += _EXP(log_transmit) * opt.background_brightness;
+        outv += _EXP(log_transmit) * opt.background_brightness; // 1-sum(weight)[i=0~N] = T_{N+1} !! 
     }
     if (lane_colorgrp_id == 0) {
         if (out_log_transmit != nullptr) {
@@ -409,6 +410,10 @@ __device__ __inline__ void trace_ray_surface_backward(
 
     // remat samples. Needed because individual rgb/sigma are not stored during forward pass
     for (int v_i=0; v_i<vox_num; ++v_i){
+        if (v_i==14){
+            printf("[6, 13, 4] found!!\n");
+        }
+
         // skip voxel if any of the vertices is turned off
         int offx = grid.stride_x, offy = grid.size[2];
 
@@ -449,11 +454,13 @@ __device__ __inline__ void trace_ray_surface_backward(
                 continue;
             }
 
+            fs[0] -= lv_set;
+
             ////////////// CUBIC ROOT SOLVING //////////////
             float st[3] = {-1, -1, -1}; // sample t
 
             enum BasisType const cubic_root_type = cubic_equation_solver(
-                fs[0] - lv_set, fs[1], fs[2], fs[3],
+                fs[0], fs[1], fs[2], fs[3],
                 1e-8, // float eps
                 1e-10, // double eps
                 st
@@ -488,13 +495,15 @@ __device__ __inline__ void trace_ray_surface_backward(
                 }
 
 
-                float alpha = _SIGMOID(trilerp_cuvol_one(
+                float const volatile raw_alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
                         grid.size[2],
                         1,
                         ray.l, ray.pos,
-                        0));
+                        0);
+
+                float const volatile alpha = _SIGMOID(raw_alpha);
 
                 // if (sigma > opt.sigma_thresh) {
                 if (true) {
@@ -508,14 +517,15 @@ __device__ __inline__ void trace_ray_surface_backward(
 
                     float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
 
-                    const float pcnt = -1 * _LOG(1 - alpha);
-                    const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
-                    log_transmit -= pcnt;
+                    const float volatile pcnt = -1 * _LOG(1 - alpha);
+                    const float volatile weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+                    
 
                     const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                                 weighted_lane_color, lane_colorgrp_id == 0) + 0.5f; // TODO: why +0.5f? -- because outv also has +0.5 before clamping
                     float total_color = fmaxf(lane_color_total, 0.f); // Clamp to [+0, infty), ci -- one channel of radiance of the sample
                     float color_in_01 = total_color == lane_color_total; // 1 if color >= 0.
+                    // substract for background color? -- seems to have already been done somewhere
                     total_color *= gout; // d_mse/d_pred_c * ci
                     // total_color = gout;
 
@@ -523,14 +533,14 @@ __device__ __inline__ void trace_ray_surface_backward(
                     float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim); 
                     // taking d_mse/d_pred_c * ci of each RGB channels
                     total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim); 
-                    total_color += total_color_c1; // add from c2 then c1 ... what's the point?
+                    total_color += total_color_c1;
 
                     // get color_in_01 from 'parent' lane in the color group where the channel color is computed
                     color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim); 
                     // d_mse/d_ci in the final computed color is within clamp range, compute proper gradient 
-                    const float grad_common = weight * color_in_01 * gout; 
+                    const float volatile grad_common = weight * color_in_01 * gout; 
                     // gradient wrt sh coefficient (d_mse/d_sh)
-                    const float curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
+                    const float volatile curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
 
                     // if (grid.basis_type != BASIS_TYPE_SH) {
                     //     float curr_grad_sphfunc = lane_color * grad_common;
@@ -547,7 +557,8 @@ __device__ __inline__ void trace_ray_surface_backward(
                     // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
                     accum -= weight * total_color;
                     // compute d_mse/d_alpha_i
-                    float curr_grad_alpha = accum / (alpha-1) + total_color * _EXP(log_transmit);
+                    float curr_grad_alpha = accum / (alpha-1) + total_color * _EXP(log_transmit); 
+                    log_transmit -= pcnt; // log_transmit is not log(T_{i+1})
                     if (sparsity_loss > 0.f) {
                         // Cauchy version (from SNeRG)
                         // TODO: check if expected!
@@ -564,8 +575,9 @@ __device__ __inline__ void trace_ray_surface_backward(
                             curr_grad_color, lane_id);
 
                     // compute gradient to surface via sh
-                    float grad_xyz [3] = {0,0,0}; // d_mse/d_pos[x,y,z] 
+                    float grad_xyz [3] = {0,0,0}; // d_mse/d_pos[x,y,z]
                     trilerp_backward_one_pos(
+                                grid.links,
                                 grid.sh_data,
                                 grid.stride_x,
                                 grid.size[2],
@@ -573,45 +585,43 @@ __device__ __inline__ void trace_ray_surface_backward(
                                 ray.l, ray.pos, lane_id,
                                 curr_grad_color, grad_xyz);
 
-                    // TODO: use WarpReducef to sum up gradient to surface via different sh basis
-                    // TODO: test if works
-                    float volatile grad_x_sh = WarpReducef(temp_storage).Sum(grad_xyz[0]);
-                    float volatile grad_y_sh = WarpReducef(temp_storage).Sum(grad_xyz[1]);
-                    float volatile grad_z_sh = WarpReducef(temp_storage).Sum(grad_xyz[2]);
+                    // use WarpReducef to sum up gradient to surface via different sh basis
+                    grad_xyz[0] = WarpReducef(temp_storage).Sum(grad_xyz[0]);
+                    grad_xyz[1] = WarpReducef(temp_storage).Sum(grad_xyz[1]);
+                    grad_xyz[2] = WarpReducef(temp_storage).Sum(grad_xyz[2]);
 
                     if (lane_id == 0) {
+                        // compute gradient for sigmoid
+                        float const curr_grad_raw_alpha = curr_grad_alpha * _D_SIGMOID(raw_alpha);
                         trilerp_backward_cuvol_one_density(
                                 grid.links,
                                 grads.grad_density_out,
                                 grads.mask_out,
                                 grid.stride_x,
                                 grid.size[2],
-                                ray.l, ray.pos, curr_grad_alpha);
+                                ray.l, ray.pos, curr_grad_raw_alpha);
 
                         // compute gradient to surface via density
                         trilerp_backward_one_pos(
+                                    grid.links,
                                     grid.density_data,
                                     grid.stride_x,
                                     grid.size[2],
                                     1,
                                     ray.l, ray.pos, 0,
-                                    curr_grad_color, grad_xyz);
+                                    curr_grad_raw_alpha, grad_xyz);
 
-                        grad_xyz[0] += grad_x_sh;
-                        grad_xyz[1] += grad_y_sh;
-                        grad_xyz[2] += grad_z_sh;
                         // grad_xyz is now d_mse/d_xyz
                         float const grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
+                        assert(!isnan(grad_st));
+
                         // grad_st is now d_mse/d_t
                         float grad_fs[4] = {grad_st, grad_st, grad_st, grad_st};
-
-                        // make fs0 into actual constant to make grad calc easier
-                        fs[0] -= lv_set;
 
                         //////////////////////// Find Gradient of Cubic Root //////////////////////
                         if (cubic_root_type == CUBIC_TYPE_LINEAR){
                             // linear case
-                            grad_fs[0] *= -1 / fs[1];
+                            grad_fs[0] *= -1. / fs[1];
                             grad_fs[1] *= fs[0] / _SQR(fs[1]);
                             grad_fs[2] = 0;
                             grad_fs[3] = 0;
@@ -647,50 +657,83 @@ __device__ __inline__ void trace_ray_surface_backward(
 
                         }else{
                             // macros for cubic gradient
-                            double const norm_term = static_cast<double>(fs[3]);
-                            double const a = static_cast<double>(fs[3]) / norm_term;
-                            double const b = static_cast<double>(fs[2]) / norm_term;
-                            double const c = static_cast<double>(fs[1]) / norm_term;
-                            double const d = static_cast<double>(fs[0]) / norm_term;
+                            double const volatile norm_term = static_cast<double>(fs[3]);
+                            double const volatile a = static_cast<double>(fs[3]) / norm_term;
+                            double const volatile b = static_cast<double>(fs[2]) / norm_term;
+                            double const volatile c = static_cast<double>(fs[1]) / norm_term;
+                            double const volatile d = static_cast<double>(fs[0]) / norm_term;
 
-                            #define __Db_Df3 ((-fs[2]) / fs[3] / fs[3])
-                            #define __Db_Df2 (1 / fs[3])
-                            #define __Db_Df1 (0)
-                            #define __Db_Df0 (0)
-                            #define __Dc_Df3 ((-fs[1]) / fs[3] / fs[3])
-                            #define __Dc_Df2 (0)
-                            #define __Dc_Df1 (1 / fs[3])
-                            #define __Dc_Df0 (0)
-                            #define __Dd_Df3 ((-fs[0]) / fs[3] / fs[3])
-                            #define __Dd_Df2 (0)
-                            #define __Dd_Df1 (0)
-                            #define __Dd_Df0 (1 / fs[3])
+                            // #define __Db_Df3 ((-fs[2]) / fs[3] / fs[3])
+                            // #define __Db_Df2 (1 / fs[3])
+                            // #define __Db_Df1 (0)
+                            // #define __Db_Df0 (0)
+                            // #define __Dc_Df3 ((-fs[1]) / fs[3] / fs[3])
+                            // #define __Dc_Df2 (0)
+                            // #define __Dc_Df1 (1 / fs[3])
+                            // #define __Dc_Df0 (0)
+                            // #define __Dd_Df3 ((-fs[0]) / fs[3] / fs[3])
+                            // #define __Dd_Df2 (0)
+                            // #define __Dd_Df1 (0)
+                            // #define __Dd_Df0 (1 / fs[3])
+                            double const volatile __Db_Df3 = ((-fs[2]) / fs[3] / fs[3]);
+                            double const volatile __Db_Df2 = (1. / fs[3]);
+                            double const volatile __Db_Df1 = (0.);
+                            double const volatile __Db_Df0 = (0.);
+                            double const volatile __Dc_Df3 = ((-fs[1]) / fs[3] / fs[3]);
+                            double const volatile __Dc_Df2 = (0.);
+                            double const volatile __Dc_Df1 = (1. / fs[3]);
+                            double const volatile __Dc_Df0 = (0.);
+                            double const volatile __Dd_Df3 = ((-fs[0]) / fs[3] / fs[3]);
+                            double const volatile __Dd_Df2 = (0.);
+                            double const volatile __Dd_Df1 = (0.);
+                            double const volatile __Dd_Df0 = (1. / fs[3]);
 
-                            double const f = ((3*c/a) - (_SQR(b) / _SQR(a))) / 3;                      
-                            double const g = (((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27;                 
-                            double const h = (_SQR(g) / 4 + _CUBIC(f) / 27);
+                            double const volatile f = ((3.*c/a) - (_SQR(b) / _SQR(a))) / 3.;                      
+                            double const volatile g = (((2.*_CUBIC(b)) / _CUBIC(a)) - ((9.*b*c) / _SQR(a)) + (27.*d/a)) / 27.;                 
+                            double const volatile h = (_SQR(g) / 4. + _CUBIC(f) / 27.);
 
-                            #define __Df_Db (-2*b/(3*_SQR(a)))
-                            #define __Df_Dc (1/a)
-                            #define __Df_Dd (0)
-                            #define __Dg_Db (-c/(3*_SQR(a)) + 2*_SQR(b)/(9*_CUBIC(a)))
-                            #define __Dg_Dc (-b/(3*_SQR(a)))
-                            #define __Dg_Dd (1/a)
+                            // #define __Df_Db (-2*b/(3*_SQR(a)))
+                            // #define __Df_Dc (1/a)
+                            // #define __Df_Dd (0)
+                            // #define __Dg_Db (-c/(3*_SQR(a)) + 2*_SQR(b)/(9*_CUBIC(a)))
+                            // #define __Dg_Dc (-b/(3*_SQR(a)))
+                            // #define __Dg_Dd (1/a)
 
-                            #define __Dh_Df (_SQR(f)/9)
-                            #define __Dh_Dg (g/2)
-                            #define __Dh_Db (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db)
-                            #define __Dh_Dc (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc)
-                            #define __Dh_Dd (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd)
+                            // #define __Dh_Df (_SQR(f)/9)
+                            // #define __Dh_Dg (g/2)
+                            // #define __Dh_Db (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db)
+                            // #define __Dh_Dc (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc)
+                            // #define __Dh_Dd (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd)
 
-                            #define __Dg_Df3 (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dc_Df3)
-                            #define __Dg_Df2 (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dc_Df2)
-                            #define __Dg_Df1 (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dc_Df1)
-                            #define __Dg_Df0 (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dc_Df0)
-                            #define __Dh_Df3 (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dc_Df3)
-                            #define __Dh_Df2 (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dc_Df2)
-                            #define __Dh_Df1 (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dc_Df1)
-                            #define __Dh_Df0 (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dc_Df0)
+                            // #define __Dg_Df3 (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3)
+                            // #define __Dg_Df2 (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2)
+                            // #define __Dg_Df1 (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1)
+                            // #define __Dg_Df0 (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0)
+                            // #define __Dh_Df3 (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3)
+                            // #define __Dh_Df2 (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2)
+                            // #define __Dh_Df1 (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1)
+                            // #define __Dh_Df0 (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0)
+                            double const volatile __Df_Db = (-2.*b/(3.*_SQR(a)));
+                            double const volatile __Df_Dc = (1./a);
+                            double const volatile __Df_Dd = (0.);
+                            double const volatile __Dg_Db = (-c/(3.*_SQR(a)) + 2.*_SQR(b)/(9.*_CUBIC(a)));
+                            double const volatile __Dg_Dc = (-b/(3.*_SQR(a)));
+                            double const volatile __Dg_Dd = (1./a);
+
+                            double const volatile __Dh_Df = (_SQR(f)/9.);
+                            double const volatile __Dh_Dg = (g/2.);
+                            double const volatile __Dh_Db = (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db);
+                            double const volatile __Dh_Dc = (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc);
+                            double const volatile __Dh_Dd = (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd);
+                            
+                            double const volatile __Dg_Df3 = (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3);
+                            double const volatile __Dg_Df2 = (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2);
+                            double const volatile __Dg_Df1 = (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1);
+                            double const volatile __Dg_Df0 = (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0);
+                            double const volatile __Dh_Df3 = (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3);
+                            double const volatile __Dh_Df2 = (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2);
+                            double const volatile __Dh_Df1 = (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1);
+                            double const volatile __Dh_Df0 = (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0);
 
 
                             if (cubic_root_type == CUBIC_TYPE_CUBIC_ONE_R){
@@ -700,116 +743,135 @@ __device__ __inline__ void trace_ray_surface_backward(
                                 grad_fs[1] = 0;
                                 grad_fs[2] = 0;
                                 grad_fs[3] *= static_cast<float>(d_con_cbrt / a * __Dd_Df3);
-                            }else if (cubic_root_type == CUBIC_TYPE_CUBIC_ONE_R){
+                            }else if (cubic_root_type == CUBIC_TYPE_CUBIC_THREE_R){
                                 // cubic with three real and distinct roots
-                                double const _i = sqrt((_SQR(g) / 4.) - h);   
-                                double const _j = cbrt(_i);
-                                double const _k = acos(-(g / (2 * _i)));
-                                double const _M = cos(_k / 3.);       
-                                double const _N = sqrt(3) * sin(_k / 3.);
-                                double const _P = (b / (3. * a)) * -1;   
+                                double const volatile _i = sqrt((_SQR(g) / 4.) - h);   
+                                double const volatile _j = cbrt(_i);
+                                double const volatile _k = acos(-(g / (2. * _i)));
+                                double const volatile _M = cos(_k / 3.); // turns into NaN? 
+                                double const volatile _N = sqrt(3.) * sin(_k / 3.);
+                                double const volatile _P = (b / (3. * a)) * -1.;   
 
-                                #define __Dj_Dg (g/(12* pow(_SQR(g)/4 - h, 5/6)))
-                                #define __Dj_Dh (-1/(6* pow(_SQR(g)/4 - h, 5/6)))
+                                // #define __Dj_Dg (g/(12* pow(_SQR(g)/4 - h, 5/6)))
+                                // #define __Dj_Dh (-1/(6* pow(_SQR(g)/4 - h, 5/6)))
 
-                                #define __Dk_Dg (-(_SQR(g)/(8*pow(_SQR(g)/4 - h, 3/2)) - 1/(2*sqrt(_SQR(g)/4 - h)))/sqrt(-_SQR(g)/(4*(_SQR(g)/4 - h)) + 1))
-                                #define __Dk_Dh (g/(4*pow(_SQR(g)/4 - h, 3/2)*sqrt(-_SQR(g)/(4*(_SQR(g)/4 - h)) + 1)))
+                                // #define __Dk_Dg (-(_SQR(g)/(8*pow(_SQR(g)/4 - h, 3/2)) - 1/(2*sqrt(_SQR(g)/4 - h)))/sqrt(-_SQR(g)/(4*(_SQR(g)/4 - h)) + 1))
+                                // #define __Dk_Dh (g/(4*pow(_SQR(g)/4 - h, 3/2)*sqrt(-_SQR(g)/(4*(_SQR(g)/4 - h)) + 1)))
+                                double const volatile __Dj_Dg = (g/(12.* pow(_SQR(g)/4. - h, 5./6.)));
+                                double const volatile __Dj_Dh = (-1./(6.* pow(_SQR(g)/4. - h, 5./6.)));
+
+                                double const volatile __Dk_Dg = (-(_SQR(g)/(8.*pow(_SQR(g)/4. - h, 3./2.)) - 1./(2.*sqrt(_SQR(g)/4. - h)))/sqrt(-_SQR(g)/(4.*(_SQR(g)/4. - h)) + 1.));
+                                double const volatile __Dk_Dh = (g/(4.*pow(_SQR(g)/4. - h, 3./2.)*sqrt(-_SQR(g)/(4.*(_SQR(g)/4. - h)) + 1.)));
 
                                 
-                                double __Dst_Dj = 0;
-                                double __Dst_Dk = 0;
-                                double __Dst_Db_ = 0;
+                                double volatile __Dst_Dj = 0.;
+                                double volatile __Dst_Dk = 0.;
+                                double volatile __Dst_Db_ = 0.;
 
                                 if (st_id == 0){
                                     // st[0]
-                                    __Dst_Dj = (2*cos(_k/3));
-                                    __Dst_Dk = (-2*_j*sin(_k/3)/3);
-                                    __Dst_Db_ = (-1/(3*a));
+                                    __Dst_Dj = (2.*cos(_k/3.));
+                                    __Dst_Dk = (-2.*_j*sin(_k/3.)/3.);
+                                    __Dst_Db_ = (-1./(3.*a));
                                 }else if (st_id == 1){
                                     // st[1]
                                     __Dst_Dj = (-_M - _N);
-                                    __Dst_Dk = (-_j*(-sin(_k/3)/3 + sqrt(3)*cos(_k/3)/3));
-                                    __Dst_Db_ = (-1/(3*a));
+                                    __Dst_Dk = (-_j*(-sin(_k/3.)/3. + sqrt(3.)*cos(_k/3.)/3.));
+                                    __Dst_Db_ = (-1./(3.*a));
                                 }else{
                                     // st[2]
                                     __Dst_Dj = (-_M + _N);
-                                    __Dst_Dk = (-_j*(-sin(_k/3)/3 - sqrt(3)*cos(_k/3)/3));
-                                    __Dst_Db_ = (-1/(3*a));
+                                    __Dst_Dk = (-_j*(-sin(_k/3.)/3. - sqrt(3.)*cos(_k/3.)/3.));
+                                    __Dst_Db_ = (-1./(3.*a));
                                 }
 
 
-                                    grad_fs[0] *= (
-                                        __Dst_Dj * (__Dj_Dg * __Dg_Df0 
-                                                    +__Dj_Dh * __Dh_Df0) 
-                                        + __Dst_Dk * (__Dk_Dg * __Dg_Df0 
-                                                      +__Dk_Dh * __Dh_Df0) 
-                                        + __Dst_Db_ * __Db_Df0);
+                                grad_fs[0] *= static_cast<float>(
+                                    __Dst_Dj * (__Dj_Dg * __Dg_Df0 
+                                                +__Dj_Dh * __Dh_Df0) 
+                                    + __Dst_Dk * (__Dk_Dg * __Dg_Df0 
+                                                    +__Dk_Dh * __Dh_Df0) 
+                                    + __Dst_Db_ * __Db_Df0);
 
-                                    grad_fs[1] *= (
-                                        __Dst_Dj * (__Dj_Dg * __Dg_Df1 
-                                                    +__Dj_Dh * __Dh_Df1) 
-                                        + __Dst_Dk * (__Dk_Dg * __Dg_Df1 
-                                                      +__Dk_Dh * __Dh_Df1) 
-                                        + __Dst_Db_ * __Db_Df1);
+                                grad_fs[1] *= static_cast<float>(
+                                    __Dst_Dj * (__Dj_Dg * __Dg_Df1 
+                                                +__Dj_Dh * __Dh_Df1) 
+                                    + __Dst_Dk * (__Dk_Dg * __Dg_Df1 
+                                                    +__Dk_Dh * __Dh_Df1) 
+                                    + __Dst_Db_ * __Db_Df1);
 
-                                    grad_fs[2] *= (
-                                        __Dst_Dj * (__Dj_Dg * __Dg_Df2 
-                                                    +__Dj_Dh * __Dh_Df2) 
-                                        + __Dst_Dk * (__Dk_Dg * __Dg_Df2 
-                                                      +__Dk_Dh * __Dh_Df2) 
-                                        + __Dst_Db_ * __Db_Df2);
+                                grad_fs[2] *= static_cast<float>(
+                                    __Dst_Dj * (__Dj_Dg * __Dg_Df2 
+                                                +__Dj_Dh * __Dh_Df2) 
+                                    + __Dst_Dk * (__Dk_Dg * __Dg_Df2 
+                                                    +__Dk_Dh * __Dh_Df2) 
+                                    + __Dst_Db_ * __Db_Df2);
 
-                                    grad_fs[3] *= (
-                                        __Dst_Dj * (__Dj_Dg * __Dg_Df3 
-                                                    +__Dj_Dh * __Dh_Df3) 
-                                        + __Dst_Dk * (__Dk_Dg * __Dg_Df3 
-                                                      +__Dk_Dh * __Dh_Df3) 
-                                        + __Dst_Db_ * __Db_Df3);
+                                grad_fs[3] *= static_cast<float>(
+                                    __Dst_Dj * (__Dj_Dg * __Dg_Df3 
+                                                +__Dj_Dh * __Dh_Df3) 
+                                    + __Dst_Dk * (__Dk_Dg * __Dg_Df3 
+                                                    +__Dk_Dh * __Dh_Df3) 
+                                    + __Dst_Db_ * __Db_Df3);
+
+                                assert(!isnan(grad_fs[0]));
+                                assert(!isnan(grad_fs[1]));
+                                assert(!isnan(grad_fs[2]));
+                                assert(!isnan(grad_fs[3]));
 
 
                             }else{
                                 // CUBIC_TYPE_CUBIC_ONE_R_: cubic with a single real root
-                                double const _R = -(g / 2.) + sqrt(h);
-                                double const _S = _COND_CBRT(_R);
+                                double const volatile _R = -(g / 2.) + sqrt(h);
+                                double const volatile _S = _COND_CBRT(_R);
 
-                                double const _T = -(g / 2.) - sqrt(h);
-                                double const _U = _COND_CBRT(_T);
+                                double const volatile _T = -(g / 2.) - sqrt(h);
+                                double const volatile _U = _COND_CBRT(_T);
 
                                 // #define Dst_DS (1)
                                 // #define Dst_DU (1)
                                 // #define DS_DR (_D_COND_CBRT(_R))
                                 // #define DU_DT (_D_COND_CBRT(_T))
-                                #define __Dst_DR (_D_COND_CBRT(_R))
-                                #define __Dst_DT (_D_COND_CBRT(_T))
-                                #define __Dst_Db_ (-1/(3*a))
 
-                                #define __DR_Dh (1/(2*sqrt(h)))
-                                #define __DR_Dg (-0.5)
-                                #define __DT_Dh (-1/(2*sqrt(h)))
-                                #define __DT_Dg (-0.5)
+                                // #define __Dst_DR (_D_COND_CBRT(_R))
+                                // #define __Dst_DT (_D_COND_CBRT(_T))
+                                // #define __Dst_Db_ (-1/(3*a))
 
-                                grad_fs[0] *= (
+                                // #define __DR_Dh (1/(2*sqrt(h)))
+                                // #define __DR_Dg (-0.5)
+                                // #define __DT_Dh (-1/(2*sqrt(h)))
+                                // #define __DT_Dg (-0.5)
+                                double const volatile __Dst_DR = (_D_COND_CBRT(_R));
+                                double const volatile __Dst_DT = (_D_COND_CBRT(_T));
+                                double const volatile __Dst_Db_ = (-1./(3.*a));
+
+                                double const volatile __DR_Dh = (1./(2.*sqrt(h)));
+                                double const volatile __DR_Dg = (-0.5);
+                                double const volatile __DT_Dh = (-1./(2.*sqrt(h)));
+                                double const volatile __DT_Dg = (-0.5);
+
+                                grad_fs[0] *= static_cast<float>(
                                     __Dst_DR * (__DR_Dg * __Dg_Df0 
                                                 +__DR_Dh * __Dh_Df0) 
                                     + __Dst_DT * (__DT_Dg * __Dg_Df0 
                                                     +__DT_Dh * __Dh_Df0) 
                                     + __Dst_Db_ * __Db_Df0);
 
-                                grad_fs[1] *= (
+                                grad_fs[1] *= static_cast<float>(
                                     __Dst_DR * (__DR_Dg * __Dg_Df1 
                                                 +__DR_Dh * __Dh_Df1) 
                                     + __Dst_DT * (__DT_Dg * __Dg_Df1 
                                                     +__DT_Dh * __Dh_Df1) 
                                     + __Dst_Db_ * __Db_Df1);
 
-                                grad_fs[2] *= (
+                                grad_fs[2] *= static_cast<float>(
                                     __Dst_DR * (__DR_Dg * __Dg_Df2 
                                                 +__DR_Dh * __Dh_Df2) 
                                     + __Dst_DT * (__DT_Dg * __Dg_Df2 
                                                     +__DT_Dh * __Dh_Df2) 
                                     + __Dst_Db_ * __Db_Df2);
 
-                                grad_fs[3] *= (
+                                grad_fs[3] *= static_cast<float>(
                                     __Dst_DR * (__DR_Dg * __Dg_Df3 
                                                 +__DR_Dh * __Dh_Df3) 
                                     + __Dst_DT * (__DT_Dg * __Dg_Df3 
@@ -872,6 +934,15 @@ __device__ __inline__ void trace_ray_surface_backward(
                             + grad_fs[2] * (ray.dir[0]*(ray.dir[1]*(-ray.l[2] + ray.origin[2]) + ray.dir[2]*(-ray.l[1] + ray.origin[1])) + ray.dir[1]*ray.dir[2]*(-ray.l[0] + ray.origin[0]))
                             + grad_fs[3] * (ray.dir[0]*ray.dir[1]*ray.dir[2]);
 
+                        assert(!isnan(grad_surface[0b000]));
+                        assert(!isnan(grad_surface[0b001]));
+                        assert(!isnan(grad_surface[0b010]));
+                        assert(!isnan(grad_surface[0b011]));
+                        assert(!isnan(grad_surface[0b100]));
+                        assert(!isnan(grad_surface[0b101]));
+                        assert(!isnan(grad_surface[0b110]));
+                        assert(!isnan(grad_surface[0b111]));
+
                         const int offx = grid.stride_x;
                         const int offy = grid.size[2];
                         const int32_t* __restrict__ link_ptr = grid.links + (offx * ray.l[0] + offy * ray.l[1] + ray.l[2]);
@@ -891,8 +962,6 @@ __device__ __inline__ void trace_ray_surface_backward(
                         MAYBE_ADD_LINK(offx + offy + 1, grad_surface[0b111]);
 
                         #undef MAYBE_ADD_LINK
-
-
 
                     }
 
@@ -1267,7 +1336,7 @@ __global__ void render_ray_backward_kernel(
 
     __shared__ float sphfunc_val[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK][9];
     __shared__ float grad_sphfunc_val[TRACE_RAY_CUDA_RAYS_PER_BLOCK][9];
-    __shared__ SingleRaySpec ray_spec[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK];
+    SingleRaySpec ray_spec[TRACE_RAY_BKWD_CUDA_RAYS_PER_BLOCK];
     __shared__ typename WarpReducef::TempStorage temp_storage[
         TRACE_RAY_CUDA_RAYS_PER_BLOCK];
     ray_spec[ray_blk_id].set(rays.origins[ray_id].data(),
