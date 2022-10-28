@@ -117,11 +117,13 @@ struct PackedRaysSpec {
 };
 
 struct PackedRayVoxIntersecSpec {
-    const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> voxel_ls;
-    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> ray_bin;
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> voxel_ls;
+    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> vox_start_i; //TODO: convert to list!
+    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> vox_num;
     PackedRayVoxIntersecSpec(RayVoxIntersecSpec& spec) :
-        voxel_ls(spec.voxel_ls.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>()),
-        ray_bin(spec.ray_bin.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>())
+        voxel_ls(spec.voxel_ls.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>()),
+        vox_start_i(spec.vox_start_i.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>()),
+        vox_num(spec.vox_num.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>())
     { }
 };
 

@@ -15,11 +15,19 @@ void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
 
 // ** Surface rendering formula (trilerp)
 Tensor volume_render_surface(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec&, RenderOptions &);
-Tensor volume_render_surface_image(SparseGridSpec &, CameraSpec &, RayVoxIntersecSpec&,
-                                 RenderOptions &);
+// Tensor volume_render_surface_image(SparseGridSpec &, CameraSpec &, RayVoxIntersecSpec&,
+//                                  RenderOptions &);
 void volume_render_surface_backward(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 void volume_render_surface_fused(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec&, RenderOptions &,
+                               Tensor, float, float, Tensor, GridOutputGrads &);
+
+Tensor volume_render_surf_trav(SparseGridSpec &, RaysSpec &, RenderOptions &);
+// Tensor volume_render_surf_trav_image(SparseGridSpec &, CameraSpec &,
+//                                  RenderOptions &);
+void volume_render_surf_trav_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
+                                  Tensor, Tensor, GridOutputGrads &);
+void volume_render_surf_trav_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                Tensor, float, float, Tensor, GridOutputGrads &);
 // // Expected termination (depth) rendering
 // torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
@@ -94,9 +102,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(sample_grid);
   _REG_FUNC(sample_grid_backward);
   _REG_FUNC(volume_render_surface);
-  _REG_FUNC(volume_render_surface_image);
+//   _REG_FUNC(volume_render_surface_image);
   _REG_FUNC(volume_render_surface_backward);
   _REG_FUNC(volume_render_surface_fused);
+  _REG_FUNC(volume_render_surf_trav);
+//   _REG_FUNC(volume_render_surf_trav_image);
+  _REG_FUNC(volume_render_surf_trav_backward);
+  _REG_FUNC(volume_render_surf_trav_fused);
   _REG_FUNC(volume_render_cuvol);
   _REG_FUNC(volume_render_cuvol_image);
   _REG_FUNC(volume_render_cuvol_backward);
@@ -169,7 +181,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::class_<RayVoxIntersecSpec>(m, "RayVoxIntersecSpec")
       .def(py::init<>())
       .def_readwrite("voxel_ls", &RayVoxIntersecSpec::voxel_ls)
-      .def_readwrite("ray_bin", &RayVoxIntersecSpec::ray_bin);
+      .def_readwrite("vox_start_i", &RayVoxIntersecSpec::vox_start_i)
+      .def_readwrite("vox_num", &RayVoxIntersecSpec::vox_num);
 
   py::class_<RenderOptions>(m, "RenderOptions")
       .def(py::init<>())

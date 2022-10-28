@@ -142,10 +142,12 @@ struct RaysSpec {
 // struct to store interesctions between ray and voxels
 struct RayVoxIntersecSpec {
   Tensor voxel_ls;
-  Tensor ray_bin;
+  Tensor vox_start_i;
+  Tensor vox_num;
   inline void check() {
     CHECK_INPUT(voxel_ls);
-    CHECK_INPUT(ray_bin);
+    CHECK_INPUT(vox_start_i);
+    CHECK_INPUT(vox_num);
   }
 };
 

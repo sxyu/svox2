@@ -30,4 +30,5 @@
 #define _CLOSE_TO_ZERO(x, eps) (std::abs(x) < eps)
 #define _COND_CBRT(x) ((x >= 0) ? cbrt(x) : -1. * cbrt(-x))
 #define _COND_CBRTF(x) ((x >= 0) ? cbrtf(x) : -1. * cbrtf(-x))
-#define _D_COND_CBRT(x) ((x >= 0) ? 1. / 3. / _SQR(cbrt(x)) :  cbrt(-x) / -3. / x) // derivative of cond_cbrt
+// derivative of cond_cbrt
+#define _D_COND_CBRT(x) ((x >= 0) ? ( (x>0) ? (1. / 3. / _SQR(cbrt(x))) : 1.) :  cbrt(-x) / -3. / x) 

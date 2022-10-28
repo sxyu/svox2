@@ -200,8 +200,14 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
             float const D = _SQR(f1) - 4.0 * f2 * f0;
             float const sqrt_D = sqrtf(D);
             if (D > 0){
-                outs[0] = (-f1 + sqrt_D) / (2 * f2);
-                outs[1] = (-f1 - sqrt_D) / (2 * f2);
+                if (f2 > 0){
+                    outs[0] = (-f1 - sqrt_D) / (2 * f2);
+                    outs[1] = (-f1 + sqrt_D) / (2 * f2);
+                }else{
+                    outs[0] = (-f1 + sqrt_D) / (2 * f2);
+                    outs[1] = (-f1 - sqrt_D) / (2 * f2);
+                }
+
                 // assert(!isnan(outs[0]));
                 // assert(!isnan(outs[1]));
                 if (_CLOSE_TO_ZERO(outs[0] - outs[1], eps)){
@@ -216,15 +222,24 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
     } else {
         // cubic case
         double const eps_double = 1e-10;
-        double const norm_term = static_cast<double>(f3);
-        double const a = static_cast<double>(f3) / norm_term;
-        double const b = static_cast<double>(f2) / norm_term;
-        double const c = static_cast<double>(f1) / norm_term;
-        double const d = static_cast<double>(f0) / norm_term;
+        // double const norm_term = static_cast<double>(f3);
+        // double const a = static_cast<double>(f3) / norm_term;
+        // double const b = static_cast<double>(f2) / norm_term;
+        // double const c = static_cast<double>(f1) / norm_term;
+        // double const d = static_cast<double>(f0) / norm_term;
 
-        double const f = ((3*c/a) - (_SQR(b) / _SQR(a))) / 3;                      
-        double const g = (((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27;                 
-        double const h = (_SQR(g) / 4 + _CUBIC(f) / 27);
+        // double const f = ((3*c/a) - (_SQR(b) / _SQR(a))) / 3;                      
+        // double const g = (((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27;                 
+        // double const h = (_SQR(g) / 4 + _CUBIC(f) / 27);
+        #define norm_term (static_cast<double>(f3))
+        #define a (static_cast<double>(f3) / norm_term)
+        #define b (static_cast<double>(f2) / norm_term)
+        #define c (static_cast<double>(f1) / norm_term)
+        #define d (static_cast<double>(f0) / norm_term)
+
+        #define f (((3*c/a) - (_SQR(b) / _SQR(a))) / 3)
+        #define g ((((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27)
+        #define h ((_SQR(g) / 4 + _CUBIC(f) / 27))
         // -inf + inf create nan!
 
         if ((_CLOSE_TO_ZERO(f, eps_double)) & (_CLOSE_TO_ZERO(g, eps_double)) & (_CLOSE_TO_ZERO(h, eps_double))){
@@ -245,17 +260,28 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
 
         } else if (h <= 0){
             // all three roots are real and distinct
+            // note that if h==0, gradient cannot be computed
+            if (h==0){
+                return CUBIC_TYPE_NO_ROOT;
+            }
 
-            double const _i = sqrt((_SQR(g) / 4.) - h);   
-            double const _j = cbrt(_i);
-            double const _k = acos(-(g / (2 * _i))); // TODO: might need clamp
-            double const _M = cos(_k / 3.);       
-            double const _N = sqrt(3) * sin(_k / 3.);
-            double const _P = (b / (3. * a)) * -1;                
+            // double const _i = sqrt((_SQR(g) / 4.) - h);   
+            // double const _j = cbrt(_i);
+            // double const _k = acos(-(g / (2 * _i)));
+            // double const _M = cos(_k / 3.);       
+            // double const _N = sqrt(3) * sin(_k / 3.);
+            // double const _P = (b / (3. * a)) * -1;         
 
-            outs[0] = static_cast<float>(2 * _j * cos(_k / 3.) - (b / (3. * a)));
-            outs[1] = static_cast<float>(-1 *_j * (_M + _N) + _P);
-            outs[2] = static_cast<float>(-1 *_j * (_M - _N) + _P);
+            #define _i (sqrt((_SQR(g) / 4.) - h))
+            #define _j (cbrt(_i))
+            #define _k (acos(-(g / (2 * _i))))
+            #define _M (cos(_k / 3.))
+            #define _N (sqrt(3) * sin(_k / 3.))
+            #define _P ((b / (3. * a)) * -1)
+
+            outs[0] = static_cast<float>(-1 *_j * (_M + _N) + _P);
+            outs[1] = static_cast<float>(-1 *_j * (_M - _N) + _P);
+            outs[2] = static_cast<float>(2 * _j * _M + _P);
             // if (isnan(outs[0]) | isnan(outs[1]) | isnan(outs[2]) | (!isfinite(outs[0])) | (!isfinite(outs[1])) | (!isfinite(outs[2]))){
             //     printf("a=%f\n", a);
             //     printf("b=%f\n", b);
@@ -279,11 +305,16 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
             return CUBIC_TYPE_CUBIC_THREE_R;
         } else {
             // only one real root
-            double const _R = -(g / 2.) + sqrt(h);
-            double const _S = _COND_CBRT(_R);
+            // double const _R = -(g / 2.) + sqrt(h);
+            // double const _S = _COND_CBRT(_R);
 
-            double const _T = -(g / 2.) - sqrt(h);
-            double const _U = _COND_CBRT(_T);
+            // double const _T = -(g / 2.) - sqrt(h);
+            // double const _U = _COND_CBRT(_T);
+            #define _R (-(g / 2.) + sqrt(h))
+            #define _S (_COND_CBRT(_R))
+
+            #define _T (-(g / 2.) - sqrt(h))
+            #define _U (_COND_CBRT(_T))
 
             outs[0] = static_cast<float>((_S + _U) - (b / (3. * a)));
 
@@ -308,3 +339,26 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
     }
 }
 
+
+
+#undef norm_term 
+#undef a  
+#undef b  
+#undef c  
+#undef d  
+
+#undef f  
+#undef g  
+#undef h
+
+#undef _i
+#undef _j
+#undef _k
+#undef _M
+#undef _N
+#undef _P
+
+#undef _R
+#undef _S
+#undef _T
+#undef _U

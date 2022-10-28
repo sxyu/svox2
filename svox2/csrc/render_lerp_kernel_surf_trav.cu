@@ -1,4 +1,4 @@
-
+// Surface rendering traversal version
 #include <torch/extension.h>
 #include "cuda_util.cuh"
 #include "data_spec_packed.cuh"
@@ -32,12 +32,9 @@ namespace device {
 
 
 // * For ray rendering
-__device__ __inline__ void trace_ray_surface(
+__device__ __inline__ void trace_ray_surf_trav(
         const PackedSparseGridSpec& __restrict__ grid,
         SingleRaySpec& __restrict__ ray,
-        const int32_t* __restrict__ voxel_ls,
-        const int32_t vox_start_i,
-        const int32_t vox_num,
         // const PackedRayVoxIntersecSpec& __restrict__ ray_vox,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
@@ -62,22 +59,44 @@ __device__ __inline__ void trace_ray_surface(
     float log_transmit = 0.f;
     // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
 
-    for (int v_i=0; v_i<vox_num; ++v_i){
-        // skip voxel if any of the vertices is turned off
-        int offx = grid.stride_x, offy = grid.size[2];
+    int32_t last_voxel[] = {-1,-1,-1};
 
-        const int32_t voxel_l[3] = {voxel_ls[3*(v_i+vox_start_i)+0], voxel_ls[3*(v_i+vox_start_i)+1], voxel_ls[3*(v_i+vox_start_i)+2]};
+    while (t <= ray.tmax) {
+#pragma unroll 3
+        int32_t voxel_l[3];
+        for (int j = 0; j < 3; ++j) {
+            voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+            voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
+        }
 
-        // check if correct!
+        if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
+            // const float skip = compute_skip_dist(ray,
+            //             grid.links, grid.stride_x,
+            //             grid.size[2], 0);
+
+            t += opt.step_size;
+            continue;
+        }
+
+        int const offx = grid.stride_x, offy = grid.size[2];
         const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
 
+        // skip voxel if any of the vertices is turned off
         if ((voxel_l[0] + 1 >= grid.size[0]) || (voxel_l[1] + 1 >= grid.size[1]) || (voxel_l[2] + 1 >= grid.size[2]) \
             || (link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) \
             || (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
         ){
-            // t += opt.step_size;
+            // const float skip = compute_skip_dist(ray,
+            //             grid.links, grid.stride_x,
+            //             grid.size[2], 0);
+
+            t += opt.step_size;
             continue;
         }
+
+        last_voxel[0] = voxel_l[0];
+        last_voxel[1] = voxel_l[1];
+        last_voxel[2] = voxel_l[2];
 
         // find intersections
         float const surface[8] = {
@@ -90,30 +109,6 @@ __device__ __inline__ void trace_ray_surface(
             grid.surface_data[link_ptr[offx+offy]],
             grid.surface_data[link_ptr[offx+offy+1]],
         };
-
-        // float const a00 = surface[0b000] * (1-ray.origin[2]+ray.l[2]) + surface[0b001] * (ray.origin[2]-ray.l[2]);
-        // float const a01 = surface[0b010] * (1-ray.origin[2]+ray.l[2]) + surface[0b011] * (ray.origin[2]-ray.l[2]);
-        // float const a10 = surface[0b100] * (1-ray.origin[2]+ray.l[2]) + surface[0b101] * (ray.origin[2]-ray.l[2]);
-        // float const a11 = surface[0b110] * (1-ray.origin[2]+ray.l[2]) + surface[0b111] * (ray.origin[2]-ray.l[2]);
-
-        // float const b00 = -surface[0b000] + surface[0b001];
-        // float const b01 = -surface[0b010] + surface[0b011];
-        // float const b10 = -surface[0b100] + surface[0b101];
-        // float const b11 = -surface[0b110] + surface[0b111];
-
-        // float const c0 = a00*(1-ray.origin[1]+ray.l[1]) + a01*(ray.origin[1]-ray.l[1]);
-        // float const c1 = a10*(1-ray.origin[1]+ray.l[1]) + a11*(ray.origin[1]-ray.l[1]);
-
-        // float const d0 = -(a00*ray.dir[1] - ray.dir[2]*b00*(1-ray.origin[1]+ray.l[1])) + (a01*ray.dir[1] + ray.dir[2]*b01*(ray.origin[1]-ray.l[1]));
-        // float const d1 = -(a10*ray.dir[1] - ray.dir[2]*b10*(1-ray.origin[1]+ray.l[1])) + (a11*ray.dir[1] + ray.dir[2]*b11*(ray.origin[1]-ray.l[1]));
-
-        // float const e0 = -ray.dir[1]*ray.dir[2]*b00 + ray.dir[1]*ray.dir[2]*b01;
-        // float const e1 = -ray.dir[1]*ray.dir[2]*b10 + ray.dir[1]*ray.dir[2]*b11;
-
-        // float const f3 = -e0*ray.dir[0] + e1*ray.dir[0];
-        // float const f2 = -d0*ray.dir[0]+e0*(1-ray.origin[0]+ray.l[0]) + d1*ray.dir[0]+e1*(ray.origin[0]-ray.l[0]);
-        // float const f1 = -c0*ray.dir[0] + d0*(1-ray.origin[0]+ray.l[0]) + c1*ray.dir[0] + d1*(ray.origin[0]-ray.l[0]);
-        // float const f0 = c0*(1-ray.origin[0]+ray.l[0]) + c1*(ray.origin[0]-ray.l[0]);
 
         float fs[4] = {0,0,0,0};
         surface_to_cubic_equation(surface, ray.origin, ray.dir, voxel_l, fs);
@@ -149,11 +144,6 @@ __device__ __inline__ void trace_ray_surface(
                 );
 
             
-            // // // sort intersections by depth
-            // thrust::sort(thrust::device, st, st + 3);
-
-            // goto NEXT_VOX;
-
             ////////////// TRILINEAR INTERPOLATE //////////////
             for (int j=0; j < 3; ++j){
                 if (st[j] <= 0){
@@ -163,7 +153,7 @@ __device__ __inline__ void trace_ray_surface(
 
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
-                    assert(!isnan(st[j]));
+                    // assert(!isnan(st[j]));
                     ray.pos[k] = fmaf(st[j], ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = voxel_l[k]; // get l
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
@@ -215,8 +205,8 @@ __device__ __inline__ void trace_ray_surface(
             log_transmit = -1e3f;
             break;
         }
+
         t += opt.step_size;
-// NEXT_VOX:
 
     }
 
@@ -336,14 +326,11 @@ __device__ __inline__ void trace_ray_sigma_thresh(
     }
 }
 
-__device__ __inline__ void trace_ray_surface_backward(
+__device__ __inline__ void trace_ray_surf_trav_backward(
         const PackedSparseGridSpec& __restrict__ grid,
         const float* __restrict__ grad_output, // array[3], MSE gradient wrt rgb channel
         const float* __restrict__ color_cache,
         SingleRaySpec& __restrict__ ray,
-        const int32_t* __restrict__ voxel_ls,
-        const int32_t vox_start_i,
-        const int32_t vox_num,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
         const float* __restrict__ sphfunc_val,
@@ -384,25 +371,45 @@ __device__ __inline__ void trace_ray_surface_backward(
     float log_transmit = 0.f;
 
     // remat samples. Needed because individual rgb/sigma are not stored during forward pass
-    for (int v_i=0; v_i<vox_num; ++v_i){
-        // if (v_i==8){
-        //     printf("voxel found!!\n");
-        // }
+    int32_t last_voxel[] = {-1,-1,-1};
 
-        // skip voxel if any of the vertices is turned off
-        int offx = grid.stride_x, offy = grid.size[2];
+    while (t <= ray.tmax) {
+#pragma unroll 3
+        int32_t voxel_l[3];
+        for (int j = 0; j < 3; ++j) {
+            voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+            voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
+        }
 
-        const int32_t voxel_l[3] = {voxel_ls[3*(v_i+vox_start_i)+0], voxel_ls[3*(v_i+vox_start_i)+1], voxel_ls[3*(v_i+vox_start_i)+2]};
+        if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
+            // const float skip = compute_skip_dist(ray,
+            //             grid.links, grid.stride_x,
+            //             grid.size[2], 0);
 
-        // check if correct!
+                t += opt.step_size;
+                continue;
+        }
+
+        int const offx = grid.stride_x, offy = grid.size[2];
         const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
 
+        // skip voxel if any of the vertices is turned off
         if ((voxel_l[0] + 1 >= grid.size[0]) || (voxel_l[1] + 1 >= grid.size[1]) || (voxel_l[2] + 1 >= grid.size[2]) \
             || (link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) \
             || (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
         ){
+            // const float skip = compute_skip_dist(ray,
+            //             grid.links, grid.stride_x,
+            //             grid.size[2], 0);
+
+
+            t += opt.step_size;
             continue;
         }
+        
+        last_voxel[0] = voxel_l[0];
+        last_voxel[1] = voxel_l[1];
+        last_voxel[2] = voxel_l[2];
 
         // find intersections
         float const surface[8] = {
@@ -458,7 +465,7 @@ __device__ __inline__ void trace_ray_surface_backward(
 
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
-                    assert(!isnan(st[st_id]));
+                    // assert(!isnan(st[st_id]));
                     ray.pos[k] = fmaf(st[st_id], ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = voxel_l[k]; // get l
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
@@ -519,7 +526,7 @@ __device__ __inline__ void trace_ray_surface_backward(
                     // d_mse/d_ci in the final computed color is within clamp range, compute proper gradient 
                     const float  grad_common = weight * color_in_01 * gout; 
                     // gradient wrt sh coefficient (d_mse/d_sh)
-                    const float volatile curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
+                    const float  curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
 
                     // if (grid.basis_type != BASIS_TYPE_SH) {
                     //     float curr_grad_sphfunc = lane_color * grad_common;
@@ -591,7 +598,7 @@ __device__ __inline__ void trace_ray_surface_backward(
                                     curr_grad_raw_alpha, grad_xyz);
 
                         // grad_xyz is now d_mse/d_xyz
-                        float const volatile grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
+                        float const grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
                         assert(!isnan(grad_st));
 
                         // grad_st is now d_mse/d_t
@@ -651,83 +658,83 @@ __device__ __inline__ void trace_ray_surface_backward(
 
                         }else{
                             // macros for cubic gradient
-                            double const volatile norm_term = static_cast<double>(fs[3]);
-                            double const volatile a = static_cast<double>(fs[3]) / norm_term;
-                            double const volatile b = static_cast<double>(fs[2]) / norm_term;
-                            double const volatile c = static_cast<double>(fs[1]) / norm_term;
-                            double const volatile d = static_cast<double>(fs[0]) / norm_term;
+                            double const  norm_term = static_cast<double>(fs[3]);
+                            double const  a = static_cast<double>(fs[3]) / norm_term;
+                            double const  b = static_cast<double>(fs[2]) / norm_term;
+                            double const  c = static_cast<double>(fs[1]) / norm_term;
+                            double const  d = static_cast<double>(fs[0]) / norm_term;
 
-                            // #define __Db_Df3 ((-fs[2]) / fs[3] / fs[3])
-                            // #define __Db_Df2 (1. / fs[3])
-                            // #define __Db_Df1 (0.)
-                            // #define __Db_Df0 (0.)
-                            // #define __Dc_Df3 ((-fs[1]) / fs[3] / fs[3])
-                            // #define __Dc_Df2 (0.)
-                            // #define __Dc_Df1 (1. / fs[3])
-                            // #define __Dc_Df0 (0.)
-                            // #define __Dd_Df3 ((-fs[0]) / fs[3] / fs[3])
-                            // #define __Dd_Df2 (0.)
-                            // #define __Dd_Df1 (0.)
-                            // #define __Dd_Df0 (1. / fs[3])
-                            double const volatile __Db_Df3 = ((-fs[2]) / fs[3] / fs[3]);
-                            double const volatile __Db_Df2 = (1. / fs[3]);
-                            double const volatile __Db_Df1 = (0.);
-                            double const volatile __Db_Df0 = (0.);
-                            double const volatile __Dc_Df3 = ((-fs[1]) / fs[3] / fs[3]);
-                            double const volatile __Dc_Df2 = (0.);
-                            double const volatile __Dc_Df1 = (1. / fs[3]);
-                            double const volatile __Dc_Df0 = (0.);
-                            double const volatile __Dd_Df3 = ((-fs[0]) / fs[3] / fs[3]);
-                            double const volatile __Dd_Df2 = (0.);
-                            double const volatile __Dd_Df1 = (0.);
-                            double const volatile __Dd_Df0 = (1. / fs[3]);
+                            #define __Db_Df3 ((-fs[2]) / fs[3] / fs[3])
+                            #define __Db_Df2 (1. / fs[3])
+                            #define __Db_Df1 (0.)
+                            #define __Db_Df0 (0.)
+                            #define __Dc_Df3 ((-fs[1]) / fs[3] / fs[3])
+                            #define __Dc_Df2 (0.)
+                            #define __Dc_Df1 (1. / fs[3])
+                            #define __Dc_Df0 (0.)
+                            #define __Dd_Df3 ((-fs[0]) / fs[3] / fs[3])
+                            #define __Dd_Df2 (0.)
+                            #define __Dd_Df1 (0.)
+                            #define __Dd_Df0 (1. / fs[3])
+                            // double const volatile __Db_Df3 = ((-fs[2]) / fs[3] / fs[3]);
+                            // double const volatile __Db_Df2 = (1. / fs[3]);
+                            // double const volatile __Db_Df1 = (0.);
+                            // double const volatile __Db_Df0 = (0.);
+                            // double const volatile __Dc_Df3 = ((-fs[1]) / fs[3] / fs[3]);
+                            // double const volatile __Dc_Df2 = (0.);
+                            // double const volatile __Dc_Df1 = (1. / fs[3]);
+                            // double const volatile __Dc_Df0 = (0.);
+                            // double const volatile __Dd_Df3 = ((-fs[0]) / fs[3] / fs[3]);
+                            // double const volatile __Dd_Df2 = (0.);
+                            // double const volatile __Dd_Df1 = (0.);
+                            // double const volatile __Dd_Df0 = (1. / fs[3]);
 
-                            double const volatile f = ((3.*c/a) - (_SQR(b) / _SQR(a))) / 3.;                      
-                            double const volatile g = (((2.*_CUBIC(b)) / _CUBIC(a)) - ((9.*b*c) / _SQR(a)) + (27.*d/a)) / 27.;                 
-                            double const volatile h = (_SQR(g) / 4. + _CUBIC(f) / 27.);
+                            double const  f = ((3.*c/a) - (_SQR(b) / _SQR(a))) / 3.;                      
+                            double const  g = (((2.*_CUBIC(b)) / _CUBIC(a)) - ((9.*b*c) / _SQR(a)) + (27.*d/a)) / 27.;                 
+                            double const  h = (_SQR(g) / 4. + _CUBIC(f) / 27.);
 
-                            // #define __Df_Db (-2.*b/(3.*_SQR(a)))
-                            // #define __Df_Dc (1./a)
-                            // #define __Df_Dd (0.)
-                            // #define __Dg_Db (-c/(3.*_SQR(a)) + 2.*_SQR(b)/(9.*_CUBIC(a)))
-                            // #define __Dg_Dc (-b/(3.*_SQR(a)))
-                            // #define __Dg_Dd (1./a)
+                            #define __Df_Db (-2.*b/(3.*_SQR(a)))
+                            #define __Df_Dc (1./a)
+                            #define __Df_Dd (0.)
+                            #define __Dg_Db (-c/(3.*_SQR(a)) + 2.*_SQR(b)/(9.*_CUBIC(a)))
+                            #define __Dg_Dc (-b/(3.*_SQR(a)))
+                            #define __Dg_Dd (1./a)
 
-                            // #define __Dh_Df (_SQR(f)/9.)
-                            // #define __Dh_Dg (g/2.)
-                            // #define __Dh_Db (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db)
-                            // #define __Dh_Dc (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc)
-                            // #define __Dh_Dd (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd)
+                            #define __Dh_Df (_SQR(f)/9.)
+                            #define __Dh_Dg (g/2.)
+                            #define __Dh_Db (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db)
+                            #define __Dh_Dc (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc)
+                            #define __Dh_Dd (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd)
                             
-                            // #define __Dg_Df3 (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3)
-                            // #define __Dg_Df2 (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2)
-                            // #define __Dg_Df1 (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1)
-                            // #define __Dg_Df0 (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0)
-                            // #define __Dh_Df3 (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3)
-                            // #define __Dh_Df2 (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2)
-                            // #define __Dh_Df1 (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1)
-                            // #define __Dh_Df0 (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0)
-                            double const volatile __Df_Db = (-2.*b/(3.*_SQR(a)));
-                            double const volatile __Df_Dc = (1./a);
-                            double const volatile __Df_Dd = (0.);
-                            double const volatile __Dg_Db = (-c/(3.*_SQR(a)) + 2.*_SQR(b)/(9.*_CUBIC(a)));
-                            double const volatile __Dg_Dc = (-b/(3.*_SQR(a)));
-                            double const volatile __Dg_Dd = (1./a);
+                            #define __Dg_Df3 (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3)
+                            #define __Dg_Df2 (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2)
+                            #define __Dg_Df1 (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1)
+                            #define __Dg_Df0 (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0)
+                            #define __Dh_Df3 (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3)
+                            #define __Dh_Df2 (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2)
+                            #define __Dh_Df1 (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1)
+                            #define __Dh_Df0 (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0)
+                            // double const volatile __Df_Db = (-2.*b/(3.*_SQR(a)));
+                            // double const volatile __Df_Dc = (1./a);
+                            // double const volatile __Df_Dd = (0.);
+                            // double const volatile __Dg_Db = (-c/(3.*_SQR(a)) + 2.*_SQR(b)/(9.*_CUBIC(a)));
+                            // double const volatile __Dg_Dc = (-b/(3.*_SQR(a)));
+                            // double const volatile __Dg_Dd = (1./a);
 
-                            double const volatile __Dh_Df = (_SQR(f)/9.);
-                            double const volatile __Dh_Dg = (g/2.);
-                            double const volatile __Dh_Db = (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db);
-                            double const volatile __Dh_Dc = (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc);
-                            double const volatile __Dh_Dd = (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd);
+                            // double const volatile __Dh_Df = (_SQR(f)/9.);
+                            // double const volatile __Dh_Dg = (g/2.);
+                            // double const volatile __Dh_Db = (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db);
+                            // double const volatile __Dh_Dc = (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc);
+                            // double const volatile __Dh_Dd = (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd);
 
-                            double const volatile __Dg_Df3 = (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3);
-                            double const volatile __Dg_Df2 = (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2);
-                            double const volatile __Dg_Df1 = (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1);
-                            double const volatile __Dg_Df0 = (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0);
-                            double const volatile __Dh_Df3 = (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3);
-                            double const volatile __Dh_Df2 = (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2);
-                            double const volatile __Dh_Df1 = (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1);
-                            double const volatile __Dh_Df0 = (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0);
+                            // double const volatile __Dg_Df3 = (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3);
+                            // double const volatile __Dg_Df2 = (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2);
+                            // double const volatile __Dg_Df1 = (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1);
+                            // double const volatile __Dg_Df0 = (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0);
+                            // double const volatile __Dh_Df3 = (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3);
+                            // double const volatile __Dh_Df2 = (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2);
+                            // double const volatile __Dh_Df1 = (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1);
+                            // double const volatile __Dh_Df0 = (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0);
 
 
                             if (cubic_root_type == CUBIC_TYPE_CUBIC_ONE_R){
@@ -811,33 +818,33 @@ __device__ __inline__ void trace_ray_surface_backward(
 
                             }else{
                                 // CUBIC_TYPE_CUBIC_ONE_R_: cubic with a single real root
-                                double const volatile _R = -(g / 2.) + sqrt(h);
-                                double const volatile _S = _COND_CBRT(_R);
+                                double const  _R = -(g / 2.) + sqrt(h);
+                                double const  _S = _COND_CBRT(_R);
 
-                                double const volatile _T = -(g / 2.) - sqrt(h);
-                                double const volatile _U = _COND_CBRT(_T);
+                                double const  _T = -(g / 2.) - sqrt(h);
+                                double const  _U = _COND_CBRT(_T);
 
                                 // #define Dst_DS (1)
                                 // #define Dst_DU (1)
                                 // #define DS_DR (_D_COND_CBRT(_R))
                                 // #define DU_DT (_D_COND_CBRT(_T))
 
-                                // #define __Dst_DR (_D_COND_CBRT(_R))
-                                // #define __Dst_DT (_D_COND_CBRT(_T))
-                                // #define __Dst_Db_ (-1./(3.*a))
+                                #define __Dst_DR (_D_COND_CBRT(_R))
+                                #define __Dst_DT (_D_COND_CBRT(_T))
+                                #define __Dst_Db_ (-1./(3.*a))
 
-                                // #define __DR_Dh (1./(2.*sqrt(h)))
-                                // #define __DR_Dg (-0.5)
-                                // #define __DT_Dh (-1./(2.*sqrt(h)))
-                                // #define __DT_Dg (-0.5)
-                                double const volatile __Dst_DR = (_D_COND_CBRT(_R));
-                                double const volatile __Dst_DT = (_D_COND_CBRT(_T));
-                                double const volatile __Dst_Db_ = (-1./(3.*a));
+                                #define __DR_Dh (1./(2.*sqrt(h)))
+                                #define __DR_Dg (-0.5)
+                                #define __DT_Dh (-1./(2.*sqrt(h)))
+                                #define __DT_Dg (-0.5)
+                                // double const volatile __Dst_DR = (_D_COND_CBRT(_R));
+                                // double const volatile __Dst_DT = (_D_COND_CBRT(_T));
+                                // double const volatile __Dst_Db_ = (-1./(3.*a));
 
-                                double const volatile __DR_Dh = (1./(2.*sqrt(h)));
-                                double const volatile __DR_Dg = (-0.5);
-                                double const volatile __DT_Dh = (-1./(2.*sqrt(h)));
-                                double const volatile __DT_Dg = (-0.5);
+                                // double const volatile __DR_Dh = (1./(2.*sqrt(h)));
+                                // double const volatile __DR_Dg = (-0.5);
+                                // double const volatile __DT_Dh = (-1./(2.*sqrt(h)));
+                                // double const volatile __DT_Dg = (-0.5);
 
                                 grad_fs[0] *= static_cast<float>(
                                     __Dst_DR * (__DR_Dg * __Dg_Df0 
@@ -927,35 +934,35 @@ __device__ __inline__ void trace_ray_surface_backward(
                             + grad_fs[2] * (ray.dir[0]*(ray.dir[1]*(-ray.l[2] + ray.origin[2]) + ray.dir[2]*(-ray.l[1] + ray.origin[1])) + ray.dir[1]*ray.dir[2]*(-ray.l[0] + ray.origin[0]))
                             + grad_fs[3] * (ray.dir[0]*ray.dir[1]*ray.dir[2]);
 
-                        if (isnan(grad_surface[0b000])){
-                            printf("!grad_fs[0]: %f\n", grad_fs[0]);
-                            printf("grad_fs[1]: %f\n", grad_fs[1]);
-                            printf("grad_fs[2]: %f\n", grad_fs[2]);
-                            printf("grad_fs[3]: %f\n", grad_fs[3]);
+                        // if (isnan(grad_surface[0b000])){
+                        //     printf("!grad_fs[0]: %f\n", grad_fs[0]);
+                        //     printf("grad_fs[1]: %f\n", grad_fs[1]);
+                        //     printf("grad_fs[2]: %f\n", grad_fs[2]);
+                        //     printf("grad_fs[3]: %f\n", grad_fs[3]);
 
-                            printf("ray.l[0]: %f\n", ray.l[0]);
-                            printf("ray.l[1]: %f\n", ray.l[1]);
-                            printf("ray.l[2]: %f\n", ray.l[2]);
+                        //     printf("ray.l[0]: %f\n", ray.l[0]);
+                        //     printf("ray.l[1]: %f\n", ray.l[1]);
+                        //     printf("ray.l[2]: %f\n", ray.l[2]);
 
-                            printf("ray.origin[0]: %f\n", ray.origin[0]);
-                            printf("ray.origin[1]: %f\n", ray.origin[1]);
-                            printf("ray.origin[2]: %f\n", ray.origin[2]);
+                        //     printf("ray.origin[0]: %f\n", ray.origin[0]);
+                        //     printf("ray.origin[1]: %f\n", ray.origin[1]);
+                        //     printf("ray.origin[2]: %f\n", ray.origin[2]);
 
-                            printf("ray.dir[0]: %f\n", ray.dir[0]);
-                            printf("ray.dir[1]: %f\n", ray.dir[1]);
-                            printf("ray.dir[2]: %f\n", ray.dir[2]);
+                        //     printf("ray.dir[0]: %f\n", ray.dir[0]);
+                        //     printf("ray.dir[1]: %f\n", ray.dir[1]);
+                        //     printf("ray.dir[2]: %f\n", ray.dir[2]);
 
-                            assert(!isnan(grad_surface[0b000]));
-                        }
+                        //     assert(!isnan(grad_surface[0b000]));
+                        // }
 
-                        assert(!isnan(grad_surface[0b000]));
-                        assert(!isnan(grad_surface[0b001]));
-                        assert(!isnan(grad_surface[0b010]));
-                        assert(!isnan(grad_surface[0b011]));
-                        assert(!isnan(grad_surface[0b100]));
-                        assert(!isnan(grad_surface[0b101]));
-                        assert(!isnan(grad_surface[0b110]));
-                        assert(!isnan(grad_surface[0b111]));
+                        // assert(!isnan(grad_surface[0b000]));
+                        // assert(!isnan(grad_surface[0b001]));
+                        // assert(!isnan(grad_surface[0b010]));
+                        // assert(!isnan(grad_surface[0b011]));
+                        // assert(!isnan(grad_surface[0b100]));
+                        // assert(!isnan(grad_surface[0b101]));
+                        // assert(!isnan(grad_surface[0b110]));
+                        // assert(!isnan(grad_surface[0b111]));
 
                         const int offx = grid.stride_x;
                         const int offy = grid.size[2];
@@ -965,6 +972,9 @@ __device__ __inline__ void trace_ray_surface_backward(
                                     if (grads.mask_out != nullptr) \
                                         grads.mask_out[link_ptr[u]] = true; \
                                 }
+
+                        // const int volatile ray_l[] = {ray.l[0], ray.l[1], ray.l[2]};
+                        // const int32_t* volatile links = grid.links;
 
                         MAYBE_ADD_LINK(0, grad_surface[0b000]);
                         MAYBE_ADD_LINK(1, grad_surface[0b001]);
@@ -1236,7 +1246,6 @@ __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_kernel(
         PackedSparseGridSpec grid,
         PackedRaysSpec rays,
-        PackedRayVoxIntersecSpec ray_vox,
         RenderOptions opt,
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out,
         float* __restrict__ log_transmit_out = nullptr) {
@@ -1264,12 +1273,9 @@ __global__ void render_ray_kernel(
     __syncwarp((1U << grid.sh_data_dim) - 1); // make sure all rays are loaded and sh computed?
 
 
-    trace_ray_surface(
+    trace_ray_surf_trav(
         grid,
         ray_spec[ray_blk_id],
-        ray_vox.voxel_ls.data(),
-        ray_vox.vox_start_i[ray_id],
-        ray_vox.vox_num[ray_id],
         // ray_vox,
         opt,
         lane_id,
@@ -1284,7 +1290,6 @@ __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_image_kernel(
         PackedSparseGridSpec grid,
         PackedCameraSpec cam,
-        PackedRayVoxIntersecSpec ray_vox,
         RenderOptions opt,
         float* __restrict__ out,
         float* __restrict__ log_transmit_out = nullptr) {
@@ -1312,12 +1317,9 @@ __global__ void render_ray_image_kernel(
     ray_find_bounds(ray_spec[ray_blk_id], grid, opt, ray_id);
     __syncwarp((1U << grid.sh_data_dim) - 1);
 
-    trace_ray_surface(
+    trace_ray_surf_trav(
         grid,
         ray_spec[ray_blk_id],
-        ray_vox.voxel_ls.data(),
-        ray_vox.vox_start_i[ray_id],
-        ray_vox.vox_num[ray_id],
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
@@ -1332,7 +1334,6 @@ __global__ void render_ray_backward_kernel(
     const float* __restrict__ grad_output,
     const float* __restrict__ color_cache, // predict rgb
     PackedRaysSpec rays,
-    PackedRayVoxIntersecSpec ray_vox,
     RenderOptions opt,
     bool grad_out_is_rgb,
     const float* __restrict__ log_transmit_in,
@@ -1386,14 +1387,11 @@ __global__ void render_ray_backward_kernel(
     }
 
     __syncwarp((1U << grid.sh_data_dim) - 1);
-    trace_ray_surface_backward(
+    trace_ray_surf_trav_backward(
         grid,
         grad_out,
         color_cache + ray_id * 3,
         ray_spec[ray_blk_id],
-        ray_vox.voxel_ls.data(),
-        ray_vox.vox_start_i[ray_id],
-        ray_vox.vox_num[ray_id],
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],
@@ -1557,11 +1555,10 @@ torch::Tensor _get_empty_1d(const torch::Tensor& origins) {
 
 }  // namespace
 
-torch::Tensor volume_render_surface(SparseGridSpec& grid, RaysSpec& rays, RayVoxIntersecSpec& ray_vox, RenderOptions& opt) {
+torch::Tensor volume_render_surf_trav(SparseGridSpec& grid, RaysSpec& rays, RenderOptions& opt) {
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     rays.check();
-    ray_vox.check();
 
 
     const auto Q = rays.origins.size(0);
@@ -1579,7 +1576,7 @@ torch::Tensor volume_render_surface(SparseGridSpec& grid, RaysSpec& rays, RayVox
         const int cuda_n_threads = TRACE_RAY_CUDA_THREADS;
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads);
         device::render_ray_kernel<<<blocks, cuda_n_threads>>>(
-                grid, rays, ray_vox, opt,
+                grid, rays, opt,
                 // Output
                 results.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 use_background ? log_transmit.data_ptr<float>() : nullptr);
@@ -1652,10 +1649,9 @@ torch::Tensor volume_render_surface(SparseGridSpec& grid, RaysSpec& rays, RayVox
 //     return results;
 // }
 
-void volume_render_surface_backward(
+void volume_render_surf_trav_backward(
         SparseGridSpec& grid,
         RaysSpec& rays,
-        RayVoxIntersecSpec& ray_vox,
         RenderOptions& opt,
         torch::Tensor grad_out,
         torch::Tensor color_cache,
@@ -1664,7 +1660,6 @@ void volume_render_surface_backward(
     DEVICE_GUARD(grid.sh_data);
     grid.check();
     rays.check();
-    ray_vox.check();
     grads.check();
     const auto Q = rays.origins.size(0);
 
@@ -1684,7 +1679,7 @@ void volume_render_surface_backward(
                     grid,
                     grad_out.data_ptr<float>(),
                     color_cache.data_ptr<float>(),
-                    rays, ray_vox, opt,
+                    rays, opt,
                     false,
                     nullptr,
                     0.f,
@@ -1714,10 +1709,9 @@ void volume_render_surface_backward(
     CUDA_CHECK_ERRORS;
 }
 
-void volume_render_surface_fused(
+void volume_render_surf_trav_fused(
         SparseGridSpec& grid,
         RaysSpec& rays,
-        RayVoxIntersecSpec& ray_vox,
         RenderOptions& opt,
         torch::Tensor rgb_gt,
         float beta_loss, // beta loss and sparsity loss are just weights for those loss
@@ -1730,7 +1724,6 @@ void volume_render_surface_fused(
     CHECK_INPUT(rgb_out);
     grid.check();
     rays.check();
-    ray_vox.check();
     grads.check();
     const auto Q = rays.origins.size(0);
 
@@ -1748,7 +1741,7 @@ void volume_render_surface_fused(
     {
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_CUDA_THREADS);
         device::render_ray_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
-                grid, rays, ray_vox, opt,
+                grid, rays, opt,
                 // Output
                 rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(), // <dtype, dim, __restrict__>
                 need_log_transmit ? log_transmit.data_ptr<float>() : nullptr);
@@ -1770,7 +1763,7 @@ void volume_render_surface_fused(
                 grid,
                 rgb_gt.data_ptr<float>(),
                 rgb_out.data_ptr<float>(),
-                rays, ray_vox, opt,
+                rays, opt,
                 true,
                 beta_loss > 0.f ? log_transmit.data_ptr<float>() : nullptr,
                 beta_loss / Q,
@@ -1800,45 +1793,45 @@ void volume_render_surface_fused(
     CUDA_CHECK_ERRORS;
 }
 
-torch::Tensor volume_render_expected_term_surface(SparseGridSpec& grid,
-        RaysSpec& rays, RenderOptions& opt) {
-    auto options =
-        torch::TensorOptions()
-        .dtype(rays.origins.dtype())
-        .layout(torch::kStrided)
-        .device(rays.origins.device())
-        .requires_grad(false);
-    torch::Tensor results = torch::empty({rays.origins.size(0)}, options);
-    const auto Q = rays.origins.size(0);
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
-    device::render_ray_expected_term_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
-            grid,
-            rays,
-            opt,
-            results.data_ptr<float>()
-        );
-    return results;
-}
+// torch::Tensor volume_render_expected_term_surf_trav(SparseGridSpec& grid,
+//         RaysSpec& rays, RenderOptions& opt) {
+//     auto options =
+//         torch::TensorOptions()
+//         .dtype(rays.origins.dtype())
+//         .layout(torch::kStrided)
+//         .device(rays.origins.device())
+//         .requires_grad(false);
+//     torch::Tensor results = torch::empty({rays.origins.size(0)}, options);
+//     const auto Q = rays.origins.size(0);
+//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
+//     device::render_ray_expected_term_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+//             grid,
+//             rays,
+//             opt,
+//             results.data_ptr<float>()
+//         );
+//     return results;
+// }
 
-torch::Tensor volume_render_sigma_thresh_surface(SparseGridSpec& grid,
-        RaysSpec& rays,
-        RenderOptions& opt,
-        float sigma_thresh) {
-    auto options =
-        torch::TensorOptions()
-        .dtype(rays.origins.dtype())
-        .layout(torch::kStrided)
-        .device(rays.origins.device())
-        .requires_grad(false);
-    torch::Tensor results = torch::empty({rays.origins.size(0)}, options);
-    const auto Q = rays.origins.size(0);
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
-    device::render_ray_sigma_thresh_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
-            grid,
-            rays,
-            opt,
-            sigma_thresh,
-            results.data_ptr<float>()
-        );
-    return results;
-}
+// torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec& grid,
+//         RaysSpec& rays,
+//         RenderOptions& opt,
+//         float sigma_thresh) {
+//     auto options =
+//         torch::TensorOptions()
+//         .dtype(rays.origins.dtype())
+//         .layout(torch::kStrided)
+//         .device(rays.origins.device())
+//         .requires_grad(false);
+//     torch::Tensor results = torch::empty({rays.origins.size(0)}, options);
+//     const auto Q = rays.origins.size(0);
+//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
+//     device::render_ray_sigma_thresh_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+//             grid,
+//             rays,
+//             opt,
+//             sigma_thresh,
+//             results.data_ptr<float>()
+//         );
+//     return results;
+// }
