@@ -1,5 +1,6 @@
 # Script modified from https://github.com/jzhangbs/DTUeval-python
 
+from genericpath import isdir
 import numpy as np
 import open3d as o3d
 import sklearn.neighbors as skln
@@ -7,6 +8,7 @@ from tqdm import tqdm
 from scipy.io import loadmat
 import multiprocessing as mp
 import argparse
+import os
 
 def sample_single_tri(input_):
     n1, n2, v1, v2, tri_vert = input_
@@ -36,13 +38,18 @@ if __name__ == '__main__':
     parser.add_argument('--patch_size', type=float, default=60)
     parser.add_argument('--max_dist', type=float, default=20)
     parser.add_argument('--visualize_threshold', type=float, default=10)
+    parser.add_argument('--out_dir', type=str, default=None)
     args = parser.parse_args()
 
     thresh = args.downsample_density
 
     pbar = tqdm(total=8)
     pbar.set_description('read data pcd')
-    data_pcd = np.load(f'{args.pts_dir}/pts.npy')
+    if os.path.isdir(args.pts_dir):
+        data_pcd = np.load(f'{args.pts_dir}/pts.npy')
+    else:
+        data_pcd = np.load(args.pts_dir)
+
 
     pbar.update(1)
     pbar.set_description('random shuffle pcd index')
@@ -101,6 +108,7 @@ if __name__ == '__main__':
     dist_s2d, idx_s2d = nn_engine.kneighbors(stl_above, n_neighbors=1, return_distance=True)
     mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
 
+
     pbar.update(1)
     pbar.set_description('visualize error')
     vis_dist = args.visualize_threshold
@@ -112,20 +120,22 @@ if __name__ == '__main__':
     data_alpha = dist_d2s.clip(max=vis_dist) / vis_dist
     data_color[ np.where(inbound)[0][grid_inbound][in_obs] ] = R * data_alpha + W * (1-data_alpha)
     data_color[ np.where(inbound)[0][grid_inbound][in_obs][dist_d2s[:,0] >= max_dist] ] = G
-    write_vis_pcd(f'{args.pts_dir}/vis_{args.scan:03}_d2s.ply', data_down, data_color)
     stl_color = np.tile(B, (stl.shape[0], 1))
     stl_alpha = dist_s2d.clip(max=vis_dist) / vis_dist
     stl_color[ np.where(above)[0] ] = R * stl_alpha + W * (1-stl_alpha)
     stl_color[ np.where(above)[0][dist_s2d[:,0] >= max_dist] ] = G
-    write_vis_pcd(f'{args.pts_dir}/vis_{args.scan:03}_s2d.ply', stl, stl_color)
-
     pbar.update(1)
     pbar.set_description('done')
     pbar.close()
     over_all = (mean_d2s + mean_s2d) / 2
     print(mean_d2s, mean_s2d, over_all)
+    if args.out_dir is not None:
+        os.makedirs(args.out_dir, exist_ok=True)
+        write_vis_pcd(f'{args.out_dir}/vis_{args.scan:03}_d2s.ply', data_down, data_color)
+        write_vis_pcd(f'{args.out_dir}/vis_{args.scan:03}_s2d.ply', stl, stl_color)
 
-    with open(f'{args.pts_dir}/cf.txt', 'w') as f:
-        f.write(f'Mean d2s: {mean_d2s}\n')
-        f.write(f'Mean s2d: {mean_s2d}\n')
-        f.write(f'Over all: {over_all}\n')
+
+        with open(f'{args.out_dir}/cf.txt', 'w') as f:
+            f.write(f'Mean d2s: {mean_d2s}\n')
+            f.write(f'Mean s2d: {mean_s2d}\n')
+            f.write(f'Over all: {over_all}\n')
