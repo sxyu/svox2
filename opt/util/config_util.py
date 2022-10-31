@@ -79,7 +79,7 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          default=1.0,
                          help="Brightness of the infinite background")
     group.add_argument('--renderer_backend', '-B',
-                         choices=['cuvol', 'svox1', 'nvol'],
+                         choices=['cuvol', 'svox1', 'nvol', 'surface', 'surf_trav'],
                          default='cuvol',
                          help="Renderer backend")
     group.add_argument('--surface_type',

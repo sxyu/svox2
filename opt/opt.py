@@ -437,7 +437,7 @@ while True:
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
 
-            #  with Timing("volrend_fused"):
+            # with Timing("Fused pass"):
             if not USE_KERNEL:
                 if args.surface_type != 'none':
                     out = grid._surface_render_gradcheck_lerp(rays, rgb_gt,
@@ -452,12 +452,14 @@ while True:
                 out = grid.volume_render_fused(rays, rgb_gt,
                         beta_loss=args.lambda_beta,
                         sparsity_loss=args.lambda_sparsity,
-                        randomize=args.enable_random)
+                        randomize=args.enable_random,
+                        no_surface=no_surface)
 
-            #  with Timing("loss_comp"):
+            # with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, out['rgb'])
 
             if not USE_KERNEL:
+                # with Timing("Backward pass"):
                 # # normalize surface gradient:
                 # mse.backward(retain_graph=True)
                 # # grid.surface_data.grad.max() / torch.prod((grid._scaling * grid._grid_size())).cuda()
@@ -567,6 +569,7 @@ while True:
 
 
             # Manual SGD/rmsprop step
+            # with Timing('Optimize step'):
             if gstep_id >= args.lr_fg_begin_step:
                 grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
                 if not no_surface:

@@ -8,6 +8,9 @@
 
 using torch::Tensor;
 
+// test functions
+Tensor test_cubic_root_grad(Tensor, Tensor, Tensor);
+
 std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor,
                                                      bool);
 void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
@@ -49,6 +52,13 @@ torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
                                           RenderOptions &);
 // Depth rendering based on sigma-threshold as in Dex-NeRF
 torch::Tensor volume_render_sigma_thresh(SparseGridSpec &, RaysSpec &,
+                                         RenderOptions &, float);
+
+// Expected termination (depth) rendering
+torch::Tensor volume_render_expected_term_surf_trav(SparseGridSpec &, RaysSpec &,
+                                          RenderOptions &);
+// Depth rendering based on sigma-threshold as in Dex-NeRF
+torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, float);
 
 // ** NV rendering formula (trilerp)
@@ -99,6 +109,7 @@ void sgd_step(Tensor, Tensor, Tensor, float, float);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 // macro for easily registering functions
 #define _REG_FUNC(funname) m.def(#funname, &funname)
+  _REG_FUNC(test_cubic_root_grad);
   _REG_FUNC(sample_grid);
   _REG_FUNC(sample_grid_backward);
   _REG_FUNC(volume_render_surface);
@@ -115,6 +126,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(volume_render_cuvol_fused);
   _REG_FUNC(volume_render_expected_term);
   _REG_FUNC(volume_render_sigma_thresh);
+  _REG_FUNC(volume_render_expected_term_surf_trav);
+  _REG_FUNC(volume_render_sigma_thresh_surf_trav);
 
   _REG_FUNC(volume_render_nvol);
   _REG_FUNC(volume_render_nvol_backward);

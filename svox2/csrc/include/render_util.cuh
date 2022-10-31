@@ -153,7 +153,7 @@ __device__ __inline__ void trilerp_backward_cuvol_one_density(
 }
 
 template<class data_type_t, class voxel_index_t>
-__device__ __inline__ float trilerp_backward_one_pos(
+__device__ __inline__ void trilerp_backward_one_pos(
         const int32_t* __restrict__ links,
         const data_type_t* __restrict__ data,
         int offx, int offy, size_t stride,
@@ -722,6 +722,633 @@ __device__ __inline__ void ray_find_bounds_bg(
     //     ray.rng.y = opt._m3 ^ (ray_id - 1);
     //     ray.rng.z = opt._m1 ^ (ray_id - 1);
     // }
+}
+
+
+
+__device__ __inline__ void surface_to_cubic_equation(
+    const float* __restrict__ surface,
+    const float* __restrict__ origin,
+    const float* __restrict__ dir,
+    const int32_t* __restrict__ l,
+    float* __restrict__ outs
+){
+
+    float const a00 = surface[0b000] * (1-origin[2]+l[2]) + surface[0b001] * (origin[2]-l[2]);
+    float const a01 = surface[0b010] * (1-origin[2]+l[2]) + surface[0b011] * (origin[2]-l[2]);
+    float const a10 = surface[0b100] * (1-origin[2]+l[2]) + surface[0b101] * (origin[2]-l[2]);
+    float const a11 = surface[0b110] * (1-origin[2]+l[2]) + surface[0b111] * (origin[2]-l[2]);
+
+    float const b00 = -surface[0b000] + surface[0b001];
+    float const b01 = -surface[0b010] + surface[0b011];
+    float const b10 = -surface[0b100] + surface[0b101];
+    float const b11 = -surface[0b110] + surface[0b111];
+
+    float const c0 = a00*(1-origin[1]+l[1]) + a01*(origin[1]-l[1]);
+    float const c1 = a10*(1-origin[1]+l[1]) + a11*(origin[1]-l[1]);
+
+    float const d0 = -(a00*dir[1] - dir[2]*b00*(1-origin[1]+l[1])) + (a01*dir[1] + dir[2]*b01*(origin[1]-l[1]));
+    float const d1 = -(a10*dir[1] - dir[2]*b10*(1-origin[1]+l[1])) + (a11*dir[1] + dir[2]*b11*(origin[1]-l[1]));
+
+    float const e0 = -dir[1]*dir[2]*b00 + dir[1]*dir[2]*b01;
+    float const e1 = -dir[1]*dir[2]*b10 + dir[1]*dir[2]*b11;
+
+    outs[3] = -e0*dir[0] + e1*dir[0];
+    outs[2] = -d0*dir[0]+e0*(1-origin[0]+l[0]) + d1*dir[0]+e1*(origin[0]-l[0]);
+    outs[1] = -c0*dir[0] + d0*(1-origin[0]+l[0]) + c1*dir[0] + d1*(origin[0]-l[0]);
+    outs[0] = c0*(1-origin[0]+l[0]) + c1*(origin[0]-l[0]);
+}
+
+
+__device__ __inline__ enum BasisType cubic_equation_solver(
+    float const f0,
+    float const f1,
+    float const f2,
+    float const f3,
+    float const eps,
+    double const eps_double,
+    float* __restrict__ outs
+){
+    if (_CLOSE_TO_ZERO(f3, eps)){
+        if (_CLOSE_TO_ZERO(f2, eps)){
+            if (_CLOSE_TO_ZERO(f1, eps)){
+                // no solution
+                return CUBIC_TYPE_NO_ROOT; 
+            } else {
+                // linear case
+                outs[0] = -f0 / f1;
+                assert(!isnan(outs[0]));
+                return CUBIC_TYPE_LINEAR;
+            }
+        } else {
+            // polynomial case
+            // _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
+            float const D = _SQR(f1) - 4.0 * f2 * f0;
+            float const sqrt_D = sqrtf(D);
+            if (D > 0){
+                if (f2 > 0){
+                    outs[0] = (-f1 - sqrt_D) / (2 * f2);
+                    outs[1] = (-f1 + sqrt_D) / (2 * f2);
+                }else{
+                    outs[0] = (-f1 + sqrt_D) / (2 * f2);
+                    outs[1] = (-f1 - sqrt_D) / (2 * f2);
+                }
+
+                // assert(!isnan(outs[0]));
+                // assert(!isnan(outs[1]));
+                if (_CLOSE_TO_ZERO(outs[0] - outs[1], eps)){
+                    // if two roots are too similiar (D==0), then just take one
+                    outs[1] = -1;
+                    return CUBIC_TYPE_POLY_ONE_R;
+                }
+                return CUBIC_TYPE_POLY;
+            }
+            return CUBIC_TYPE_NO_ROOT;
+        }
+    } else {
+        // cubic case
+        double const eps_double = 1e-10;
+        double const norm_term = static_cast<double>(f3);
+        double const a = static_cast<double>(f3) / norm_term;
+        double const b = static_cast<double>(f2) / norm_term;
+        double const c = static_cast<double>(f1) / norm_term;
+        double const d = static_cast<double>(f0) / norm_term;
+
+        double const f = ((3*c/a) - (_SQR(b) / _SQR(a))) / 3;                      
+        double const g = (((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27;                 
+        double const h = (_SQR(g) / 4 + _CUBIC(f) / 27);
+        // #define norm_term (static_cast<double>(f3))
+        // #define a (static_cast<double>(f3) / norm_term)
+        // #define b (static_cast<double>(f2) / norm_term)
+        // #define c (static_cast<double>(f1) / norm_term)
+        // #define d (static_cast<double>(f0) / norm_term)
+
+        // #define f (((3*c/a) - (_SQR(b) / _SQR(a))) / 3)
+        // #define g ((((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27)
+        // #define h ((_SQR(g) / 4 + _CUBIC(f) / 27))
+        // -inf + inf create nan!
+
+        if ((_CLOSE_TO_ZERO(f, eps_double)) & (_CLOSE_TO_ZERO(g, eps_double)) & (_CLOSE_TO_ZERO(h, eps_double))){
+            // all three roots are real and equal
+            outs[0] = static_cast<float>(_COND_CBRT(d/a));
+            // if ((isnan(outs[0])) | (!isfinite(outs[0]))){
+            //     printf("a=%f\n", a);
+            //     printf("b=%f\n", b);
+            //     printf("c=%f\n", c);
+            //     printf("d=%f\n", d);
+            //     printf("g=%f\n", g);
+            //     printf("h=%f\n", h);
+            //     printf("f=%f\n", f);
+            // }
+            // assert(!isnan(outs[0]));
+
+            return CUBIC_TYPE_CUBIC_ONE_R;
+
+        } else if (h <= 0){
+            // all three roots are real and distinct
+            // note that if h==0, gradient cannot be computed
+            if (h==0){
+                return CUBIC_TYPE_NO_ROOT;
+            }
+
+            double const _i = sqrt((_SQR(g) / 4.) - h);   
+            double const _j = cbrt(_i);
+            double const _k = acos(-(g / (2 * _i)));
+            double const _M = cos(_k / 3.);       
+            double const _N = sqrt(3) * sin(_k / 3.);
+            double const _P = (b / (3. * a)) * -1;         
+
+            // #define _i (sqrt((_SQR(g) / 4.) - h))
+            // #define _j (cbrt(_i))
+            // #define _k (acos(-(g / (2 * _i))))
+            // #define _M (cos(_k / 3.))
+            // #define _N (sqrt(3) * sin(_k / 3.))
+            // #define _P ((b / (3. * a)) * -1)
+
+            outs[0] = static_cast<float>(-1 *_j * (_M + _N) + _P);
+            outs[1] = static_cast<float>(-1 *_j * (_M - _N) + _P);
+            outs[2] = static_cast<float>(2 * _j * _M + _P);
+            // if (isnan(outs[0]) | isnan(outs[1]) | isnan(outs[2]) | (!isfinite(outs[0])) | (!isfinite(outs[1])) | (!isfinite(outs[2]))){
+            //     printf("a=%f\n", a);
+            //     printf("b=%f\n", b);
+            //     printf("c=%f\n", c);
+            //     printf("d=%f\n", d);
+            //     printf("g=%f\n", g);
+            //     printf("h=%f\n", h);
+            //     printf("f=%f\n", f);
+
+            //     printf("_i=%f\n", _i);
+            //     printf("_j=%f\n", _j);
+            //     printf("_k=%f\n", _k);
+            //     printf("_M=%f\n", _M);
+            //     printf("_N=%f\n", _N);
+            //     printf("_P=%f\n", _P);
+            // }
+            // assert(!isnan(outs[0]));
+            // assert(!isnan(outs[1]));
+            // assert(!isnan(outs[2]));
+
+            return CUBIC_TYPE_CUBIC_THREE_R;
+        } else {
+            // only one real root
+            double const _R = -(g / 2.) + sqrt(h);
+            double const _S = _COND_CBRT(_R);
+
+            double const _T = -(g / 2.) - sqrt(h);
+            double const _U = _COND_CBRT(_T);
+            // #define _R (-(g / 2.) + sqrt(h))
+            // #define _S (_COND_CBRT(_R))
+
+            // #define _T (-(g / 2.) - sqrt(h))
+            // #define _U (_COND_CBRT(_T))
+
+            outs[0] = static_cast<float>((_S + _U) - (b / (3. * a)));
+
+            // if ((isnan(outs[0])) | (!isfinite(outs[0]))){
+            //     printf("a=%f\n", a);
+            //     printf("b=%f\n", b);
+            //     printf("c=%f\n", c);
+            //     printf("d=%f\n", d);
+            //     printf("g=%f\n", g);
+            //     printf("h=%f\n", h);
+            //     printf("f=%f\n", f);
+            //     printf("_R=%f\n", _R);
+            //     printf("_S=%f\n", _S);
+            //     printf("_T=%f\n", _T);
+            //     printf("_U=%f\n", _U);
+            // }
+            //     assert(!isnan(outs[0]));
+
+            return CUBIC_TYPE_CUBIC_ONE_R_;
+        }
+
+    }
+}
+
+// #undef norm_term 
+// #undef a  
+// #undef b  
+// #undef c  
+// #undef d  
+
+// #undef f  
+// #undef g  
+// #undef h
+
+// #undef _i
+// #undef _j
+// #undef _k
+// #undef _M
+// #undef _N
+// #undef _P
+
+// #undef _R
+// #undef _S
+// #undef _T
+#undef _U
+
+__device__ __inline__ void calc_cubic_root_grad(
+    enum BasisType cubic_root_type,
+    int st_id,
+    float* __restrict__ const fs,
+    float* __restrict__ grad_fs // storing grad_st
+){
+    //////////////////////// Find Gradient of Cubic Root //////////////////////
+    if (cubic_root_type == CUBIC_TYPE_LINEAR){
+        // linear case
+        grad_fs[0] *= -1. / fs[1];
+        grad_fs[1] *= fs[0] / _SQR(fs[1]);
+        grad_fs[2] = 0;
+        grad_fs[3] = 0;
+
+    }else if (cubic_root_type == CUBIC_TYPE_POLY_ONE_R){
+        float const D = _SQR(fs[1]) - 4.0 * fs[2] * fs[0];
+        float const sqrt_D = sqrtf(D);
+        float const dt0_dD = 1 / (4*fs[2]*sqrt_D);
+        grad_fs[0] *= -1/sqrt_D;
+        grad_fs[1] *= ((-1) / (2*fs[2]) + (dt0_dD * 2 * fs[1]));
+        grad_fs[2] *= ((fs[1] - sqrt_D) / (4*_SQR(fs[2])) + (dt0_dD * (-4) * fs[0]));
+        grad_fs[3] = 0;
+
+    }else if (cubic_root_type == CUBIC_TYPE_POLY){
+        float const  D = _SQR(fs[1]) - 4.0 * fs[2] * fs[0];
+        float const  sqrt_D = sqrtf(D);
+        float const  sqr_f2 = _SQR(fs[2]);
+
+        if (fs[2] > 0){
+            if (st_id == 0){
+                // st[0] = (-f1 - sqrt_D) / (2 * f2);
+                float const dt_dD = -1 / (4*fs[2]*sqrt_D);
+                grad_fs[0] *= 1/sqrt_D;
+                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
+                grad_fs[2] *= ((fs[1] + sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+            }else{
+                // st[1] = (-f1 + sqrt_D) / (2 * f2);
+                float const dt_dD = 1 / (4*fs[2]*sqrt_D);
+                grad_fs[0] *= -1/sqrt_D;
+                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
+                grad_fs[2] *= ((fs[1] - sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+            }
+        }else{
+            if (st_id == 0){
+                // st[0] = (-f1 + sqrt_D) / (2 * f2);
+                float const dt_dD = 1 / (4*fs[2]*sqrt_D);
+                grad_fs[0] *= -1/sqrt_D;
+                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
+                grad_fs[2] *= ((fs[1] - sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+            }else{
+                // st[1] = (-f1 - sqrt_D) / (2 * f2);
+                float const dt_dD = -1 / (4*fs[2]*sqrt_D);
+                grad_fs[0] *= 1/sqrt_D;
+                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
+                grad_fs[2] *= ((fs[1] + sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+            }
+        }
+        grad_fs[3] = 0;
+
+    }else{
+        // macros for cubic gradient
+        double const  norm_term = static_cast<double>(fs[3]);
+        double const  a = static_cast<double>(fs[3]) / norm_term;
+        double const  b = static_cast<double>(fs[2]) / norm_term;
+        double const  c = static_cast<double>(fs[1]) / norm_term;
+        double const  d = static_cast<double>(fs[0]) / norm_term;
+
+        #define __Db_Df3 ((-fs[2]) / fs[3] / fs[3])
+        #define __Db_Df2 (1. / fs[3])
+        #define __Db_Df1 (0.)
+        #define __Db_Df0 (0.)
+        #define __Dc_Df3 ((-fs[1]) / fs[3] / fs[3])
+        #define __Dc_Df2 (0.)
+        #define __Dc_Df1 (1. / fs[3])
+        #define __Dc_Df0 (0.)
+        #define __Dd_Df3 ((-fs[0]) / fs[3] / fs[3])
+        #define __Dd_Df2 (0.)
+        #define __Dd_Df1 (0.)
+        #define __Dd_Df0 (1. / fs[3])
+        // double const volatile __Db_Df3 = ((-fs[2]) / fs[3] / fs[3]);
+        // double const volatile __Db_Df2 = (1. / fs[3]);
+        // double const volatile __Db_Df1 = (0.);
+        // double const volatile __Db_Df0 = (0.);
+        // double const volatile __Dc_Df3 = ((-fs[1]) / fs[3] / fs[3]);
+        // double const volatile __Dc_Df2 = (0.);
+        // double const volatile __Dc_Df1 = (1. / fs[3]);
+        // double const volatile __Dc_Df0 = (0.);
+        // double const volatile __Dd_Df3 = ((-fs[0]) / fs[3] / fs[3]);
+        // double const volatile __Dd_Df2 = (0.);
+        // double const volatile __Dd_Df1 = (0.);
+        // double const volatile __Dd_Df0 = (1. / fs[3]);
+
+        double const  f = ((3.*c/a) - (_SQR(b) / _SQR(a))) / 3.;                      
+        double const  g = (((2.*_CUBIC(b)) / _CUBIC(a)) - ((9.*b*c) / _SQR(a)) + (27.*d/a)) / 27.;                 
+        double const  h = (_SQR(g) / 4. + _CUBIC(f) / 27.);
+
+        #define __Df_Db (-2.*b/(3.*_SQR(a)))
+        #define __Df_Dc (1./a)
+        #define __Df_Dd (0.)
+        #define __Dg_Db (-c/(3.*_SQR(a)) + 2.*_SQR(b)/(9.*_CUBIC(a)))
+        #define __Dg_Dc (-b/(3.*_SQR(a)))
+        #define __Dg_Dd (1./a)
+
+        #define __Dh_Df (_SQR(f)/9.)
+        #define __Dh_Dg (g/2.)
+        #define __Dh_Db (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db)
+        #define __Dh_Dc (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc)
+        #define __Dh_Dd (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd)
+        
+        #define __Dg_Df3 (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3)
+        #define __Dg_Df2 (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2)
+        #define __Dg_Df1 (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1)
+        #define __Dg_Df0 (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0)
+        #define __Dh_Df3 (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3)
+        #define __Dh_Df2 (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2)
+        #define __Dh_Df1 (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1)
+        #define __Dh_Df0 (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0)
+        // double const volatile __Df_Db = (-2.*b/(3.*_SQR(a)));
+        // double const volatile __Df_Dc = (1./a);
+        // double const volatile __Df_Dd = (0.);
+        // double const volatile __Dg_Db = (-c/(3.*_SQR(a)) + 2.*_SQR(b)/(9.*_CUBIC(a)));
+        // double const volatile __Dg_Dc = (-b/(3.*_SQR(a)));
+        // double const volatile __Dg_Dd = (1./a);
+
+        // double const volatile __Dh_Df = (_SQR(f)/9.);
+        // double const volatile __Dh_Dg = (g/2.);
+        // double const volatile __Dh_Db = (__Dh_Df * __Df_Db + __Dh_Dg * __Dg_Db);
+        // double const volatile __Dh_Dc = (__Dh_Df * __Df_Dc + __Dh_Dg * __Dg_Dc);
+        // double const volatile __Dh_Dd = (__Dh_Df * __Df_Dd + __Dh_Dg * __Dg_Dd);
+
+        // double const volatile __Dg_Df3 = (__Dg_Db * __Db_Df3 + __Dg_Dc * __Dc_Df3 + __Dg_Dd * __Dd_Df3);
+        // double const volatile __Dg_Df2 = (__Dg_Db * __Db_Df2 + __Dg_Dc * __Dc_Df2 + __Dg_Dd * __Dd_Df2);
+        // double const volatile __Dg_Df1 = (__Dg_Db * __Db_Df1 + __Dg_Dc * __Dc_Df1 + __Dg_Dd * __Dd_Df1);
+        // double const volatile __Dg_Df0 = (__Dg_Db * __Db_Df0 + __Dg_Dc * __Dc_Df0 + __Dg_Dd * __Dd_Df0);
+        // double const volatile __Dh_Df3 = (__Dh_Db * __Db_Df3 + __Dh_Dc * __Dc_Df3 + __Dh_Dd * __Dd_Df3);
+        // double const volatile __Dh_Df2 = (__Dh_Db * __Db_Df2 + __Dh_Dc * __Dc_Df2 + __Dh_Dd * __Dd_Df2);
+        // double const volatile __Dh_Df1 = (__Dh_Db * __Db_Df1 + __Dh_Dc * __Dc_Df1 + __Dh_Dd * __Dd_Df1);
+        // double const volatile __Dh_Df0 = (__Dh_Db * __Db_Df0 + __Dh_Dc * __Dc_Df0 + __Dh_Dd * __Dd_Df0);
+
+
+        if (cubic_root_type == CUBIC_TYPE_CUBIC_ONE_R){
+            // cubic with three real and equal roots
+            double const d_con_cbrt = _D_COND_CBRT(d/a);
+            grad_fs[0] *= static_cast<float>(d_con_cbrt / a * __Dd_Df0); // a=1 can be further simplified
+            grad_fs[1] = 0;
+            grad_fs[2] = 0;
+            grad_fs[3] *= static_cast<float>(d_con_cbrt / a * __Dd_Df3);
+        }else if (cubic_root_type == CUBIC_TYPE_CUBIC_THREE_R){
+            // cubic with three real and distinct roots
+            double const  _i = sqrt((_SQR(g) / 4.) - h);   
+            double const  _j = cbrt(_i);
+            double const  _k = acos(-(g / (2. * _i)));
+            double const  _M = cos(_k/3.);
+            double const  _N = sqrt(3.) * sin(_k / 3.);
+            double const  _P = (b / (3. * a)) * -1.;   
+
+            #define __Dj_Dg (g/(12.* pow(_SQR(g)/4. - h, 5./6.)))
+            #define __Dj_Dh (-1./(6.* pow(_SQR(g)/4. - h, 5./6.)))
+
+            #define __Dk_Dg (-(_SQR(g)/(8.*pow(_SQR(g)/4. - h, 3./2.)) - 1./(2.*sqrt(_SQR(g)/4. - h)))/sqrt(-_SQR(g)/(4.*(_SQR(g)/4. - h)) + 1.))
+            #define __Dk_Dh (g/(4.*pow(_SQR(g)/4. - h, 3./2.)*sqrt(-_SQR(g)/(4.*(_SQR(g)/4. - h)) + 1.)))
+
+            
+            double  __Dst_Dj = 0.;
+            double  __Dst_Dk = 0.;
+            double  __Dst_Db_ = 0.;
+
+            if (st_id == 0){
+                // st[0]
+                __Dst_Dj = (-_M - _N);
+                __Dst_Dk = (-_j*(-sin(_k/3.)/3. + sqrt(3.)*_M/3.));
+                __Dst_Db_ = (-1./(3.*a));
+            }else if (st_id == 1){
+                // st[1]
+                __Dst_Dj = (-_M + _N);
+                __Dst_Dk = (-_j*(-sin(_k/3.)/3. - sqrt(3.)*_M/3.));
+                __Dst_Db_ = (-1./(3.*a));
+            }else{
+                // st[2]
+                __Dst_Dj = (2.*_M);
+                __Dst_Dk = (-2.*_j*sin(_k/3.)/3.);
+                __Dst_Db_ = (-1./(3.*a));
+            }
+
+
+            grad_fs[0] *= static_cast<float>(
+                __Dst_Dj * (__Dj_Dg * __Dg_Df0 
+                            +__Dj_Dh * __Dh_Df0) 
+                + __Dst_Dk * (__Dk_Dg * __Dg_Df0 
+                                +__Dk_Dh * __Dh_Df0) 
+                + __Dst_Db_ * __Db_Df0);
+
+            grad_fs[1] *= static_cast<float>(
+                __Dst_Dj * (__Dj_Dg * __Dg_Df1 
+                            +__Dj_Dh * __Dh_Df1) 
+                + __Dst_Dk * (__Dk_Dg * __Dg_Df1 
+                                +__Dk_Dh * __Dh_Df1) 
+                + __Dst_Db_ * __Db_Df1);
+
+            grad_fs[2] *= static_cast<float>(
+                __Dst_Dj * (__Dj_Dg * __Dg_Df2 
+                            +__Dj_Dh * __Dh_Df2) 
+                + __Dst_Dk * (__Dk_Dg * __Dg_Df2 
+                                +__Dk_Dh * __Dh_Df2) 
+                + __Dst_Db_ * __Db_Df2);
+
+            grad_fs[3] *= static_cast<float>(
+                __Dst_Dj * (__Dj_Dg * __Dg_Df3 
+                            +__Dj_Dh * __Dh_Df3) 
+                + __Dst_Dk * (__Dk_Dg * __Dg_Df3 
+                                +__Dk_Dh * __Dh_Df3) 
+                + __Dst_Db_ * __Db_Df3);
+
+            assert(!isnan(grad_fs[0]));
+            assert(!isnan(grad_fs[1]));
+            assert(!isnan(grad_fs[2]));
+            assert(!isnan(grad_fs[3]));
+
+
+        }else{
+            // CUBIC_TYPE_CUBIC_ONE_R_: cubic with a single real root
+            double const  _R = -(g / 2.) + sqrt(h);
+            double const  _S = _COND_CBRT(_R);
+
+            double const  _T = -(g / 2.) - sqrt(h);
+            double const  _U = _COND_CBRT(_T);
+
+            // #define Dst_DS (1)
+            // #define Dst_DU (1)
+            #define DS_DR (_D_COND_CBRT(_R))
+            #define DU_DT (_D_COND_CBRT(_T))
+
+            #define __Dst_DR (_D_COND_CBRT(_R))
+            #define __Dst_DT (_D_COND_CBRT(_T))
+            #define __Dst_Db_ (-1./(3.*a))
+
+            #define __DR_Dh (1./(2.*sqrt(h)))
+            #define __DR_Dg (-0.5)
+            #define __DT_Dh (-1./(2.*sqrt(h)))
+            #define __DT_Dg (-0.5)
+            // double const volatile __Dst_DR = (_D_COND_CBRT(_R));
+            // double const volatile __Dst_DT = (_D_COND_CBRT(_T));
+            // double const volatile __Dst_Db_ = (-1./(3.*a));
+
+            // double const volatile __DR_Dh = (1./(2.*sqrt(h)));
+            // double const volatile __DR_Dg = (-0.5);
+            // double const volatile __DT_Dh = (-1./(2.*sqrt(h)));
+            // double const volatile __DT_Dg = (-0.5);
+
+            grad_fs[0] *= static_cast<float>(
+                __Dst_DR * (__DR_Dg * __Dg_Df0 
+                            +__DR_Dh * __Dh_Df0) 
+                + __Dst_DT * (__DT_Dg * __Dg_Df0 
+                                +__DT_Dh * __Dh_Df0) 
+                + __Dst_Db_ * __Db_Df0);
+
+            grad_fs[1] *= static_cast<float>(
+                __Dst_DR * (__DR_Dg * __Dg_Df1 
+                            +__DR_Dh * __Dh_Df1) 
+                + __Dst_DT * (__DT_Dg * __Dg_Df1 
+                                +__DT_Dh * __Dh_Df1) 
+                + __Dst_Db_ * __Db_Df1);
+
+            grad_fs[2] *= static_cast<float>(
+                __Dst_DR * (__DR_Dg * __Dg_Df2 
+                            +__DR_Dh * __Dh_Df2) 
+                + __Dst_DT * (__DT_Dg * __Dg_Df2 
+                                +__DT_Dh * __Dh_Df2) 
+                + __Dst_Db_ * __Db_Df2);
+
+            grad_fs[3] *= static_cast<float>(
+                __Dst_DR * (__DR_Dg * __Dg_Df3 
+                            +__DR_Dh * __Dh_Df3) 
+                + __Dst_DT * (__DT_Dg * __Dg_Df3 
+                                +__DT_Dh * __Dh_Df3) 
+                + __Dst_Db_ * __Db_Df3);
+
+            assert(!isnan(grad_fs[0]));
+            assert(!isnan(grad_fs[1]));
+            assert(!isnan(grad_fs[2]));
+            assert(!isnan(grad_fs[3]));
+        }
+
+    }
+
+
+}
+
+__device__ __inline__ void calc_surface_grad(
+    const float* __restrict__ origin,
+    const float* __restrict__ dir,
+    const int32_t* __restrict__ l,
+    float* __restrict__ const grad_fs,
+    float* __restrict__ grad_surface
+){
+    grad_surface[0b000] = 
+            grad_fs[0] * ((l[0] - origin[0] + 1)*(l[1] - origin[1] + 1)*(l[2] - origin[2] + 1))
+        + grad_fs[1] * (dir[0]*(l[1] - origin[1] + 1)*(-l[2] + origin[2] - 1) + (-dir[1]*(l[2] - origin[2] + 1) - dir[2]*(l[1] - origin[1] + 1))*(l[0] - origin[0] + 1))
+        + grad_fs[2] * (dir[0]*(dir[1]*(l[2] - origin[2] + 1) + dir[2]*(l[1] - origin[1] + 1)) + dir[1]*dir[2]*(l[0] - origin[0] + 1))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b001] = 
+            grad_fs[0] * ((-l[2] + origin[2])*(l[0] - origin[0] + 1)*(l[1] - origin[1] + 1)) 
+        + grad_fs[1] * (dir[0]*(l[2] - origin[2])*(l[1] - origin[1] + 1) + (-dir[1]*(-l[2] + origin[2]) + dir[2]*(l[1] - origin[1] + 1))*(l[0] - origin[0] + 1))
+        + grad_fs[2] * (dir[0]*(dir[1]*(-l[2] + origin[2]) - dir[2]*(l[1] - origin[1] + 1)) - dir[1]*dir[2]*(l[0] - origin[0] + 1))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b010] = 
+            grad_fs[0] * ((-l[1] + origin[1])*(l[0] - origin[0] + 1)*(l[2] - origin[2] + 1)) 
+        + grad_fs[1] * (dir[0]*(l[1] - origin[1])*(l[2] - origin[2] + 1) + (dir[1]*(l[2] - origin[2] + 1) - dir[2]*(-l[1] + origin[1]))*(l[0] - origin[0] + 1))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(l[2] - origin[2] + 1) + dir[2]*(-l[1] + origin[1])) - dir[1]*dir[2]*(l[0] - origin[0] + 1))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b011] = 
+            grad_fs[0] * ((-l[1] + origin[1])*(-l[2] + origin[2])*(l[0] - origin[0] + 1)) 
+        + grad_fs[1] * (dir[0]*(l[1] - origin[1])*(-l[2] + origin[2]) + (dir[1]*(-l[2] + origin[2]) + dir[2]*(-l[1] + origin[1]))*(l[0] - origin[0] + 1))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(-l[2] + origin[2]) - dir[2]*(-l[1] + origin[1])) + dir[1]*dir[2]*(l[0] - origin[0] + 1))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b100] = 
+            grad_fs[0] * ((-l[0] + origin[0])*(l[1] - origin[1] + 1)*(l[2] - origin[2] + 1)) 
+        + grad_fs[1] * (dir[0]*(l[1] - origin[1] + 1)*(l[2] - origin[2] + 1) + (-l[0] + origin[0])*(-dir[1]*(l[2] - origin[2] + 1) - dir[2]*(l[1] - origin[1] + 1)))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(l[2] - origin[2] + 1) - dir[2]*(l[1] - origin[1] + 1)) + dir[1]*dir[2]*(-l[0] + origin[0]))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b101] = 
+            grad_fs[0] * ((-l[0] + origin[0])*(-l[2] + origin[2])*(l[1] - origin[1] + 1)) 
+        + grad_fs[1] * (dir[0]*(-l[2] + origin[2])*(l[1] - origin[1] + 1) + (-l[0] + origin[0])*(-dir[1]*(-l[2] + origin[2]) + dir[2]*(l[1] - origin[1] + 1)))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(-l[2] + origin[2]) + dir[2]*(l[1] - origin[1] + 1)) - dir[1]*dir[2]*(-l[0] + origin[0]))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b110] = 
+            grad_fs[0] * ((-l[0] + origin[0])*(-l[1] + origin[1])*(l[2] - origin[2] + 1)) 
+        + grad_fs[1] * (dir[0]*(-l[1] + origin[1])*(l[2] - origin[2] + 1) + (-l[0] + origin[0])*(dir[1]*(l[2] - origin[2] + 1) - dir[2]*(-l[1] + origin[1])))
+        + grad_fs[2] * (dir[0]*(dir[1]*(l[2] - origin[2] + 1) - dir[2]*(-l[1] + origin[1])) - dir[1]*dir[2]*(-l[0] + origin[0]))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b111] = 
+            grad_fs[0] * ((-l[0] + origin[0])*(-l[1] + origin[1])*(-l[2] + origin[2])) 
+        + grad_fs[1] * (dir[0]*(-l[1] + origin[1])*(-l[2] + origin[2]) + (-l[0] + origin[0])*(dir[1]*(-l[2] + origin[2]) + dir[2]*(-l[1] + origin[1])))
+        + grad_fs[2] * (dir[0]*(dir[1]*(-l[2] + origin[2]) + dir[2]*(-l[1] + origin[1])) + dir[1]*dir[2]*(-l[0] + origin[0]))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    // if (isnan(grad_surface[0b000])){
+    //     printf("!grad_fs[0]: %f\n", grad_fs[0]);
+    //     printf("grad_fs[1]: %f\n", grad_fs[1]);
+    //     printf("grad_fs[2]: %f\n", grad_fs[2]);
+    //     printf("grad_fs[3]: %f\n", grad_fs[3]);
+
+    //     printf("ray.l[0]: %f\n", ray.l[0]);
+    //     printf("ray.l[1]: %f\n", ray.l[1]);
+    //     printf("ray.l[2]: %f\n", ray.l[2]);
+
+    //     printf("ray.origin[0]: %f\n", ray.origin[0]);
+    //     printf("ray.origin[1]: %f\n", ray.origin[1]);
+    //     printf("ray.origin[2]: %f\n", ray.origin[2]);
+
+    //     printf("ray.dir[0]: %f\n", ray.dir[0]);
+    //     printf("ray.dir[1]: %f\n", ray.dir[1]);
+    //     printf("ray.dir[2]: %f\n", ray.dir[2]);
+
+    //     assert(!isnan(grad_surface[0b000]));
+    // }
+
+    assert(!isnan(grad_surface[0b000]));
+    assert(!isnan(grad_surface[0b001]));
+    assert(!isnan(grad_surface[0b010]));
+    assert(!isnan(grad_surface[0b011]));
+    assert(!isnan(grad_surface[0b100]));
+    assert(!isnan(grad_surface[0b101]));
+    assert(!isnan(grad_surface[0b110]));
+    assert(!isnan(grad_surface[0b111]));
+
+}
+
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ void assign_surface_grad(
+    const int32_t* __restrict__ links,
+    data_type_t* __restrict__ grad_surface_out,
+    bool* __restrict__ mask_out,
+    int const offx, int const offy,
+    const voxel_index_t* __restrict__ l,
+    float* __restrict__ grad_surface
+){
+
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+    #define MAYBE_ADD_LINK(u, val) if (link_ptr[u] >= 0) { \
+                atomicAdd(&grad_surface_out[link_ptr[u]], val); \
+                if (mask_out != nullptr) \
+                    mask_out[link_ptr[u]] = true; \
+            }
+
+    MAYBE_ADD_LINK(0, grad_surface[0b000]);
+    MAYBE_ADD_LINK(1, grad_surface[0b001]);
+    MAYBE_ADD_LINK(offy, grad_surface[0b010]);
+    MAYBE_ADD_LINK(offy + 1, grad_surface[0b011]);
+    MAYBE_ADD_LINK(offx + 0, grad_surface[0b100]);
+    MAYBE_ADD_LINK(offx + 1, grad_surface[0b101]);
+    MAYBE_ADD_LINK(offx + offy, grad_surface[0b110]);
+    MAYBE_ADD_LINK(offx + offy + 1, grad_surface[0b111]);
+
+    #undef MAYBE_ADD_LINK
 }
 
 } // namespace device
