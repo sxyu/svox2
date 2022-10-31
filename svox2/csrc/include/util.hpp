@@ -14,11 +14,21 @@
 #if defined(__CUDACC__)
 // #define _EXP(x) expf(x) // SLOW EXP
 #define _EXP(x) __expf(x) // FAST EXP
-#define _SIGMOID(x) (1 / (1 + _EXP(-(x))))
+#define _LOG(x) __logf(x) // FAST LOG
+#define _SIGMOID(x) (1. / (1. + _EXP(-(x))))
+#define _D_SIGMOID(x) (_SIGMOID(x) * (1-_SIGMOID(x)))
 
 #else
 
 #define _EXP(x) expf(x)
+#define _LOG(x) logf(x) // FAST LOG
 #define _SIGMOID(x) (1 / (1 + expf(-(x))))
 #endif
+
 #define _SQR(x) ((x) * (x))
+#define _CUBIC(x) ((x) * (x) * (x))
+#define _CLOSE_TO_ZERO(x, eps) (std::abs(x) < eps)
+#define _COND_CBRT(x) ((x >= 0) ? cbrt(x) : -1. * cbrt(-x))
+#define _COND_CBRTF(x) ((x >= 0) ? cbrtf(x) : -1. * cbrtf(-x))
+// derivative of cond_cbrt
+#define _D_COND_CBRT(x) ((x >= 0) ? ( (x>0) ? (1. / 3. / _SQR(cbrt(x))) : 1.) :  cbrt(-x) / -3. / x) 

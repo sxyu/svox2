@@ -70,10 +70,10 @@ struct PackedSparseGridSpec {
 struct PackedGridOutputGrads {
     PackedGridOutputGrads(GridOutputGrads& grads) :
         grad_density_out(grads.grad_density_out.defined() ? grads.grad_density_out.data_ptr<float>() : nullptr),
+        grad_surface_out(grads.grad_surface_out.defined() ? grads.grad_surface_out.data_ptr<float>() : nullptr),
         grad_sh_out(grads.grad_sh_out.defined() ? grads.grad_sh_out.data_ptr<float>() : nullptr),
         grad_basis_out(grads.grad_basis_out.defined() ? grads.grad_basis_out.data_ptr<float>() : nullptr),
         grad_background_out(grads.grad_background_out.defined() ? grads.grad_background_out.data_ptr<float>() : nullptr),
-        grad_surface_out(grads.grad_surface_out.defined() ? grads.grad_surface_out.data_ptr<float>() : nullptr),
         mask_out((grads.mask_out.defined() && grads.mask_out.size(0) > 0) ? grads.mask_out.data_ptr<bool>() : nullptr),
         mask_background_out((grads.mask_background_out.defined() && grads.mask_background_out.size(0) > 0) ? grads.mask_background_out.data_ptr<bool>() : nullptr)
         {}
@@ -113,6 +113,17 @@ struct PackedRaysSpec {
     PackedRaysSpec(RaysSpec& spec) :
         origins(spec.origins.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
         dirs(spec.dirs.packed_accessor32<float, 2, torch::RestrictPtrTraits>())
+    { }
+};
+
+struct PackedRayVoxIntersecSpec {
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> voxel_ls;
+    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> vox_start_i; //TODO: convert to list!
+    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> vox_num;
+    PackedRayVoxIntersecSpec(RayVoxIntersecSpec& spec) :
+        voxel_ls(spec.voxel_ls.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>()),
+        vox_start_i(spec.vox_start_i.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>()),
+        vox_num(spec.vox_num.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>())
     { }
 };
 

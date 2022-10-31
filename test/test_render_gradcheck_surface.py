@@ -1,7 +1,11 @@
 import svox2
 import torch
+import svox2.csrc as _C
 import torch.nn.functional as F
 from util import Timing
+
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 torch.random.manual_seed(2)
 #  torch.random.manual_seed(8289)
@@ -13,10 +17,10 @@ torch.random.manual_seed(2)
 # eq.backward()
 # print(x.grad)
 
-torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 
 device = 'cuda:0'
-backend = svox2.SURFACE_TYPE_UDF
+surface_type = svox2.SURFACE_TYPE_UDF
 dtype = torch.float32
 grid = svox2.SparseGrid(
                      reso=16,
@@ -27,18 +31,23 @@ grid = svox2.SparseGrid(
                      device=device,
                      background_nlayers=0,
                      basis_type=svox2.BASIS_TYPE_SH,
-                     surface_type=backend,
+                     surface_type=surface_type,
+                     use_sphere_bound=False,
                      surface_init='single_lv_multi_sphere')
-grid.opt.backend = backend
+grid.opt.backend = 'surface'
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
 grid.opt.background_brightness = 1.0
+grid.opt.near_clip = 0.0
 
 print(grid.sh_data.shape)
 #  grid.sh_data.data.normal_()
 grid.sh_data.data[..., 0] = 0.5
 grid.sh_data.data[..., 1:].normal_(std=0.1)
 grid.density_data.data[:] = 0.001
+
+# grid.sh_data.data[:].normal_(std=0.1)
+# grid.density_data.data[:].normal_(mean=-0.1, std=0.1)
 
 if grid.use_background:
 	grid.background_data.data[..., -1] = 0.5
@@ -69,15 +78,20 @@ dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 #  breakpoint()
 rays = svox2.Rays(origins, dirs)
 
-rgb_gt = torch.zeros((origins.size(0), 3), device=device, dtype=dtype)
 
-#  grid.requires_grad_(True)
+# IDX = torch.tensor([
+#         34161], dtype=torch.long) # 
+# # IDX = torch.arange(0,10000, dtype=torch.long)
+# rays.origins = rays.origins[IDX, ...]
+# rays.dirs = rays.dirs[IDX, ...]
 
-#  samps = grid.volume_render(rays, use_kernel=True)
-#  sampt = grid.volume_render(grid, origins, dirs, use_kernel=False)
+rgb_gt = torch.zeros((rays.origins.size(0), 3), device=device, dtype=dtype)
+
+
+grid.requires_grad_(True)
 
 with Timing("ours"):
-    out = grid.volume_render(rays, use_kernel=False, allow_outside=False)
+    out = grid.volume_render(rays, use_kernel=True, no_surface=False)
     samps = out['rgb']
 s = F.mse_loss(samps, rgb_gt)
 
@@ -85,6 +99,12 @@ print(s)
 print('bkwd..')
 with Timing("ours_backward"):
     s.backward()
+
+# grid.inplace_surface_normal_grad(grid.surface_data.grad, use_kernel=False)
+
+# re-scale the surface gradient 
+scale = torch.prod((grid._scaling * grid._grid_size())).cuda()
+
 grid_sh_grad_s = grid.sh_data.grad.clone().cpu()
 grid_density_grad_s = grid.density_data.grad.clone().cpu()
 grid_surface_grad_s = grid.surface_data.grad.clone().cpu()
@@ -103,8 +123,9 @@ if ENABLE_TORCH_CHECK:
         out = grid.volume_render(rays, use_kernel=False, allow_outside=False)
         sampt = out['rgb']
     s = F.mse_loss(sampt, rgb_gt)
-    with Timing("torch_backward"):
-        s.backward()
+    print(s)
+    # with Timing("torch_backward"):
+    #     s.backward()
     grid_sh_grad_t = grid.sh_data.grad.clone().cpu() if grid.sh_data.grad is not None else torch.zeros_like(grid_sh_grad_s)
     grid_density_grad_t = grid.density_data.grad.clone().cpu() if grid.density_data.grad is not None else torch.zeros_like(grid_density_grad_s)
     grid_surface_grad_t = grid.surface_data.grad.clone().cpu() if grid.surface_data.grad is not None else torch.zeros_like(grid_surface_grad_s)

@@ -5,7 +5,7 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAContext.h>
 #include "util.hpp"
-
+#include "data_spec.hpp"
 
 #define DEVICE_GUARD(_ten) \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));

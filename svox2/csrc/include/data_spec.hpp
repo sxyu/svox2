@@ -20,6 +20,15 @@ enum BasisType {
   SURFACE_TYPE_SDF = 102,
   SURFACE_TYPE_UDF = 103,
   SURFACE_TYPE_UDF_ALPHA = 104,
+
+  // for cubic solution
+  CUBIC_TYPE_NO_ROOT = 200,
+  CUBIC_TYPE_LINEAR = 201,
+  CUBIC_TYPE_POLY_ONE_R = 202, // polynomial with a single distinct real root
+  CUBIC_TYPE_POLY = 203, // polynomial with a two real roots
+  CUBIC_TYPE_CUBIC_ONE_R = 204, // cubic with three real and equal roots
+  CUBIC_TYPE_CUBIC_THREE_R = 205, // cubic with three real and distinct roots
+  CUBIC_TYPE_CUBIC_ONE_R_ = 206, // cubic with a single real root
 };
 
 struct SparseGridSpec {
@@ -67,10 +76,10 @@ struct SparseGridSpec {
 
 struct GridOutputGrads {
   torch::Tensor grad_density_out;
+  torch::Tensor grad_surface_out;
   torch::Tensor grad_sh_out;
   torch::Tensor grad_basis_out;
   torch::Tensor grad_background_out;
-  torch::Tensor grad_surface_out;
 
   torch::Tensor mask_out;
   torch::Tensor mask_background_out;
@@ -127,6 +136,18 @@ struct RaysSpec {
     CHECK_INPUT(dirs);
     TORCH_CHECK(origins.is_floating_point());
     TORCH_CHECK(dirs.is_floating_point());
+  }
+};
+
+// struct to store interesctions between ray and voxels
+struct RayVoxIntersecSpec {
+  Tensor voxel_ls;
+  Tensor vox_start_i;
+  Tensor vox_num;
+  inline void check() {
+    CHECK_INPUT(voxel_ls);
+    CHECK_INPUT(vox_start_i);
+    CHECK_INPUT(vox_num);
   }
 };
 

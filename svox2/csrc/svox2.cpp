@@ -8,10 +8,36 @@
 
 using torch::Tensor;
 
+// test functions
+Tensor test_cubic_root_grad(Tensor, Tensor, Tensor);
+
 std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor,
                                                      bool);
 void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
                           Tensor, bool);
+
+// ** Surface rendering formula (trilerp)
+Tensor volume_render_surface(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec&, RenderOptions &);
+// Tensor volume_render_surface_image(SparseGridSpec &, CameraSpec &, RayVoxIntersecSpec&,
+//                                  RenderOptions &);
+void volume_render_surface_backward(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec &, RenderOptions &,
+                                  Tensor, Tensor, GridOutputGrads &);
+void volume_render_surface_fused(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec&, RenderOptions &,
+                               Tensor, float, float, Tensor, GridOutputGrads &);
+
+Tensor volume_render_surf_trav(SparseGridSpec &, RaysSpec &, RenderOptions &);
+// Tensor volume_render_surf_trav_image(SparseGridSpec &, CameraSpec &,
+//                                  RenderOptions &);
+void volume_render_surf_trav_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
+                                  Tensor, Tensor, GridOutputGrads &);
+void volume_render_surf_trav_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
+                               Tensor, float, float, Tensor, GridOutputGrads &);
+// // Expected termination (depth) rendering
+// torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
+//                                           RenderOptions &);
+// // Depth rendering based on sigma-threshold as in Dex-NeRF
+// torch::Tensor volume_render_sigma_thresh(SparseGridSpec &, RaysSpec &,
+//                                          RenderOptions &, float);
 
 // ** NeRF rendering formula (trilerp)
 Tensor volume_render_cuvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
@@ -26,6 +52,13 @@ torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
                                           RenderOptions &);
 // Depth rendering based on sigma-threshold as in Dex-NeRF
 torch::Tensor volume_render_sigma_thresh(SparseGridSpec &, RaysSpec &,
+                                         RenderOptions &, float);
+
+// Expected termination (depth) rendering
+torch::Tensor volume_render_expected_term_surf_trav(SparseGridSpec &, RaysSpec &,
+                                          RenderOptions &);
+// Depth rendering based on sigma-threshold as in Dex-NeRF
+torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, float);
 
 // ** NV rendering formula (trilerp)
@@ -60,6 +93,8 @@ void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
 Tensor tv(Tensor, Tensor, int, int, bool, float, bool, float, float);
 void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, float, float,
              Tensor);
+// void surfacel_normal_grad(Tensor, Tensor, int, int, float, bool, float, float,
+//              Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, bool, float, float, Tensor);
 void msi_tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
@@ -74,14 +109,25 @@ void sgd_step(Tensor, Tensor, Tensor, float, float);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 // macro for easily registering functions
 #define _REG_FUNC(funname) m.def(#funname, &funname)
+  _REG_FUNC(test_cubic_root_grad);
   _REG_FUNC(sample_grid);
   _REG_FUNC(sample_grid_backward);
+  _REG_FUNC(volume_render_surface);
+//   _REG_FUNC(volume_render_surface_image);
+  _REG_FUNC(volume_render_surface_backward);
+  _REG_FUNC(volume_render_surface_fused);
+  _REG_FUNC(volume_render_surf_trav);
+//   _REG_FUNC(volume_render_surf_trav_image);
+  _REG_FUNC(volume_render_surf_trav_backward);
+  _REG_FUNC(volume_render_surf_trav_fused);
   _REG_FUNC(volume_render_cuvol);
   _REG_FUNC(volume_render_cuvol_image);
   _REG_FUNC(volume_render_cuvol_backward);
   _REG_FUNC(volume_render_cuvol_fused);
   _REG_FUNC(volume_render_expected_term);
   _REG_FUNC(volume_render_sigma_thresh);
+  _REG_FUNC(volume_render_expected_term_surf_trav);
+  _REG_FUNC(volume_render_sigma_thresh_surf_trav);
 
   _REG_FUNC(volume_render_nvol);
   _REG_FUNC(volume_render_nvol_backward);
@@ -115,12 +161,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::class_<SparseGridSpec>(m, "SparseGridSpec")
       .def(py::init<>())
       .def_readwrite("density_data", &SparseGridSpec::density_data)
+      .def_readwrite("surface_data", &SparseGridSpec::surface_data)
+      .def_readwrite("level_set_data", &SparseGridSpec::level_set_data)
       .def_readwrite("sh_data", &SparseGridSpec::sh_data)
       .def_readwrite("links", &SparseGridSpec::links)
       .def_readwrite("_offset", &SparseGridSpec::_offset)
       .def_readwrite("_scaling", &SparseGridSpec::_scaling)
       .def_readwrite("basis_dim", &SparseGridSpec::basis_dim)
       .def_readwrite("basis_type", &SparseGridSpec::basis_type)
+      .def_readwrite("surface_type", &SparseGridSpec::surface_type)
       .def_readwrite("basis_data", &SparseGridSpec::basis_data)
       .def_readwrite("background_links", &SparseGridSpec::background_links)
       .def_readwrite("background_data", &SparseGridSpec::background_data);
@@ -141,6 +190,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(py::init<>())
       .def_readwrite("origins", &RaysSpec::origins)
       .def_readwrite("dirs", &RaysSpec::dirs);
+
+  py::class_<RayVoxIntersecSpec>(m, "RayVoxIntersecSpec")
+      .def(py::init<>())
+      .def_readwrite("voxel_ls", &RayVoxIntersecSpec::voxel_ls)
+      .def_readwrite("vox_start_i", &RayVoxIntersecSpec::vox_start_i)
+      .def_readwrite("vox_num", &RayVoxIntersecSpec::vox_num);
 
   py::class_<RenderOptions>(m, "RenderOptions")
       .def(py::init<>())
@@ -164,6 +219,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(py::init<>())
       .def_readwrite("grad_density_out", &GridOutputGrads::grad_density_out)
       .def_readwrite("grad_sh_out", &GridOutputGrads::grad_sh_out)
+      .def_readwrite("grad_surface_out", &GridOutputGrads::grad_surface_out)
       .def_readwrite("grad_basis_out", &GridOutputGrads::grad_basis_out)
       .def_readwrite("grad_background_out",
                      &GridOutputGrads::grad_background_out)
