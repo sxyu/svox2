@@ -381,6 +381,7 @@ def setup_train_conf():
     group.add_argument('--lambda_tv_surface', type=float, default=0)
     group.add_argument('--tv_sparsity', type=float, default=0.01)
     group.add_argument('--tv_surface_sparsity', type=float, default=0.01)
+    group.add_argument('--norm_surface_sparsity', type=float, default=0.01)
     group.add_argument('--tv_logalpha', action='store_true', default=False,
                     help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
