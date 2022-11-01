@@ -3650,10 +3650,14 @@ class SparseGrid(nn.Module):
         if 'surface_data' in grad:
             grad_holder.grad_surface_out = grad['surface_data']
 
-        cu_fn = _C.__dict__[f"volume_render_{self.opt.backend}_fused"]
+        backend = self.opt.backend
+        if no_surface and self.opt.backend in ['surface', 'surf_trav']:
+            # no surface init, train as if nerf
+            backend = 'cuvol'
+        cu_fn = _C.__dict__[f"volume_render_{backend}_fused"]
+
         #  with utils.Timing("actual_render"):
-        if self.opt.backend == 'surface':
-            # with utils.Timing('ours preprocessing'):
+        if backend == 'surface':
             B = rays.origins.shape[0]
 
             # convert ray o/d to grid space
@@ -3721,6 +3725,8 @@ class SparseGrid(nn.Module):
         :return: (H, W, 3), predicted RGB image
         """
         imrend_fn_name = f"volume_render_{self.opt.backend}_image"
+        if kwargs.get('no_surface', False) and self.opt.backend in ['surface', 'surf_trav']:
+            imrend_fn_name = "volume_render_cuvol_image"
         if (self.basis_type != BASIS_TYPE_MLP) and (_C is not None) and (imrend_fn_name in _C.__dict__) and \
             (not torch.is_grad_enabled()) and (not return_raylen) and use_kernel:
             # Use the fast image render kernel if available
@@ -3765,22 +3771,26 @@ class SparseGrid(nn.Module):
 
         :return: (N,)
         """
-        if self.opt.backend in ['surface', 'surf_trav']:
+        backend = self.opt.backend
+        if kwargs.get('no_surface', False) and self.opt.backend in ['surface', 'surf_trav']:
+            backend = "cuvol"
+
+        if backend in ['surface', 'surf_trav']:
             if sigma_thresh is None:
-                cu_fn = _C.__dict__[f"volume_render_expected_term_{self.opt.backend}"]
+                cu_fn = _C.__dict__[f"volume_render_expected_term_{backend}"]
                 return cu_fn(
                         self._to_cpp(),
                         rays._to_cpp(),
                         self.opt._to_cpp())
             else:
-                cu_fn = _C.__dict__[f"volume_render_sigma_thresh_{self.opt.backend}"]
+                cu_fn = _C.__dict__[f"volume_render_sigma_thresh_{backend}"]
                 return cu_fn(
                         self._to_cpp(),
                         rays._to_cpp(),
                         self.opt._to_cpp(),
                         sigma_thresh)
 
-        if self.surface_type != SURFACE_TYPE_NONE:
+        if self.surface_type != SURFACE_TYPE_NONE and not kwargs.get('no_surface', False):
             out = self._surface_render_gradcheck_lerp(rays, return_depth=True, **kwargs)
             return out['depth']
 
@@ -4600,56 +4610,6 @@ class SparseGrid(nn.Module):
 
             return norm_loss
 
-            # links000 = self.links[x, y, z]
-            # links001 = self.links[x, y, z + 1]
-            # links010 = self.links[x, y + 1, z]
-            # links011 = self.links[x, y + 1, z + 1]
-            # links100 = self.links[x + 1, y, z]
-            # links101 = self.links[x + 1, y, z + 1]
-            # links110 = self.links[x + 1, y + 1, z]
-            # links111 = self.links[x + 1, y + 1, z + 1]
-
-            # links002 = self.links[x, y, z + 2]
-            # links012 = self.links[x, y + 1, z + 2]
-            # links102 = self.links[x + 1, y, z + 2]
-            # links112 = self.links[x + 1, y + 1, z + 2]
-
-            # links020 = self.links[x, y + 2, z]
-            # links021 = self.links[x, y + 2, z + 1]
-            # links120 = self.links[x + 1, y + 2, z]
-            # links121 = self.links[x + 1, y + 2, z + 1]
-
-            # links200 = self.links[x + 2, y, z]
-            # links201 = self.links[x + 2, y, z + 1]
-            # links210 = self.links[x + 2, y + 1, z]
-            # links211 = self.links[x + 2, y + 1, z + 1]
-
-
-            # alpha000, _ , surface000 = self._fetch_links(links000) 
-            # alpha001, _ , surface001 = self._fetch_links(links001)
-            # alpha010, _ , surface010 = self._fetch_links(links010)
-            # alpha011, _ , surface011 = self._fetch_links(links011)
-            # alpha100, _ , surface100 = self._fetch_links(links100)
-            # alpha101, _ , surface101 = self._fetch_links(links101)
-            # alpha110, _ , surface110 = self._fetch_links(links110)
-            # alpha111, _ , surface111 = self._fetch_links(links111)
-
-            # alpha002, _ , surface002 = self._fetch_links(links002)
-            # alpha012, _ , surface012 = self._fetch_links(links012)
-            # alpha102, _ , surface102 = self._fetch_links(links102)
-            # alpha112, _ , surface112 = self._fetch_links(links112)
-
-            # alpha020, _ , surface020 = self._fetch_links(links020)
-            # alpha021, _ , surface021 = self._fetch_links(links021)
-            # alpha120, _ , surface120 = self._fetch_links(links120)
-            # alpha121, _ , surface121 = self._fetch_links(links121)
-
-            # alpha200, _ , surface200 = self._fetch_links(links200)
-            # alpha201, _ , surface201 = self._fetch_links(links201)
-            # alpha210, _ , surface210 = self._fetch_links(links210)
-            # alpha211, _ , surface211 = self._fetch_links(links211)
-
-
         else:
             assert (
                 _C is not None and self.surface_data.is_cuda and grad.is_cuda
@@ -4668,8 +4628,8 @@ class SparseGrid(nn.Module):
                             ndc_coeffs[0], ndc_coeffs[1],
                             grad)
             else:
-                _C.tv_grad(self.links, self.surface_data, 0, 1, scaling,
-                        False,
+                _C.surfacel_normal_grad(self.links, self.surface_data, self.level_set_data[0],
+                        0, 1, scaling,
                         ndc_coeffs[0], ndc_coeffs[1],
                         grad)
                 self.sparse_grad_indexer : Optional[torch.Tensor] = None

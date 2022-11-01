@@ -343,7 +343,7 @@ while True:
                                    width=dset.get_image_size(img_id)[1],
                                    height=dset.get_image_size(img_id)[0],
                                    ndc_coeffs=dset.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL,no_surface=no_surface)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, no_surface=no_surface)
                 rgb_gt_test = dset.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -538,6 +538,14 @@ while True:
                         sparse_frac=args.tv_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
+            if args.lambda_normal_loss > 0.0 and not no_surface:
+                with Timing("normal_loss"):
+                    grid.inplace_surface_normal_grad(grid.surface_data.grad,
+                            scaling=args.lambda_normal_loss,
+                            sparse_frac=args.norm_surface_sparsity,
+                            ndc_coeffs=dset.ndc_coeffs,
+                            contiguous=args.tv_contiguous,
+                            use_kernel=USE_KERNEL)
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):
                 grid.inplace_tv_color_grad(grid.sh_data.grad,
