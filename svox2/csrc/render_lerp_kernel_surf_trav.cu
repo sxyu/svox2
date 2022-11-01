@@ -98,6 +98,24 @@ __device__ __inline__ void trace_ray_surf_trav(
         last_voxel[1] = voxel_l[1];
         last_voxel[2] = voxel_l[2];
 
+
+        // check minimal of alpha raw
+        if ((grid.density_data[link_ptr[0]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[1]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offy]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offy+1]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx+1]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx+offy]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx+offy+1]] < opt.sigma_thresh)){
+                // const float skip = compute_skip_dist(ray,
+                //             grid.links, grid.stride_x,
+                //             grid.size[2], 0);
+
+                t += opt.step_size;
+                continue;
+            }
+
         // find intersections
         float const surface[8] = {
             grid.surface_data[link_ptr[0]],
@@ -117,7 +135,7 @@ __device__ __inline__ void trace_ray_surf_trav(
         const int level_set_num = 1;
         
 
-        const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
+        const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8);
         for (int i=0; i < level_set_num; ++i){
             float const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
@@ -166,16 +184,16 @@ __device__ __inline__ void trace_ray_surf_trav(
                 }
 
 
-                float alpha = _SIGMOID(trilerp_cuvol_one(
+                float alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
                         grid.size[2],
                         1,
                         ray.l, ray.pos,
-                        0));
+                        0);
 
-                // if (sigma > opt.sigma_thresh) {
-                if (true) {
+                if (alpha > opt.sigma_thresh) {
+                    alpha = _SIGMOID(alpha);
                     float lane_color = trilerp_cuvol_one(
                                     grid.links,
                                     grid.sh_data,
@@ -589,6 +607,23 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         last_voxel[1] = voxel_l[1];
         last_voxel[2] = voxel_l[2];
 
+        // check minimal of alpha raw
+        if ((grid.density_data[link_ptr[0]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[1]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offy]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offy+1]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx+1]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx+offy]] < opt.sigma_thresh) && \
+            (grid.density_data[link_ptr[offx+offy+1]] < opt.sigma_thresh)){
+                // const float skip = compute_skip_dist(ray,
+                //             grid.links, grid.stride_x,
+                //             grid.size[2], 0);
+
+                t += opt.step_size;
+                continue;
+            }
+
         // find intersections
         float const surface[8] = {
             grid.surface_data[link_ptr[0]],
@@ -670,8 +705,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                 float const  alpha = _SIGMOID(raw_alpha);
 
-                // if (sigma > opt.sigma_thresh) {
-                if (true) {
+                if (raw_alpha > opt.sigma_thresh) {
                     float lane_color = trilerp_cuvol_one(
                                     grid.links,
                                     grid.sh_data,
@@ -721,12 +755,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
                     accum -= weight * total_color;
                     // compute d_mse/d_alpha_i
-                    float curr_grad_alpha = accum / (alpha-1) + total_color * _EXP(log_transmit); 
+                    float  curr_grad_alpha = accum / min(alpha-1.f, -1e-9f) + total_color * _EXP(log_transmit); 
                     log_transmit -= pcnt; // log_transmit is not log(T_{i+1})
                     if (sparsity_loss > 0.f) {
                         // Cauchy version (from SNeRG)
                         // TODO: check if expected!
-                        curr_grad_alpha += sparsity_loss * (4 * alpha / (1 + 2 * (alpha * alpha)));
+                        curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
 
                         // Alphs version (from PlenOctrees)
                         // curr_grad_alpha += sparsity_loss * _EXP(-pcnt) * ray.world_step;
@@ -756,7 +790,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     if (lane_id == 0) {
                         // compute gradient for sigmoid
-                        float const curr_grad_raw_alpha = curr_grad_alpha * _D_SIGMOID(raw_alpha);
+                        float const  curr_grad_raw_alpha = curr_grad_alpha * _D_SIGMOID(raw_alpha);
+                        ASSERT_NUM(curr_grad_raw_alpha);
                         trilerp_backward_cuvol_one_density(
                                 grid.links,
                                 grads.grad_density_out,
@@ -777,7 +812,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                         // grad_xyz is now d_mse/d_xyz
                         float const grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
-                        assert(!isnan(grad_st));
+                        ASSERT_NUM(grad_st);
                         // grad_st is now d_mse/d_t
 
                         float grad_fs[4] = {grad_st, grad_st, grad_st, grad_st};

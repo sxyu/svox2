@@ -199,6 +199,9 @@ Find gradient wrt to the sample location (pos)
     grad_out[2] += grad_in * ((1-pos[0]) * ((1-pos[1])*(READ_LINK(1)-READ_LINK(0)) + (pos[1])*(READ_LINK(offy+1)-READ_LINK(offy))) +
                              (pos[0]) * ((1-pos[1])*(READ_LINK(offx+1)-READ_LINK(offx)) + (pos[1])*(READ_LINK(offx+offy+1)-READ_LINK(offx+offy))));
 #undef READ_LINK
+    ASSERT_NUM(grad_out[0]);
+    ASSERT_NUM(grad_out[1]);
+    ASSERT_NUM(grad_out[2]);
 }
 
 // Trilerp with xy links & wrapping (background)
@@ -777,7 +780,7 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
             } else {
                 // linear case
                 outs[0] = -f0 / f1;
-                assert(!isnan(outs[0]));
+                // ASSERT_NUM(outs[0]);
                 return CUBIC_TYPE_LINEAR;
             }
         } else {
@@ -1160,10 +1163,10 @@ __device__ __inline__ void calc_cubic_root_grad(
                                 +__Dk_Dh * __Dh_Df3) 
                 + __Dst_Db_ * __Db_Df3);
 
-            assert(!isnan(grad_fs[0]));
-            assert(!isnan(grad_fs[1]));
-            assert(!isnan(grad_fs[2]));
-            assert(!isnan(grad_fs[3]));
+            ASSERT_NUM(grad_fs[0]);
+            ASSERT_NUM(grad_fs[1]);
+            ASSERT_NUM(grad_fs[2]);
+            ASSERT_NUM(grad_fs[3]);
 
 
         }else{
@@ -1224,10 +1227,10 @@ __device__ __inline__ void calc_cubic_root_grad(
                                 +__DT_Dh * __Dh_Df3) 
                 + __Dst_Db_ * __Db_Df3);
 
-            assert(!isnan(grad_fs[0]));
-            assert(!isnan(grad_fs[1]));
-            assert(!isnan(grad_fs[2]));
-            assert(!isnan(grad_fs[3]));
+            ASSERT_NUM(grad_fs[0]);
+            ASSERT_NUM(grad_fs[1]);
+            ASSERT_NUM(grad_fs[2]);
+            ASSERT_NUM(grad_fs[3]);
         }
 
     }
@@ -1311,14 +1314,14 @@ __device__ __inline__ void calc_surface_grad(
     //     assert(!isnan(grad_surface[0b000]));
     // }
 
-    assert(!isnan(grad_surface[0b000]));
-    assert(!isnan(grad_surface[0b001]));
-    assert(!isnan(grad_surface[0b010]));
-    assert(!isnan(grad_surface[0b011]));
-    assert(!isnan(grad_surface[0b100]));
-    assert(!isnan(grad_surface[0b101]));
-    assert(!isnan(grad_surface[0b110]));
-    assert(!isnan(grad_surface[0b111]));
+    ASSERT_NUM(grad_surface[0b000]);
+    ASSERT_NUM(grad_surface[0b001]);
+    ASSERT_NUM(grad_surface[0b010]);
+    ASSERT_NUM(grad_surface[0b011]);
+    ASSERT_NUM(grad_surface[0b100]);
+    ASSERT_NUM(grad_surface[0b101]);
+    ASSERT_NUM(grad_surface[0b110]);
+    ASSERT_NUM(grad_surface[0b111]);
 
 }
 

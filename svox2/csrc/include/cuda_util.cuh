@@ -138,3 +138,5 @@ __host__ __inline__ cudaError_t cuda_assert(
 
 #define cuda(...) cuda_assert((cuda##__VA_ARGS__), __FILE__, __LINE__, true);
 
+#define ASSERT_NUM(num) assert(!isnan(num) && isfinite(num))
+

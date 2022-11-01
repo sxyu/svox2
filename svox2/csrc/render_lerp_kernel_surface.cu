@@ -518,7 +518,7 @@ __device__ __inline__ void trace_ray_surface_backward(
                     // d_mse/d_ci in the final computed color is within clamp range, compute proper gradient 
                     const float  grad_common = weight * color_in_01 * gout; 
                     // gradient wrt sh coefficient (d_mse/d_sh)
-                    const float volatile curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
+                    const float  curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
 
                     // if (grid.basis_type != BASIS_TYPE_SH) {
                     //     float curr_grad_sphfunc = lane_color * grad_common;
@@ -590,7 +590,7 @@ __device__ __inline__ void trace_ray_surface_backward(
                                     curr_grad_raw_alpha, grad_xyz);
 
                         // grad_xyz is now d_mse/d_xyz
-                        float const volatile grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
+                        float const  grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
                         assert(!isnan(grad_st));
                         // grad_st is now d_mse/d_t
 

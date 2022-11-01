@@ -163,6 +163,10 @@ elif grid.basis_type == svox2.BASIS_TYPE_MLP:
                     lr=args.lr_basis
                 )
 
+if args.renderer_backend in ['surface', 'surf_trav']:
+    # convert density threshold to alpha threshold
+    args.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
+
 
 grid.requires_grad_(True)
 config_util.setup_render_opts(grid.opt, args)
