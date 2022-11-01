@@ -539,13 +539,13 @@ while True:
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
             if args.lambda_normal_loss > 0.0 and not no_surface:
-                with Timing("normal_loss"):
-                    grid.inplace_surface_normal_grad(grid.surface_data.grad,
-                            scaling=args.lambda_normal_loss,
-                            sparse_frac=args.norm_surface_sparsity,
-                            ndc_coeffs=dset.ndc_coeffs,
-                            contiguous=args.tv_contiguous,
-                            use_kernel=USE_KERNEL)
+                # with Timing("normal_loss"):
+                grid.inplace_surface_normal_grad(grid.surface_data.grad,
+                        scaling=args.lambda_normal_loss,
+                        sparse_frac=args.norm_surface_sparsity,
+                        ndc_coeffs=dset.ndc_coeffs,
+                        contiguous=args.tv_contiguous,
+                        use_kernel=USE_KERNEL)
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):
                 grid.inplace_tv_color_grad(grid.sh_data.grad,
