@@ -80,6 +80,17 @@ parser.add_argument(
     default=0.,
     help="density for downsampling the pts, set to 0 to disable"
 )
+parser.add_argument(
+    "--intersect_th",
+    type=float,
+    default=0.1,
+    help="alpha threshold for determining intersections"
+)
+parser.add_argument(
+    "--out_path",
+    type=str,
+    default='pts.npy'
+)
 
 # Camera adjustment
 parser.add_argument('--crop',
@@ -199,7 +210,7 @@ with torch.no_grad():
         # torch.cuda.synchronize()
         # depth = grid.volume_render_depth_image(cam)
         torch.cuda.synchronize()
-        pts = grid.volume_render_extract_pts(cam, intersect_th=0.2)
+        pts = grid.volume_render_extract_pts(cam, intersect_th=args.intersect_th)
         torch.cuda.synchronize()
 
         # depth.clamp_(0.0, 1.0)
@@ -237,7 +248,7 @@ if args.downsample_density > 0:
     all_pts = all_pts[mask]
 
 
-np.save(path.join(path.dirname(args.ckpt), 'pts.npy'), all_pts)
+np.save(args.out_path, all_pts)
 
 
 
