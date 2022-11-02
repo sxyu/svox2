@@ -172,6 +172,10 @@ grid.requires_grad_(True)
 config_util.setup_render_opts(grid.opt, args)
 print('Render options', grid.opt)
 
+if args.no_surface_init_iters > 0:
+    # first set step size and skip thresh for cuvol
+    grid.opt.sigma_thresh = 1e-8
+    grid.opt.step_size = 0.5
 
 resample_cameras = [
         svox2.Camera(c2w.to(device=device),
@@ -412,8 +416,8 @@ while True:
 
             no_surface = gstep_id < args.no_surface_init_iters
 
+            ############ Density Based Surface Init #################
             if (gstep_id == args.no_surface_init_iters) and (args.no_surface_init_iters > 0):
-                # run density based surface init
                 # _density_backup = grid.density_data.data.detach().clone()
                 eval_step(step_id=gstep_id-1)
                 if args.no_surface_init_debug_ckpt:
@@ -433,6 +437,10 @@ while True:
                 print('Saving after surface init', ckpt_path)
                 gc.collect()
                 grid.save(ckpt_path, step_id=gstep_id)
+
+                # reset opt for surface rendering
+                grid.opt.sigma_thresh = args.sigma_thresh
+                grid.opt.step_size = args.step_size
 
                 # torch.autograd.set_detect_anomaly(True)
 
