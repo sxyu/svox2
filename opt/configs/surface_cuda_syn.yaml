@@ -1,0 +1,56 @@
+nokernel = False
+# renderer_backend = 'surface'
+renderer_backend = 'surf_trav'
+step_size = 0.1
+sigma_thresh = 1e-10
+
+surface_type = 'udf'
+reso = [[256,256,256]]
+init_sigma = 0.01
+surface_init = 'single_lv_multi_sphere'
+nosphereinit = True
+
+upsamp_every = 1e10
+
+### learning rates ###
+lr_sigma = 1e-1
+lr_sigma_final = 1e-1
+lr_sigma_delay_steps = 0
+lr_sigma_decay_steps = 20000
+lr_surface = 1e-1
+lr_surface_final = 1e-2
+lr_surface_delay_steps = 0
+lr_surface_decay_steps = 20000
+# lr_surface = 3e1
+lr_sh = 1e-2
+
+no_surface_init_iters = 1000
+alpha_lv_sets = 0.001
+surface_init_rescale = 0.1
+
+### regularization ###
+lambda_tv = 1e-3
+lambda_tv_sh = 1e-3
+# lambda_tv_surface = 1
+# tv_surface_sparsity = 0.1
+# lambda_udf_var_loss = 1e-2
+lambda_density_lap_loss = 1e-2
+lambda_normal_loss = 1e-1
+norm_surface_sparsity = 1
+
+# force_alpha = True
+# batch_size = 100
+
+n_iters = 10000
+print_every = 10
+eval_every_iter = 2000
+save_every = 10000
+n_eval_test = 1
+n_eval_train = 2
+load_ckpt = False
+log_depth_map = True 
+# log_depth_map_use_thresh = 0.01
+save_all_ckpt = False
+
+
+
