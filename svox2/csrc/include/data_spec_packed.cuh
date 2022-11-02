@@ -149,5 +149,27 @@ struct SingleRaySpec {
     RandomEngine32 rng;
 };
 
+struct SingleRaySpecDouble {
+    SingleRaySpecDouble() = default;
+    __device__ SingleRaySpecDouble(const float* __restrict__ origin, const float* __restrict__ dir)
+        : origin{origin[0], origin[1], origin[2]},
+          dir{dir[0], dir[1], dir[2]} {}
+    __device__ void set(const float* __restrict__ origin, const float* __restrict__ dir) {
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            this->origin[i] = static_cast<double>(origin[i]);
+            this->dir[i] = static_cast<double>(dir[i]);
+        }
+    }
+
+    double origin[3];
+    double dir[3];
+    float tmin, tmax, world_step;
+
+    double pos[3];
+    int32_t l[3];
+    RandomEngine32 rng;
+};
+
 }  // namespace device
 }  // namespace

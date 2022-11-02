@@ -45,15 +45,18 @@ USE_KERNEL = not args.nokernel
 if args.surface_type is None:
     args.surface_type = 'none'
 
+# USE_KERNEL = False
+
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
 DATASET_TYPE = 'test'
 IMG_ID = 0
-P_COORD = torch.tensor([ # matlibplot [x, y]
-    [400, 467],
-    [425, 467]
+P_COORD = torch.tensor([ # matlibplot [x, y] (no reverse)
+    [450, 93],
     ])
+
+# note that it gives rgb[P_y, P_x]
 
 P_COORD = None
 
@@ -81,8 +84,9 @@ if path.isfile(ckpt_npz):
 else: 
     raise NotImplementedError(f'Ckpt {ckpt_npz} not found')
 
-grid.density_data.data[:] = 1e8
-
+# grid.density_data.data[:] = 1e8
+# grid.surface_type = svox2.__dict__['SURFACE_TYPE_UDF_FAKE_SAMPLE']
+# grid.fake_sample_std = torch.tensor(1., device=device)
 
 optim_basis_mlp = None
 
@@ -98,7 +102,13 @@ elif grid.basis_type == svox2.BASIS_TYPE_MLP:
                 )
 
 
-grid.requires_grad_(True)
+if args.renderer_backend in ['surface', 'surf_trav']:
+    # convert density threshold to alpha threshold
+    args.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
+
+args.step_size = 0.01
+
+grid.requires_grad_(False)
 config_util.setup_render_opts(grid.opt, args)
 print('Render options', grid.opt)
 

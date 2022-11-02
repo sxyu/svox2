@@ -730,31 +730,31 @@ __device__ __inline__ void ray_find_bounds_bg(
 
 
 __device__ __inline__ void surface_to_cubic_equation(
-    const float* __restrict__ surface,
-    const float* __restrict__ origin,
-    const float* __restrict__ dir,
+    const double* __restrict__ surface,
+    const double* __restrict__ origin,
+    const double* __restrict__ dir,
     const int32_t* __restrict__ l,
-    float* __restrict__ outs
+    double* __restrict__ outs
 ){
 
-    float const a00 = surface[0b000] * (1-origin[2]+l[2]) + surface[0b001] * (origin[2]-l[2]);
-    float const a01 = surface[0b010] * (1-origin[2]+l[2]) + surface[0b011] * (origin[2]-l[2]);
-    float const a10 = surface[0b100] * (1-origin[2]+l[2]) + surface[0b101] * (origin[2]-l[2]);
-    float const a11 = surface[0b110] * (1-origin[2]+l[2]) + surface[0b111] * (origin[2]-l[2]);
+    double const a00 = surface[0b000] * (1-origin[2]+l[2]) + surface[0b001] * (origin[2]-l[2]);
+    double const a01 = surface[0b010] * (1-origin[2]+l[2]) + surface[0b011] * (origin[2]-l[2]);
+    double const a10 = surface[0b100] * (1-origin[2]+l[2]) + surface[0b101] * (origin[2]-l[2]);
+    double const a11 = surface[0b110] * (1-origin[2]+l[2]) + surface[0b111] * (origin[2]-l[2]);
 
-    float const b00 = -surface[0b000] + surface[0b001];
-    float const b01 = -surface[0b010] + surface[0b011];
-    float const b10 = -surface[0b100] + surface[0b101];
-    float const b11 = -surface[0b110] + surface[0b111];
+    double const b00 = -surface[0b000] + surface[0b001];
+    double const b01 = -surface[0b010] + surface[0b011];
+    double const b10 = -surface[0b100] + surface[0b101];
+    double const b11 = -surface[0b110] + surface[0b111];
 
-    float const c0 = a00*(1-origin[1]+l[1]) + a01*(origin[1]-l[1]);
-    float const c1 = a10*(1-origin[1]+l[1]) + a11*(origin[1]-l[1]);
+    double const c0 = a00*(1-origin[1]+l[1]) + a01*(origin[1]-l[1]);
+    double const c1 = a10*(1-origin[1]+l[1]) + a11*(origin[1]-l[1]);
 
-    float const d0 = -(a00*dir[1] - dir[2]*b00*(1-origin[1]+l[1])) + (a01*dir[1] + dir[2]*b01*(origin[1]-l[1]));
-    float const d1 = -(a10*dir[1] - dir[2]*b10*(1-origin[1]+l[1])) + (a11*dir[1] + dir[2]*b11*(origin[1]-l[1]));
+    double const d0 = -(a00*dir[1] - dir[2]*b00*(1-origin[1]+l[1])) + (a01*dir[1] + dir[2]*b01*(origin[1]-l[1]));
+    double const d1 = -(a10*dir[1] - dir[2]*b10*(1-origin[1]+l[1])) + (a11*dir[1] + dir[2]*b11*(origin[1]-l[1]));
 
-    float const e0 = -dir[1]*dir[2]*b00 + dir[1]*dir[2]*b01;
-    float const e1 = -dir[1]*dir[2]*b10 + dir[1]*dir[2]*b11;
+    double const e0 = -dir[1]*dir[2]*b00 + dir[1]*dir[2]*b01;
+    double const e1 = -dir[1]*dir[2]*b10 + dir[1]*dir[2]*b11;
 
     outs[3] = -e0*dir[0] + e1*dir[0];
     outs[2] = -d0*dir[0]+e0*(1-origin[0]+l[0]) + d1*dir[0]+e1*(origin[0]-l[0]);
@@ -764,13 +764,13 @@ __device__ __inline__ void surface_to_cubic_equation(
 
 
 __device__ __inline__ enum BasisType cubic_equation_solver(
-    float const f0,
-    float const f1,
-    float const f2,
-    float const f3,
+    double const f0,
+    double const f1,
+    double const f2,
+    double const f3,
     float const eps,
     double const eps_double,
-    float* __restrict__ outs
+    double* __restrict__ outs
 ){
     if (_CLOSE_TO_ZERO(f3, eps)){
         if (_CLOSE_TO_ZERO(f2, eps)){
@@ -786,8 +786,8 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
         } else {
             // polynomial case
             // _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
-            float const D = _SQR(f1) - 4.0 * f2 * f0;
-            float const sqrt_D = sqrtf(D);
+            double const D = _SQR(f1) - 4.0 * f2 * f0;
+            double const sqrt_D = sqrt(D);
             if (D > 0){
                 if (f2 > 0){
                     outs[0] = (-f1 - sqrt_D) / (2 * f2);
@@ -811,11 +811,11 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
     } else {
         // cubic case
         double const eps_double = 1e-10;
-        double const norm_term = static_cast<double>(f3);
-        double const a = static_cast<double>(f3) / norm_term;
-        double const b = static_cast<double>(f2) / norm_term;
-        double const c = static_cast<double>(f1) / norm_term;
-        double const d = static_cast<double>(f0) / norm_term;
+        double const norm_term = f3;
+        double const a = f3 / norm_term;
+        double const b = f2 / norm_term;
+        double const c = f1 / norm_term;
+        double const d = f0 / norm_term;
 
         double const f = ((3*c/a) - (_SQR(b) / _SQR(a))) / 3;                      
         double const g = (((2*_CUBIC(b)) / _CUBIC(a)) - ((9*b*c) / _SQR(a)) + (27*d/a)) / 27;                 
@@ -833,7 +833,7 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
 
         if ((_CLOSE_TO_ZERO(f, eps_double)) & (_CLOSE_TO_ZERO(g, eps_double)) & (_CLOSE_TO_ZERO(h, eps_double))){
             // all three roots are real and equal
-            outs[0] = static_cast<float>(_COND_CBRT(d/a));
+            outs[0] = _COND_CBRT(d/a);
             // if ((isnan(outs[0])) | (!isfinite(outs[0]))){
             //     printf("a=%f\n", a);
             //     printf("b=%f\n", b);
@@ -868,9 +868,9 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
             // #define _N (sqrt(3) * sin(_k / 3.))
             // #define _P ((b / (3. * a)) * -1)
 
-            outs[0] = static_cast<float>(-1 *_j * (_M + _N) + _P);
-            outs[1] = static_cast<float>(-1 *_j * (_M - _N) + _P);
-            outs[2] = static_cast<float>(2 * _j * _M + _P);
+            outs[0] = -1 *_j * (_M + _N) + _P;
+            outs[1] = -1 *_j * (_M - _N) + _P;
+            outs[2] = 2 * _j * _M + _P;
             // if (isnan(outs[0]) | isnan(outs[1]) | isnan(outs[2]) | (!isfinite(outs[0])) | (!isfinite(outs[1])) | (!isfinite(outs[2]))){
             //     printf("a=%f\n", a);
             //     printf("b=%f\n", b);
@@ -905,7 +905,7 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
             // #define _T (-(g / 2.) - sqrt(h))
             // #define _U (_COND_CBRT(_T))
 
-            outs[0] = static_cast<float>((_S + _U) - (b / (3. * a)));
+            outs[0] = (_S + _U) - (b / (3. * a));
 
             // if ((isnan(outs[0])) | (!isfinite(outs[0]))){
             //     printf("a=%f\n", a);
@@ -953,69 +953,69 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
 __device__ __inline__ void calc_cubic_root_grad(
     enum BasisType cubic_root_type,
     int st_id,
-    float* __restrict__ const fs,
+    double* __restrict__ const fs,
     float* __restrict__ grad_fs // storing grad_st
 ){
     //////////////////////// Find Gradient of Cubic Root //////////////////////
     if (cubic_root_type == CUBIC_TYPE_LINEAR){
         // linear case
-        grad_fs[0] *= -1. / fs[1];
-        grad_fs[1] *= fs[0] / _SQR(fs[1]);
-        grad_fs[2] = 0;
-        grad_fs[3] = 0;
+        grad_fs[0] *= static_cast<float>(-1. / fs[1]);
+        grad_fs[1] *= static_cast<float>(fs[0] / _SQR(fs[1]));
+        grad_fs[2] = 0.f;
+        grad_fs[3] = 0.f;
 
     }else if (cubic_root_type == CUBIC_TYPE_POLY_ONE_R){
-        float const D = _SQR(fs[1]) - 4.0 * fs[2] * fs[0];
-        float const sqrt_D = sqrtf(D);
-        float const dt0_dD = 1 / (4*fs[2]*sqrt_D);
-        grad_fs[0] *= -1/sqrt_D;
-        grad_fs[1] *= ((-1) / (2*fs[2]) + (dt0_dD * 2 * fs[1]));
-        grad_fs[2] *= ((fs[1] - sqrt_D) / (4*_SQR(fs[2])) + (dt0_dD * (-4) * fs[0]));
-        grad_fs[3] = 0;
+        double const D = _SQR(fs[1]) - 4. * fs[2] * fs[0];
+        double const sqrt_D = sqrt(D);
+        double const dt0_dD = 1 / (4.*fs[2]*sqrt_D);
+        grad_fs[0] *= static_cast<float>(-1/sqrt_D);
+        grad_fs[1] *= static_cast<float>(((-1) / (2*fs[2]) + (dt0_dD * 2 * fs[1])));
+        grad_fs[2] *= static_cast<float>(((fs[1] - sqrt_D) / (4*_SQR(fs[2])) + (dt0_dD * (-4) * fs[0])));
+        grad_fs[3] = 0.f;
 
     }else if (cubic_root_type == CUBIC_TYPE_POLY){
-        float const  D = _SQR(fs[1]) - 4.0 * fs[2] * fs[0];
-        float const  sqrt_D = sqrtf(D);
-        float const  sqr_f2 = _SQR(fs[2]);
+        double const  D = _SQR(fs[1]) - 4.0 * fs[2] * fs[0];
+        double const  sqrt_D = sqrt(D);
+        double const  sqr_f2 = _SQR(fs[2]);
+
+        #define __POLY_ROOT_GRAD_S \
+                double const dt_dD = -1 / (4*fs[2]*sqrt_D); \
+                grad_fs[0] *= static_cast<float>(1/sqrt_D); \
+                grad_fs[1] *= static_cast<float>(((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]))); \
+                grad_fs[2] *= static_cast<float>(((fs[1] + sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0])));
+
+        #define __POLY_ROOT_GRAD_L \
+                double const dt_dD = 1 / (4*fs[2]*sqrt_D); \
+                grad_fs[0] *= static_cast<float>(-1/sqrt_D); \
+                grad_fs[1] *= static_cast<float>(((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]))); \
+                grad_fs[2] *= static_cast<float>(((fs[1] - sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]))); \
 
         if (fs[2] > 0){
             if (st_id == 0){
                 // st[0] = (-f1 - sqrt_D) / (2 * f2);
-                float const dt_dD = -1 / (4*fs[2]*sqrt_D);
-                grad_fs[0] *= 1/sqrt_D;
-                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
-                grad_fs[2] *= ((fs[1] + sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+                __POLY_ROOT_GRAD_S
             }else{
                 // st[1] = (-f1 + sqrt_D) / (2 * f2);
-                float const dt_dD = 1 / (4*fs[2]*sqrt_D);
-                grad_fs[0] *= -1/sqrt_D;
-                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
-                grad_fs[2] *= ((fs[1] - sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+                __POLY_ROOT_GRAD_L
             }
         }else{
             if (st_id == 0){
                 // st[0] = (-f1 + sqrt_D) / (2 * f2);
-                float const dt_dD = 1 / (4*fs[2]*sqrt_D);
-                grad_fs[0] *= -1/sqrt_D;
-                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
-                grad_fs[2] *= ((fs[1] - sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+                __POLY_ROOT_GRAD_S
             }else{
                 // st[1] = (-f1 - sqrt_D) / (2 * f2);
-                float const dt_dD = -1 / (4*fs[2]*sqrt_D);
-                grad_fs[0] *= 1/sqrt_D;
-                grad_fs[1] *= ((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]));
-                grad_fs[2] *= ((fs[1] + sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]));
+                __POLY_ROOT_GRAD_L
             }
         }
-        grad_fs[3] = 0;
+        grad_fs[3] = 0.f;
 
     }else{
         // macros for cubic gradient
-        double const  norm_term = static_cast<double>(fs[3]);
-        double const  a = static_cast<double>(fs[3]) / norm_term;
-        double const  b = static_cast<double>(fs[2]) / norm_term;
-        double const  c = static_cast<double>(fs[1]) / norm_term;
-        double const  d = static_cast<double>(fs[0]) / norm_term;
+        double const  norm_term = fs[3];
+        double const  a = fs[3] / norm_term;
+        double const  b = fs[2] / norm_term;
+        double const  c = fs[1] / norm_term;
+        double const  d = fs[0] / norm_term;
 
         #define __Db_Df3 ((-fs[2]) / fs[3] / fs[3])
         #define __Db_Df2 (1. / fs[3])

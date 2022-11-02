@@ -47,6 +47,8 @@ __device__ __inline__ void trace_ray_surface(
         float* __restrict__ out_log_transmit) {
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim; // (9) every basis in SH has a lane
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
+    double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
+    double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
 
     if (ray.tmin > ray.tmax) {
         out[lane_colorgrp] = (grid.background_nlayers == 0) ? opt.background_brightness : 0.f;
@@ -80,7 +82,7 @@ __device__ __inline__ void trace_ray_surface(
         }
 
         // find intersections
-        float const surface[8] = {
+        double const surface[8] = {
             grid.surface_data[link_ptr[0]],
             grid.surface_data[link_ptr[1]],
             grid.surface_data[link_ptr[offy]],
@@ -115,8 +117,8 @@ __device__ __inline__ void trace_ray_surface(
         // float const f1 = -c0*ray.dir[0] + d0*(1-ray.origin[0]+ray.l[0]) + c1*ray.dir[0] + d1*(ray.origin[0]-ray.l[0]);
         // float const f0 = c0*(1-ray.origin[0]+ray.l[0]) + c1*(ray.origin[0]-ray.l[0]);
 
-        float fs[4] = {0,0,0,0};
-        surface_to_cubic_equation(surface, ray.origin, ray.dir, voxel_l, fs);
+        double fs[4];
+        surface_to_cubic_equation(surface, ray_origin_d, ray_dir_d, voxel_l, fs);
 
         // only supports single level set!
         const int level_set_num = 1;
@@ -124,7 +126,7 @@ __device__ __inline__ void trace_ray_surface(
 
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
         for (int i=0; i < level_set_num; ++i){
-            float const lv_set = grid.level_set_data[i];
+            double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
             }
@@ -139,7 +141,7 @@ __device__ __inline__ void trace_ray_surface(
             ////////////// CUBIC ROOT SOLVING //////////////
             // float const eps = 1e-8;
             // float const eps_double = 1e-10;
-            float st[3] = {-1, -1, -1}; // sample t
+            double st[3] = {-1, -1, -1}; // sample t
 
             cubic_equation_solver(
                 fs[0] - lv_set, fs[1], fs[2], fs[3],
@@ -164,7 +166,7 @@ __device__ __inline__ void trace_ray_surface(
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
                     assert(!isnan(st[j]));
-                    ray.pos[k] = fmaf(st[j], ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = voxel_l[k]; // get l
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                     ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
@@ -360,6 +362,9 @@ __device__ __inline__ void trace_ray_surface_backward(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim; // rgb channel id
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim)); // mask for RGB channels of same basis
 
+    double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
+    double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
+
     float accum = fmaf(color_cache[0], grad_output[0],
                       fmaf(color_cache[1], grad_output[1],
                            color_cache[2] * grad_output[2])); // sum(d_mse/d_pred_rgb * pred_rgb)
@@ -405,7 +410,7 @@ __device__ __inline__ void trace_ray_surface_backward(
         }
 
         // find intersections
-        float const surface[8] = {
+        double const surface[8] = {
             grid.surface_data[link_ptr[0]],
             grid.surface_data[link_ptr[1]],
             grid.surface_data[link_ptr[offy]],
@@ -417,15 +422,15 @@ __device__ __inline__ void trace_ray_surface_backward(
         };
 
 
-        float fs[4];
-        surface_to_cubic_equation(surface, ray.origin, ray.dir, voxel_l, fs);
+        double fs[4];
+        surface_to_cubic_equation(surface, ray_origin_d, ray_dir_d, voxel_l, fs);
 
         // only supports single level set!
         const int level_set_num = 1;
         
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); 
         for (int i=0; i < level_set_num; ++i){
-            float const lv_set = grid.level_set_data[i];
+            double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
             }
@@ -433,7 +438,7 @@ __device__ __inline__ void trace_ray_surface_backward(
             fs[0] -= lv_set;
 
             ////////////// CUBIC ROOT SOLVING //////////////
-            float st[3] = {-1, -1, -1}; // sample t
+            double st[3] = {-1, -1, -1}; // sample t
             enum BasisType const cubic_root_type = cubic_equation_solver(
                 fs[0], fs[1], fs[2], fs[3],
                 1e-8, // float eps
@@ -458,7 +463,7 @@ __device__ __inline__ void trace_ray_surface_backward(
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
                     assert(!isnan(st[st_id]));
-                    ray.pos[k] = fmaf(st[st_id], ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.pos[k] = fmaf(static_cast<float>(st[st_id]), ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = voxel_l[k]; // get l
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                     ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
