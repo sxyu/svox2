@@ -210,8 +210,10 @@ with torch.no_grad():
         # torch.cuda.synchronize()
         # depth = grid.volume_render_depth_image(cam)
         torch.cuda.synchronize()
-        pts = grid.volume_render_extract_pts(cam, intersect_th=args.intersect_th)
+        pts = grid.volume_render_extract_pts(cam, sigma_thresh=args.intersect_th, intersect_th=args.intersect_th)
+        # depth = grid.volume_render_depth_image(cam, sigma_thresh=args.intersect_th, intersect_th=args.intersect_th) # ,
         torch.cuda.synchronize()
+        # imageio.imwrite('d.png', depth.cpu().numpy())
 
         # depth.clamp_(0.0, 1.0)
         # depth = depth /depth.max()

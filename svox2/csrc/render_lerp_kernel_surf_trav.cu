@@ -520,6 +520,7 @@ __device__ __inline__ void trace_ray_sigma_thresh(
         }
         t += opt.step_size;
     }
+    *out = 0.f;
 }
 
 __device__ __inline__ void trace_ray_surf_trav_backward(
