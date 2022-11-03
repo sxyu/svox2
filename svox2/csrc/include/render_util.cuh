@@ -167,8 +167,6 @@ __device__ __inline__ void trilerp_backward_one_pos(
 Find gradient wrt to the sample location (pos)
 */  
 {
-    const int offz = stride;
-
     const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
 
 #define READ_LINK(u) (data[link_ptr[u] * stride + idx])
@@ -772,9 +770,9 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
     double const eps_double,
     double* __restrict__ outs
 ){
-    if (_CLOSE_TO_ZERO(f3, eps)){
-        if (_CLOSE_TO_ZERO(f2, eps)){
-            if (_CLOSE_TO_ZERO(f1, eps)){
+    if (_CLOSE_TO_ZERO(f3, eps_double)){
+        if (_CLOSE_TO_ZERO(f2, eps_double)){
+            if (_CLOSE_TO_ZERO(f1, eps_double)){
                 // no solution
                 return CUBIC_TYPE_NO_ROOT; 
             } else {
@@ -799,7 +797,7 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
 
                 // assert(!isnan(outs[0]));
                 // assert(!isnan(outs[1]));
-                if (_CLOSE_TO_ZERO(outs[0] - outs[1], eps)){
+                if (_CLOSE_TO_ZERO(outs[0] - outs[1], eps_double)){
                     // if two roots are too similiar (D==0), then just take one
                     outs[1] = -1;
                     return CUBIC_TYPE_POLY_ONE_R;
@@ -810,7 +808,6 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
         }
     } else {
         // cubic case
-        double const eps_double = 1e-10;
         double const norm_term = f3;
         double const a = f3 / norm_term;
         double const b = f2 / norm_term;

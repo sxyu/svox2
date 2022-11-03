@@ -35,7 +35,7 @@ __global__ void test_cubic_root_grad_kernel(
     // torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_fs
     // const int st_id,
     // float* __restrict__ grad_fs
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> T_fs,
+    torch::PackedTensorAccessor32<double, 2, torch::RestrictPtrTraits> T_fs,
     torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> T_st_id,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> T_grad_fs
 ) {
@@ -48,11 +48,11 @@ __global__ void test_cubic_root_grad_kernel(
     if (lane_id >= 1)  // Bad, but currently the best way due to coalesced memory access
         return;
 
-    float* __restrict__ fs = T_fs[ray_id].data();
+    double* __restrict__ fs = T_fs[ray_id].data();
     const int st_id = T_st_id[ray_id];
     float* __restrict__ grad_fs = T_grad_fs[ray_id].data();
 
-    float st[3] = {-1, -1, -1}; // sample t
+    double st[3] = {-1, -1, -1}; // sample t
     enum BasisType const cubic_root_type = cubic_equation_solver(
         fs[0], fs[1], fs[2], fs[3],
         1e-8, // float eps
@@ -95,7 +95,7 @@ torch::Tensor test_cubic_root_grad(Tensor T_fs, Tensor T_st_ids, Tensor T_grad_f
         const int cuda_n_threads = TRACE_RAY_CUDA_THREADS;
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads);
         device::test_cubic_root_grad_kernel<<<blocks, cuda_n_threads>>>(
-                T_fs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                T_fs.packed_accessor32<double, 2, torch::RestrictPtrTraits>(),
                 T_st_ids.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
                 // Output
                 T_grad_fs.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
