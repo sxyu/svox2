@@ -4618,17 +4618,15 @@ class SparseGrid(nn.Module):
             rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
             if rand_cells is not None:
                 if rand_cells.size(0) > 0:
-                    raise NotImplementedError('Sparse normal loss currently not supported')
-                    _C.tv_grad_sparse(self.links, self.surface_data,
+                    _C.surface_normal_grad_sparse(self.links, self.surface_data,
                             rand_cells,
                             self._get_sparse_grad_indexer(),
+                            self.level_set_data[0],
                             0, 1, scaling,
-                            False,
-                            self.opt.last_sample_opaque,
                             ndc_coeffs[0], ndc_coeffs[1],
                             grad)
             else:
-                _C.surfacel_normal_grad(self.links, self.surface_data, self.level_set_data[0],
+                _C.surface_normal_grad(self.links, self.surface_data, self.level_set_data[0],
                         0, 1, scaling,
                         ndc_coeffs[0], ndc_coeffs[1],
                         grad)

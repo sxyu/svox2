@@ -93,10 +93,10 @@ void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
 Tensor tv(Tensor, Tensor, int, int, bool, float, bool, float, float);
 void tv_grad(Tensor, Tensor, int, int, float, bool, float, bool, float, float,
              Tensor);
-void surfacel_normal_grad(Tensor, Tensor, float, int, int, float, float, float,
+void surface_normal_grad(Tensor, Tensor, float, int, int, float, float, float,
              Tensor);
-// void surfacel_normal_grad(Tensor, Tensor, int, int, float, bool, float, float,
-//              Tensor);
+void surface_normal_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, int, int, float, float, float,
+             Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, bool, float, float, Tensor);
 void msi_tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
@@ -145,7 +145,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // Loss
   _REG_FUNC(tv);
   _REG_FUNC(tv_grad);
-  _REG_FUNC(surfacel_normal_grad);
+  _REG_FUNC(surface_normal_grad);
+  _REG_FUNC(surface_normal_grad_sparse);
   _REG_FUNC(tv_grad_sparse);
   _REG_FUNC(msi_tv_grad_sparse);
   _REG_FUNC(lumisphere_tv_grad_sparse);

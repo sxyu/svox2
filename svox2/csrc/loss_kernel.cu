@@ -185,33 +185,50 @@ __device__ __inline__ void _add_surface_grad(
     const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
     const size_t ddim,
     const int idx,
+    bool* __restrict__ mask_out,
     float* __restrict__ grad_data
 ){
     #define __FETCH_GRAD_PTR(x,y,z) (grad_data + links[x][y][z] * ddim + idx)
     float const grad000 = -0.25f * grad_n[0] + -0.25f * grad_n[1] + -0.25f * grad_n[2]; 
-    if (grad000 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x,y,z), grad000*scale); 
-    
+    if (grad000 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x,y,z), grad000*scale);
+        if (mask_out != nullptr) mask_out[links[x][y][z]] = true;
+    }
     float const grad001 = -0.25f * grad_n[0] + -0.25f * grad_n[1] + 0.25f * grad_n[2]; 
-    if (grad001 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x,y,z+1), grad001*scale); 
-    
+    if (grad001 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x,y,z+1), grad001*scale); 
+        if (mask_out != nullptr) mask_out[links[x][y][z+1]] = true;
+    }
     float const grad010 = -0.25f * grad_n[0] + 0.25f * grad_n[1] + -0.25f * grad_n[2]; 
-    if (grad010 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x,y+1,z), grad010*scale); 
-    
+    if (grad010 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x,y+1,z), grad010*scale); 
+        if (mask_out != nullptr) mask_out[links[x][y+1][z]] = true;
+    }
     float const grad011 = -0.25f * grad_n[0] + 0.25f * grad_n[1] + 0.25f * grad_n[2]; 
-    if (grad011 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x,y+1,z+1), grad011*scale); 
-    
+    if (grad011 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x,y+1,z+1), grad011*scale); 
+        if (mask_out != nullptr) mask_out[links[x][y+1][z+1]] = true;
+    }
     float const grad100 = 0.25f * grad_n[0] + -0.25f * grad_n[1] + -0.25f * grad_n[2]; 
-    if (grad100 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x+1,y,z), grad100*scale); 
-    
+    if (grad100 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x+1,y,z), grad100*scale); 
+        if (mask_out != nullptr) mask_out[links[x+1][y][z]] = true;
+    }
     float const grad101 = 0.25f * grad_n[0] + -0.25f * grad_n[1] + 0.25f * grad_n[2]; 
-    if (grad101 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x+1,y,z+1), grad101*scale); 
-    
+    if (grad101 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x+1,y,z+1), grad101*scale); 
+        if (mask_out != nullptr) mask_out[links[x+1][y][z+1]] = true;
+    }
     float const grad110 = 0.25f * grad_n[0] + 0.25f * grad_n[1] + -0.25f * grad_n[2]; 
-    if (grad110 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x+1,y+1,z), grad110*scale); 
-    
+    if (grad110 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x+1,y+1,z), grad110*scale); 
+        if (mask_out != nullptr) mask_out[links[x+1][y+1][z]] = true;
+    }
     float const grad111 = 0.25f * grad_n[0] + 0.25f * grad_n[1] + 0.25f * grad_n[2]; 
-    if (grad111 != 0.f) atomicAdd(__FETCH_GRAD_PTR(x+1,y+1,z+1), grad111*scale); 
-
+    if (grad111 != 0.f) {
+        atomicAdd(__FETCH_GRAD_PTR(x+1,y+1,z+1), grad111*scale); 
+        if (mask_out != nullptr) mask_out[links[x+1][y+1][z+1]] = true;
+    }
     #undef __FETCH_GRAD_PTR
 }
 
@@ -229,7 +246,6 @@ __global__ void surface_normal_grad_kernel(
         // Output
         float* __restrict__ grad_data) {
     CUDA_GET_THREAD_ID_U64(tid, Q);
-    float dummy;
     const int idx = tid % (end_dim - start_dim) + start_dim;
     const int xyz = tid / (end_dim - start_dim);
     const int z = xyz % (links.size(2) - 1);
@@ -243,16 +259,11 @@ __global__ void surface_normal_grad_kernel(
 
     if (!__GRID_EXIST(x,y,z)) return;
 
-    float scaling[3];
-    CALCULATE_RAY_SCALE(scaling, links.size(0), links.size(1), links.size(2)); // scale = links.size / 256.f
+    // float scaling[3];
+    // CALCULATE_RAY_SCALE(scaling, links.size(0), links.size(1), links.size(2)); // scale = links.size / 256.f
 
     const float* dptr = data.data();
     const size_t ddim = data.size(1);
-    float v000 = 0.f, v100 = 0.f, v010 = 0.f, v001 = 0.f;
-    float* gptr000 = &dummy,
-         * gptr100 = &dummy,
-         * gptr010 = &dummy,
-         * gptr001 = &dummy;
 
     #define __FETCH_DATA(x,y,z) (dptr[links[x][y][z] * ddim + idx])
     
@@ -276,8 +287,8 @@ __global__ void surface_normal_grad_kernel(
     float _norm100[3];
 
     bool skips[] = {false, false, false};
+    int norm_count = 0;
 
-    // TODO: check for surface connectivity
 
     #define __GRID_CONNECTED(s0, s1, s2, s3) (!(((s0 <= lv_set) && (s1 <= lv_set) && (s2 <= lv_set) && (s3 <= lv_set)) || \
                                                 ((s0 >= lv_set) && (s1 >= lv_set) && (s2 >= lv_set) && (s3 >= lv_set))))
@@ -289,6 +300,7 @@ __global__ void surface_normal_grad_kernel(
         _norm001[0] = __CALC_DX(x,y,z+1);
         _norm001[1] = __CALC_DY(x,y,z+1);
         _norm001[2] = __CALC_DZ(x,y,z+1);
+        norm_count += 1;
     }else{
         skips[2] = true;
     }
@@ -298,6 +310,7 @@ __global__ void surface_normal_grad_kernel(
         _norm010[0] = __CALC_DX(x,y+1,z);
         _norm010[1] = __CALC_DY(x,y+1,z);
         _norm010[2] = __CALC_DZ(x,y+1,z);
+        norm_count += 1;
     }else{
         skips[1] = true;
     }
@@ -306,6 +319,7 @@ __global__ void surface_normal_grad_kernel(
         _norm100[0] = __CALC_DX(x+1,y,z);
         _norm100[1] = __CALC_DY(x+1,y,z);
         _norm100[2] = __CALC_DZ(x+1,y,z);
+        norm_count += 1;
     }else{
         skips[0] = true;
     }
@@ -339,7 +353,7 @@ __global__ void surface_normal_grad_kernel(
         assert(!(isnan(d0[2])));
 
         _add_surface_grad(x, y, z, d0, 
-                          scale, links, ddim, idx, grad_data);
+                          scale, links, ddim, idx, nullptr, grad_data);
         
 
         float const d1[] = {
@@ -373,24 +387,173 @@ __global__ void surface_normal_grad_kernel(
         }
 
         _add_surface_grad(ux, uy, uz, d1,
-                          scale, links, ddim, idx, grad_data);
+                          scale * 1.f/norm_count, links, ddim, idx, nullptr, grad_data);
 
     }
-
-
-
-    // float dx = (v100 - v000);
-    // float dy = (v010 - v000);
-    // float dz = (v001 - v000);
-    // const float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
-    // dx *= scaling[0];
-    // dy *= scaling[1];
-    // dz *= scaling[2];
-    // if (dx != 0.f) atomicAdd(gptr100, dx * idelta);
-    // if (dy != 0.f) atomicAdd(gptr010, dy * idelta);
-    // if (dz != 0.f) atomicAdd(gptr001, dz * idelta);
-    // atomicAdd(gptr000, -(dx + dy + dz) * idelta);
 }
+
+
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void surface_normal_grad_sparse_kernel(
+        const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        const int32_t* __restrict__ rand_cells,
+        float const lv_set,
+        int start_dim, int end_dim,
+        float scale,
+        size_t Q,
+        // bool ignore_edge, // always false
+        float ndc_coeffx, float ndc_coeffy,
+        // Output
+        bool* __restrict__ mask_out,
+        float* __restrict__ grad_data) {
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int idx = tid % (end_dim - start_dim) + start_dim;
+    const int xyz = rand_cells[tid / (end_dim - start_dim)];
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
+
+    #define __GRID_EXIST(x,y,z) (\
+    (x < links.size(0) - 2) && (y < links.size(1) - 2) && (z < links.size(2) - 2) && \
+    (links[x][y][z] >= 0) && (links[x][y][z+1] >= 0) && (links[x][y+1][z] >= 0) && (links[x][y+1][z+1] >= 0) && (links[x+1][y][z] >= 0) && (links[x+1][y][z+1] >= 0) && (links[x+1][y+1][z] >= 0) && (links[x+1][y+1][z+1] >= 0))
+
+    if (!__GRID_EXIST(x,y,z)) return;
+
+    // float scaling[3];
+    // CALCULATE_RAY_SCALE(scaling, links.size(0), links.size(1), links.size(2)); // scale = links.size / 256.f
+
+    const float* dptr = data.data();
+    const size_t ddim = data.size(1);
+
+    #define __FETCH_DATA(x,y,z) (dptr[links[x][y][z] * ddim + idx])
+    
+
+    __FETCH_DATA(x+1,y,z);
+    #define __CALC_DX(x,y,z) (((__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y,z+1)+__FETCH_DATA(x+1,y+1,z)+__FETCH_DATA(x+1,y+1,z+1)) - \
+         (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x,y+1,z+1))) /4)
+    #define __CALC_DY(x,y,z) (((__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x,y+1,z+1)+__FETCH_DATA(x+1,y+1,z)+__FETCH_DATA(x+1,y+1,z+1)) - \
+         (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y,z+1)))/4)
+    #define __CALC_DZ(x,y,z) (((__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x,y+1,z+1)+__FETCH_DATA(x+1,y,z+1)+__FETCH_DATA(x+1,y+1,z+1)) - \
+         (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y+1,z)))/4)
+
+    float _norm000[3] = {
+        __CALC_DX(x,y,z),
+        __CALC_DY(x,y,z),
+        __CALC_DZ(x,y,z)
+    }; // unnormalized normal
+
+    float _norm001[3];
+    float _norm010[3];
+    float _norm100[3];
+
+    bool skips[] = {false, false, false};
+    int norm_count = 0;
+
+
+    #define __GRID_CONNECTED(s0, s1, s2, s3) (!(((s0 <= lv_set) && (s1 <= lv_set) && (s2 <= lv_set) && (s3 <= lv_set)) || \
+                                                ((s0 >= lv_set) && (s1 >= lv_set) && (s2 >= lv_set) && (s3 >= lv_set))))
+
+                                            
+
+    if ((__GRID_EXIST(x,y,z+1)) && \
+        (__GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1)))){
+        _norm001[0] = __CALC_DX(x,y,z+1);
+        _norm001[1] = __CALC_DY(x,y,z+1);
+        _norm001[2] = __CALC_DZ(x,y,z+1);
+        norm_count += 1;
+    }else{
+        skips[2] = true;
+    }
+
+    if ((__GRID_EXIST(x,y+1,z)) && \
+        (__GRID_CONNECTED(__FETCH_DATA(x,y+1,z), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1)))){
+        _norm010[0] = __CALC_DX(x,y+1,z);
+        _norm010[1] = __CALC_DY(x,y+1,z);
+        _norm010[2] = __CALC_DZ(x,y+1,z);
+        norm_count += 1;
+    }else{
+        skips[1] = true;
+    }
+    if ((__GRID_EXIST(x+1,y,z)) && \
+        (__GRID_CONNECTED(__FETCH_DATA(x+1,y,z), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1)))){
+        _norm100[0] = __CALC_DX(x+1,y,z);
+        _norm100[1] = __CALC_DY(x+1,y,z);
+        _norm100[2] = __CALC_DZ(x+1,y,z);
+        norm_count += 1;
+    }else{
+        skips[0] = true;
+    }
+
+    for (int i=0; i<3; ++i){
+        if (skips[i]){
+            continue;
+        }
+        float const *_n1 = (i==0) ? _norm100 : ((i==1) ? _norm010 : _norm001);
+        float const N0 = _NORM3(_norm000);
+        float const N1 = _NORM3(_n1);
+
+        // dE/d0x, dE/d0y, dE/d0z
+        float const d0[] = {
+                (_norm000[0]/N0 - _n1[0]/N1) * \ 
+                (-2.f*_SQR(_norm000[0])/_CUBIC(N0) + 2.f/N0) \ 
+                + -2.f*_norm000[0]*_norm000[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0) \
+                + -2.f*_norm000[0]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
+                (_norm000[1]/N0 - _n1[1]/N1) * \ 
+                (-2.f*_SQR(_norm000[1])/_CUBIC(N0) + 2.f/N0) \ 
+                + -2.f*_norm000[0]*_norm000[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
+                + -2.f*_norm000[1]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
+                (_norm000[2]/N0 - _n1[2]/N1) * \ 
+                (-2.f*_SQR(_norm000[2])/_CUBIC(N0) + 2.f/N0) \ 
+                + -2.f*_norm000[0]*_norm000[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
+                + -2.f*_norm000[1]*_norm000[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0)
+        };
+
+        assert(!(isnan(d0[0])));
+        assert(!(isnan(d0[1])));
+        assert(!(isnan(d0[2])));
+
+        _add_surface_grad(x, y, z, d0, 
+                          scale, links, ddim, idx, mask_out, grad_data);
+        
+
+        float const d1[] = {
+                (_norm000[0]/N0 - _n1[0]/N1) * \ 
+                (2.f*_SQR(_n1[0])/_CUBIC(N1) - 2.f/N1) \
+                + 2.f*_n1[0]*_n1[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1) \
+                + 2.f*_n1[0]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
+                (_norm000[1]/N0 - _n1[1]/N1) * \ 
+                (2.f*_SQR(_n1[1])/_CUBIC(N1) - 2.f/N1) \ 
+                + 2.f*_n1[0]*_n1[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
+                + 2.f*_n1[1]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
+                (_norm000[2]/N0 - _n1[2]/N1) * \ 
+                (2.f*_SQR(_n1[2])/_CUBIC(N1) - 2.f/N1) \ 
+                + 2.f*_n1[0]*_n1[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
+                + 2.f*_n1[1]*_n1[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1)
+        };
+
+        assert(!(isnan(d1[0])));
+        assert(!(isnan(d1[1])));
+        assert(!(isnan(d1[2])));
+
+        float ux = x,
+              uy = y,
+              uz = z;
+        if (i==0){
+            ux += 1;
+        }else if(i==1){
+            uy += 1;
+        }else{
+            uz += 1;
+        }
+
+        _add_surface_grad(ux, uy, uz, d1,
+                          scale * 1.f/norm_count, links, ddim, idx, mask_out, grad_data);
+
+    }
+}
+
 
 __launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void tv_grad_sparse_kernel(
@@ -773,7 +936,7 @@ void tv_grad(torch::Tensor links,
     CUDA_CHECK_ERRORS;
 }
 
-void surfacel_normal_grad(torch::Tensor links,
+void surface_normal_grad(torch::Tensor links,
              torch::Tensor data,
              float lv_set,
              int start_dim, int end_dim,
@@ -852,6 +1015,50 @@ void tv_grad_sparse(torch::Tensor links,
             Q,
             ignore_edge,
             ignore_last_z,
+            ndc_coeffx, ndc_coeffy,
+            // Output
+            (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
+            grad_data.data_ptr<float>());
+    CUDA_CHECK_ERRORS;
+}
+
+void surface_normal_grad_sparse(torch::Tensor links,
+             torch::Tensor data,
+             torch::Tensor rand_cells,
+             torch::Tensor mask_out,
+             float lv_set,
+             int start_dim, int end_dim,
+             float scale,
+             float ndc_coeffx,
+             float ndc_coeffy,
+             torch::Tensor grad_data) {
+    DEVICE_GUARD(data);
+    CHECK_INPUT(data);
+    CHECK_INPUT(links);
+    CHECK_INPUT(grad_data);
+    CHECK_INPUT(rand_cells);
+    CHECK_INPUT(mask_out);
+    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(grad_data.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(grad_data.ndimension() == 2);
+
+    int nl = rand_cells.size(0);
+    size_t Q = rand_cells.size(0) * size_t(end_dim - start_dim);
+
+    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    device::surface_normal_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            rand_cells.data_ptr<int32_t>(),
+            lv_set,
+            start_dim,
+            end_dim,
+            scale / nl,
+            Q,
             ndc_coeffx, ndc_coeffy,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,

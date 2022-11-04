@@ -65,8 +65,8 @@ __device__ __inline__ void trace_ray_surf_trav(
     int32_t last_voxel[] = {-1,-1,-1};
 
     while (t <= ray.tmax) {
-#pragma unroll 3
         int32_t voxel_l[3];
+#pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
             voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
@@ -275,8 +275,8 @@ __device__ __inline__ void trace_ray_expected_term(
     int32_t last_voxel[] = {-1,-1,-1};
 
     while (t <= ray.tmax) {
-#pragma unroll 3
         int32_t voxel_l[3];
+#pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
             voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
@@ -430,8 +430,8 @@ __device__ __inline__ void trace_ray_sigma_thresh(
     int32_t last_voxel[] = {-1,-1,-1};
 
     while (t <= ray.tmax) {
-#pragma unroll 3
         int32_t voxel_l[3];
+#pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
             voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
@@ -593,8 +593,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     int32_t last_voxel[] = {-1,-1,-1};
 
     while (t <= ray.tmax) {
-#pragma unroll 3
         int32_t voxel_l[3];
+#pragma unroll 3
         for (int j = 0; j < 3; ++j) {
             voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
             voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
