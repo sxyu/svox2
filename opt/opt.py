@@ -597,6 +597,10 @@ while True:
             if gstep_id >= args.lr_fg_begin_step:
                 grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
                 if not no_surface:
+                    if args.surf_grad_abs_max is not None:
+                        # apply gradient clipping
+                        thresh = np.abs(args.surf_grad_abs_max)
+                        torch.clamp_(grid.surface_data.grad, -thresh, thresh)
                     grid.optim_surface_step(lr_surface, beta=args.rms_beta, optim=args.surface_optim)
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:

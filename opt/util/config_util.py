@@ -264,6 +264,7 @@ def setup_train_conf():
     group.add_argument('--lr_surface_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_surface_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+    group.add_argument('--surf_grad_abs_max', type=float, default=None, help='Apply max gradient clipping on the surface grad')
 
     group.add_argument('--fake_sample_std', type=float, default=1, help='std for fake samples')
     group.add_argument('--fake_sample_std_final', type=float, default=1e-4)
