@@ -631,6 +631,51 @@ while True:
                 print('Saving', ckpt_path)
                 grid.save(ckpt_path, step_id=gstep_id)
 
+
+            global last_upsamp_step, reso_id, reso_list, factor
+            if (gstep_id - last_upsamp_step) >= args.upsamp_every:
+                last_upsamp_step = gstep_id
+                if reso_id < len(reso_list) - 1:
+                    print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
+                    if args.tv_early_only > 0:
+                        print('turning off TV regularization')
+                        args.lambda_tv = 0.0
+                        args.lambda_tv_sh = 0.0
+                    elif args.tv_decay != 1.0:
+                        args.lambda_tv *= args.tv_decay
+                        args.lambda_tv_sh *= args.tv_decay
+
+                    reso_id += 1
+                    use_sparsify = True
+                    z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
+
+                    if grid.surface_data is None or no_surface:
+                        grid.resample(reso=reso_list[reso_id],
+                                sigma_thresh=args.density_thresh,
+                                weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
+                                dilate=2, #use_sparsify,
+                                cameras=resample_cameras if args.thresh_type == 'weight' else None,
+                                max_elements=args.max_grid_elements)
+                    else:
+                        grid.resample_surface(reso=reso_list[reso_id],
+                                alpha_thresh=args.alpha_upsample_thresh,
+                                weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
+                                dilate=2, #use_sparsify,
+                                cameras=resample_cameras if args.thresh_type == 'weight' else None,
+                                max_elements=args.max_grid_elements)
+
+                    if grid.use_background and reso_id <= 1:
+                        grid.sparsify_background(args.background_density_thresh)
+
+                    if args.upsample_density_add:
+                        grid.density_data.data[:] += args.upsample_density_add
+
+                if factor > 1 and reso_id < len(reso_list) - 1:
+                    print('* Using higher resolution images due to large grid; new factor', factor)
+                    factor //= 2
+                    dset.gen_rays(factor=factor)
+                    dset.shuffle_rays()
+
     train_step()
     gc.collect()
     gstep_id_base += batches_per_epoch
@@ -642,39 +687,6 @@ while True:
     #     print('Saving', ckpt_path)
     #     grid.save(ckpt_path)
 
-    if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
-        last_upsamp_step = gstep_id_base
-        if reso_id < len(reso_list) - 1:
-            print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
-            if args.tv_early_only > 0:
-                print('turning off TV regularization')
-                args.lambda_tv = 0.0
-                args.lambda_tv_sh = 0.0
-            elif args.tv_decay != 1.0:
-                args.lambda_tv *= args.tv_decay
-                args.lambda_tv_sh *= args.tv_decay
-
-            reso_id += 1
-            use_sparsify = True
-            z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
-            grid.resample(reso=reso_list[reso_id],
-                    sigma_thresh=args.density_thresh,
-                    weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
-                    dilate=2, #use_sparsify,
-                    cameras=resample_cameras if args.thresh_type == 'weight' else None,
-                    max_elements=args.max_grid_elements)
-
-            if grid.use_background and reso_id <= 1:
-                grid.sparsify_background(args.background_density_thresh)
-
-            if args.upsample_density_add:
-                grid.density_data.data[:] += args.upsample_density_add
-
-        if factor > 1 and reso_id < len(reso_list) - 1:
-            print('* Using higher resolution images due to large grid; new factor', factor)
-            factor //= 2
-            dset.gen_rays(factor=factor)
-            dset.shuffle_rays()
 
     # if gstep_id_base >= args.n_iters:
     #     print('* Final eval and save')

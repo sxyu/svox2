@@ -476,3 +476,9 @@ def pose_spherical(theta : float, phi : float, radius : float, offset : Optional
     if offset is not None:
         c2w[:3, 3] += offset
     return c2w
+
+def sigmoid_np(x):
+    return 1. / (1. + np.exp(-x))
+
+def logit_np(x):
+    return np.log(x / (1. - x))

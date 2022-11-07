@@ -343,7 +343,7 @@ def setup_train_conf():
 
     group = parser.add_argument_group("misc experiments")
     group.add_argument('--thresh_type',
-                        choices=["weight", "sigma"],
+                        choices=["weight", "sigma", "alpha"],
                         default="weight",
                     help='Upsample threshold type')
     group.add_argument('--weight_thresh', type=float,
@@ -352,6 +352,9 @@ def setup_train_conf():
                     help='Upsample weight threshold; will be divided by resulting z-resolution')
     group.add_argument('--density_thresh', type=float,
                         default=5.0,
+                    help='Upsample sigma threshold')
+    group.add_argument('--alpha_upsample_thresh', type=float,
+                        default=1e-8,
                     help='Upsample sigma threshold')
     group.add_argument('--background_density_thresh', type=float,
                         default=1.0+1e-9,

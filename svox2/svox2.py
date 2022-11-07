@@ -231,6 +231,7 @@ class _SampleGridAutogradFunction(autograd.Function):
     @staticmethod
     def backward(ctx, grad_out_density, grad_out_sh):
         (points,) = ctx.saved_tensors
+        print('backward called')
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
         _C.sample_grid_backward(
@@ -993,8 +994,6 @@ class SparseGrid(nn.Module):
 
         :return: (density, color)
         """
-        if self.surface_type != SURFACE_TYPE_NONE:
-            raise NotImplementedError
 
         if use_kernel and self.links.is_cuda and _C is not None:
             assert points.is_cuda
@@ -1052,6 +1051,91 @@ class SparseGrid(nn.Module):
                 samples_rgb = torch.empty_like(self.sh_data[:0])
 
             return samples_sigma, samples_rgb
+
+
+    def sample_surface(self, points: torch.Tensor,
+                        use_kernel: bool = True,
+                        grid_coords: bool = False,
+                        want_colors: bool = True,
+                        want_surfaces: bool = True):
+        """
+        Grid sampling with trilinear interpolation.
+        Behaves like torch.nn.functional.grid_sample
+        with padding mode border and align_corners=False (better for multi-resolution).
+
+        Any voxel with link < 0 (empty) is considered to have 0 values in all channels
+        prior to interpolating.
+
+        :param points: torch.Tensor, (N, 3)
+        :param use_kernel: bool, if false uses pure PyTorch version even if on CUDA.
+        :param grid_coords: bool, if true then uses grid coordinates ([-0.5, reso[i]-0.5 ] in each dimension);
+                                  more numerically exact for resampling
+        :param want_colors: bool, if true (default) returns density and colors,
+                            else returns density and a dummy tensor to be ignored
+                            (much faster)
+
+        :return: (alpha, color)
+        """
+        # if self.surface_type != SURFACE_TYPE_NONE:
+        #     raise NotImplementedError
+
+        if use_kernel and self.links.is_cuda and _C is not None:
+            assert points.is_cuda
+
+            return _C.sample_grid_sh_surf(self._to_cpp(grid_coords=grid_coords), points, want_colors, want_surfaces)
+        else:
+            raise NotImplementedError()
+            if not grid_coords:
+                points = self.world2grid(points)
+            points.clamp_min_(0.0)
+            for i in range(3):
+                points[:, i].clamp_max_(self.links.size(i) - 1)
+            l = points.to(torch.long)
+            for i in range(3):
+                l[:, i].clamp_max_(self.links.size(i) - 2)
+            wb = points - l
+            wa = 1.0 - wb
+
+            lx, ly, lz = l.unbind(-1)
+            links000 = self.links[lx, ly, lz]
+            links001 = self.links[lx, ly, lz + 1]
+            links010 = self.links[lx, ly + 1, lz]
+            links011 = self.links[lx, ly + 1, lz + 1]
+            links100 = self.links[lx + 1, ly, lz]
+            links101 = self.links[lx + 1, ly, lz + 1]
+            links110 = self.links[lx + 1, ly + 1, lz]
+            links111 = self.links[lx + 1, ly + 1, lz + 1]
+
+            sigma000, rgb000 = self._fetch_links(links000)
+            sigma001, rgb001 = self._fetch_links(links001)
+            sigma010, rgb010 = self._fetch_links(links010)
+            sigma011, rgb011 = self._fetch_links(links011)
+            sigma100, rgb100 = self._fetch_links(links100)
+            sigma101, rgb101 = self._fetch_links(links101)
+            sigma110, rgb110 = self._fetch_links(links110)
+            sigma111, rgb111 = self._fetch_links(links111)
+
+            c00 = sigma000 * wa[:, 2:] + sigma001 * wb[:, 2:]
+            c01 = sigma010 * wa[:, 2:] + sigma011 * wb[:, 2:]
+            c10 = sigma100 * wa[:, 2:] + sigma101 * wb[:, 2:]
+            c11 = sigma110 * wa[:, 2:] + sigma111 * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            samples_sigma = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+            if want_colors:
+                c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
+                c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
+                c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
+                c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
+                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+                samples_rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
+            else:
+                samples_rgb = torch.empty_like(self.sh_data[:0])
+
+            return samples_sigma, samples_rgb
+
 
     def forward(self, points: torch.Tensor, use_kernel: bool = True):
         return self.sample(points, use_kernel=use_kernel)
@@ -3870,7 +3954,8 @@ class SparseGrid(nn.Module):
         use_z_order: bool=False,
         accelerate: bool=True,
         weight_render_stop_thresh: float = 0.2, # SHOOT, forgot to turn this off for main exps..
-        max_elements:int=0
+        max_elements:int=0,
+        batch_size:int=720720
     ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -3935,7 +4020,7 @@ class SparseGrid(nn.Module):
 
             use_weight_thresh = cameras is not None
 
-            batch_size = 720720
+            
             all_sample_vals_density = []
             print('Pass 1/2 (density)')
             for i in tqdm(range(0, len(points), batch_size)):
@@ -3947,8 +4032,6 @@ class SparseGrid(nn.Module):
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
             self.density_data.grad = None
-            if self.surface_type != SURFACE_TYPE_NONE:
-                self.surface_data.grad = None
             self.sh_data.grad = None
             self.sparse_grad_indexer = None
             self.sparse_sh_grad_indexer = None
@@ -4035,8 +4118,6 @@ class SparseGrid(nn.Module):
 
             sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
             del self.density_data
-            if self.surface_type != SURFACE_TYPE_NONE:
-                del self.surface_data
             del self.sh_data
             del all_sample_vals_sh
 
@@ -4061,14 +4142,216 @@ class SparseGrid(nn.Module):
             print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
             print('links', init_links.shape, init_links.dtype)
             self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
-            if self.surface_type != SURFACE_TYPE_NONE:
-                raise NotImplementedError
 
             self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
             self.links = init_links.view(reso).to(device=device)
 
             if accelerate and self.links.is_cuda:
                 self.accelerate()
+
+
+
+
+
+    def resample_surface(
+        self,
+        reso: Union[int, List[int]],
+        alpha_thresh: float = 5.0,
+        weight_thresh: float = 0.01,
+        dilate: int = 2,
+        cameras: Optional[List[Camera]] = None,
+        use_z_order: bool=False,
+        accelerate: bool=True,
+        weight_render_stop_thresh: float = 0.2, # SHOOT, forgot to turn this off for main exps..
+        max_elements:int=0,
+        batch_size:int=720720
+    ):
+        """
+        Resample and sparsify the grid; used to increase the resolution
+        :param reso: int or List[int, int, int], resolution for resampled grid, as in the constructor
+        :param alpha_thresh: float, threshold to apply on the sigma (if using sigma thresh i.e. cameras NOT given)
+        :param weight_thresh: float, threshold to apply on the weights (if using weight thresh i.e. cameras given)
+        :param dilate: int, if true applies dilation of size <dilate> to the 3D mask for nodes to keep in the grid
+                             (keep neighbors in all 28 directions, including diagonals, of the desired nodes)
+        :param cameras: Optional[List[Camera]], optional list of cameras in OpenCV convention (if given, uses weight thresholding)
+        :param use_z_order: bool, if true, stores the data initially in a Z-order curve if possible
+        :param accelerate: bool, if true (default), calls grid.accelerate() after resampling
+                           to build distance transform table (only if on CUDA)
+        :param weight_render_stop_thresh: float, stopping threshold for grid weight render in [0, 1];
+                                                 0.0 = no thresholding, 1.0 = hides everything.
+                                                 Useful for force-cutting off
+                                                 junk that contributes very little at the end of a ray
+        :param max_elements: int, if nonzero, an upper bound on the number of elements in the
+                upsampled grid; we will adjust the threshold to match it
+        """
+        with torch.no_grad():
+            device = self.links.device
+            if isinstance(reso, int):
+                reso = [reso] * 3
+            else:
+                assert (
+                    len(reso) == 3
+                ), "reso must be an integer or indexable object of 3 ints"
+
+            if use_z_order and not (reso[0] == reso[1] and reso[0] == reso[2] and utils.is_pow2(reso[0])):
+                print("Morton code requires a cube grid of power-of-2 size, ignoring...")
+                use_z_order = False
+
+            self.capacity: int = reduce(lambda x, y: x * y, reso)
+            curr_reso = self.links.shape
+            dtype = torch.float32
+            reso_facts = [0.5 * curr_reso[i] / reso[i] for i in range(3)]
+            X = torch.linspace(
+                reso_facts[0] - 0.5,
+                curr_reso[0] - reso_facts[0] - 0.5,
+                reso[0],
+                dtype=dtype,
+            )
+            Y = torch.linspace(
+                reso_facts[1] - 0.5,
+                curr_reso[1] - reso_facts[1] - 0.5,
+                reso[1],
+                dtype=dtype,
+            )
+            Z = torch.linspace(
+                reso_facts[2] - 0.5,
+                curr_reso[2] - reso_facts[2] - 0.5,
+                reso[2],
+                dtype=dtype,
+            )
+            X, Y, Z = torch.meshgrid(X, Y, Z)
+            points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
+
+            if use_z_order:
+                morton = utils.gen_morton(reso[0], dtype=torch.long).view(-1)
+                points[morton] = points.clone()
+            points = points.to(device=device)
+
+            use_weight_thresh = cameras is not None
+
+            
+            all_sample_vals_density = []
+            print('Pass 1/2 (density)')
+            for i in tqdm(range(0, len(points), batch_size)):
+                sample_vals_density, _ = self.sample(
+                    points[i : i + batch_size],
+                    grid_coords=True,
+                    want_colors=False
+                )
+                sample_vals_density = sample_vals_density
+                all_sample_vals_density.append(sample_vals_density)
+            self.density_data.grad = None
+            self.surface_data.grad = None
+            self.sh_data.grad = None
+            self.sparse_grad_indexer = None
+            self.sparse_sh_grad_indexer = None
+            self.density_rms = None
+            self.sh_rms = None
+
+            sample_vals_density = torch.cat(
+                    all_sample_vals_density, dim=0).view(reso)
+            del all_sample_vals_density
+            if use_weight_thresh:
+                gsz = torch.tensor(reso)
+                offset = (self._offset * gsz - 0.5).to(device=device)
+                scaling = (self._scaling * gsz).to(device=device)
+                max_wt_grid = torch.zeros(reso, dtype=torch.float32, device=device)
+                print(" Grid weight render", sample_vals_density.shape)
+                for i, cam in enumerate(cameras):
+                    _C.grid_weight_render(
+                        sample_vals_density, cam._to_cpp(),
+                        0.5,
+                        weight_render_stop_thresh,
+                        #  self.opt.last_sample_opaque,
+                        False,
+                        offset, scaling, max_wt_grid
+                    )
+                sample_vals_mask = max_wt_grid >= weight_thresh
+                if max_elements > 0 and max_elements < max_wt_grid.numel() \
+                                    and max_elements < torch.count_nonzero(sample_vals_mask):
+                    # To bound the memory usage
+                    weight_thresh_bounded = torch.topk(max_wt_grid.view(-1),
+                                     k=max_elements, sorted=False).values.min().item()
+                    weight_thresh = max(weight_thresh, weight_thresh_bounded)
+                    print(' Readjusted weight thresh to fit to memory:', weight_thresh)
+                    sample_vals_mask = max_wt_grid >= weight_thresh
+                del max_wt_grid
+            else:
+                alpha_thresh = np.log(alpha_thresh / (1. - alpha_thresh))
+                sample_vals_mask = sample_vals_density >= alpha_thresh
+                if max_elements > 0 and max_elements < sample_vals_density.numel() \
+                                    and max_elements < torch.count_nonzero(sample_vals_mask):
+                    # To bound the memory usage
+                    alpha_thresh_bounded = torch.topk(sample_vals_density.view(-1),
+                                     k=max_elements, sorted=False).values.min().item()
+                    alpha_thresh = max(alpha_thresh, alpha_thresh_bounded)
+                    print(' Readjusted alpha thresh to fit to memory:', alpha_thresh)
+                    sample_vals_mask = sample_vals_density >= alpha_thresh
+
+                if self.opt.last_sample_opaque:
+                    # Don't delete the last z layer
+                    sample_vals_mask[:, :, -1] = 1
+
+            if dilate:
+                for i in range(int(dilate)):
+                    sample_vals_mask = _C.dilate(sample_vals_mask)
+            sample_vals_mask = sample_vals_mask.view(-1)
+            sample_vals_density = sample_vals_density.view(-1)
+            sample_vals_density = sample_vals_density[sample_vals_mask]
+            cnz = torch.count_nonzero(sample_vals_mask).item()
+
+            # Now we can get the colors for the sparse points
+            points = points[sample_vals_mask]
+            print('Pass 2/2 (color), eval', cnz, 'sparse pts')
+            all_sample_vals_sh = []
+            all_sample_vals_surf = []
+            for i in tqdm(range(0, len(points), batch_size)):
+                sample_vals_sh, sample_vals_surf = self.sample_surface(
+                    points[i : i + batch_size],
+                    grid_coords=True,
+                    want_colors=True
+                )
+                all_sample_vals_sh.append(sample_vals_sh)
+                all_sample_vals_surf.append(sample_vals_surf)
+
+            sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
+            sample_vals_surf = torch.cat(all_sample_vals_surf, dim=0) if len(all_sample_vals_surf) else torch.empty_like(self.surf_data[:0])
+            del self.density_data
+            del self.surface_data
+            del self.sh_data
+            del all_sample_vals_sh
+            del all_sample_vals_surf
+
+            if use_z_order:
+                inv_morton = torch.empty_like(morton)
+                inv_morton[morton] = torch.arange(morton.size(0), dtype=morton.dtype)
+                inv_idx = inv_morton[sample_vals_mask]
+                init_links = torch.full(
+                    (sample_vals_mask.size(0),), fill_value=-1, dtype=torch.int32
+                )
+                init_links[inv_idx] = torch.arange(inv_idx.size(0), dtype=torch.int32)
+            else:
+                init_links = (
+                    torch.cumsum(sample_vals_mask.to(torch.int32), dim=-1).int() - 1
+                )
+                init_links[~sample_vals_mask] = -1
+
+            self.capacity = cnz
+            print(" New cap:", self.capacity)
+            del sample_vals_mask
+            print('density', sample_vals_density.shape, sample_vals_density.dtype)
+            print('sh', sample_vals_sh.shape, sample_vals_sh.dtype)
+            print('links', init_links.shape, init_links.dtype)
+            self.density_data = nn.Parameter(sample_vals_density.view(-1, 1).to(device=device))
+            self.sh_data = nn.Parameter(sample_vals_sh.to(device=device))
+            self.surface_data = nn.Parameter(sample_vals_surf.view(-1, 1).to(device=device))
+            self.links = init_links.view(reso).to(device=device)
+
+            if accelerate and self.links.is_cuda:
+                self.accelerate()
+
+
+
 
     def sparsify_background(
         self,

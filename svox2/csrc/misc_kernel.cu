@@ -279,6 +279,146 @@ __device__ __inline__ void grid_trace_ray(
     }
 }
 
+// Fast single-channel rendering for surface weight-thresholding
+__device__ __inline__ void grid_trace_ray_surface(
+        const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> density_data,
+        const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> surface_data,
+        SingleRaySpec ray,
+        const float* __restrict__ offset,
+        const float* __restrict__ scaling,
+        float step_size,
+        float stop_thresh,
+        torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grid_weight) {
+
+    // Warning: modifies ray.origin
+    transform_coord(ray.origin, scaling, offset);
+    // Warning: modifies ray.dir
+    const float world_step = _get_delta_scale(scaling, ray.dir) * step_size;
+
+    double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
+    double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
+
+    float t, tmax;
+    {
+        float t1, t2;
+        t = 0.0f;
+        tmax = 2e3f;
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            const float invdir = 1.0 / ray.dir[i];
+            t1 = (-0.5f - ray.origin[i]) * invdir;
+            t2 = (density_data.size(i) - 0.5f  - ray.origin[i]) * invdir;
+            if (ray.dir[i] != 0.f) {
+                t = max(t, min(t1, t2));
+                tmax = min(tmax, max(t1, t2));
+            }
+        }
+    }
+
+    if (t > tmax) {
+        // Ray doesn't hit box
+        return;
+    }
+    float pos[3];
+    int32_t voxel_l[3];
+    int32_t last_voxel[] = {-1,-1,-1};
+
+    float log_light_intensity = 0.f;
+    const int offx = density_data.size(1) * density_data.size(2);
+    const int offy = density_data.size(2);
+    while (t <= tmax) {
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+            voxel_l[j] = min(max(voxel_l[j], 0), density_data.size(j) - 2);
+        }
+
+
+        if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
+            // const float skip = compute_skip_dist(ray,
+            //             grid.links, grid.stride_x,
+            //             grid.size[2], 0);
+
+            t += step_size;
+            continue;
+        }
+
+
+        // const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
+
+        // // skip voxel if any of the vertices is turned off
+        // if ((voxel_l[0] + 1 >= grid.size[0]) || (voxel_l[1] + 1 >= grid.size[1]) || (voxel_l[2] + 1 >= grid.size[2]) \
+        //     || (link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) \
+        //     || (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
+        // ){
+        //     // const float skip = compute_skip_dist(ray,
+        //     //             grid.links, grid.stride_x,
+        //     //             grid.size[2], 0);
+
+        //     t += step_size;
+        //     continue;
+        // }
+
+        // last_voxel[0] = voxel_l[0];
+        // last_voxel[1] = voxel_l[1];
+        // last_voxel[2] = voxel_l[2];
+
+
+
+
+// #pragma unroll 3
+//         for (int j = 0; j < 3; ++j) {
+//             pos[j] = ray.origin[j] + t * ray.dir[j];
+//             pos[j] = min(max(pos[j], 0.f), density_data.size(j) - 1.f);
+//             l[j] = (int32_t) pos[j];
+//             l[j] = min(l[j], density_data.size(j) - 2);
+//             pos[j] -= l[j];
+//         }
+
+//         float log_att;
+//         const int idx = l[0] * stride0 + l[1] * stride1 + l[2];
+
+//         float sigma;
+//         {
+//             // Trilerp
+//             const float* __restrict__ sigma000 = density_data.data() + idx;
+//             const float* __restrict__ sigma100 = sigma000 + stride0;
+//             const float ix0y0 = lerp(sigma000[0], sigma000[1], pos[2]);
+//             const float ix0y1 = lerp(sigma000[stride1], sigma000[stride1 + 1], pos[2]);
+//             const float ix1y0 = lerp(sigma100[0], sigma100[1], pos[2]);
+//             const float ix1y1 = lerp(sigma100[stride1], sigma100[stride1 + 1], pos[2]);
+//             const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+//             const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+//             sigma = lerp(ix0, ix1, pos[0]);
+//         }
+//         if (last_sample_opaque && t + step_size > tmax) {
+//             sigma += 1e9;
+//             log_light_intensity = 0.f;
+//         }
+
+//         if (sigma > 1e-8f) {
+//             log_att = -world_step * sigma;
+//             const float weight = _EXP(log_light_intensity) * (1.f - _EXP(log_att));
+//             log_light_intensity += log_att;
+//             float* __restrict__ max_wt_ptr_000 = grid_weight.data() + idx;
+//             atomicMax(max_wt_ptr_000, weight);
+//             atomicMax(max_wt_ptr_000 + 1, weight);
+//             atomicMax(max_wt_ptr_000 + stride1, weight);
+//             atomicMax(max_wt_ptr_000 + stride1 + 1, weight);
+//             float* __restrict__ max_wt_ptr_100 = max_wt_ptr_000 + stride0;
+//             atomicMax(max_wt_ptr_100, weight);
+//             atomicMax(max_wt_ptr_100 + 1, weight);
+//             atomicMax(max_wt_ptr_100 + stride1, weight);
+//             atomicMax(max_wt_ptr_100 + stride1 + 1, weight);
+
+//             if (_EXP(log_light_intensity) < stop_thresh) {
+//                 break;
+//             }
+//         }
+        t += step_size;
+    }
+}
+
 // __global__ void sample_cubemap_kernel(
 //     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits>
 //         cubemap,
@@ -330,6 +470,34 @@ __global__ void grid_weight_render_kernel(
         step_size,
         stop_thresh,
         last_sample_opaque,
+        grid_weight);
+}
+
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
+__global__ void grid_surface_weight_render_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
+        density_data,
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
+        surface_data,
+    PackedCameraSpec cam,
+    float step_size,
+    float stop_thresh,
+    const float* __restrict__ offset,
+    const float* __restrict__ scaling,
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
+        grid_weight) {
+    CUDA_GET_THREAD_ID(tid, cam.width * cam.height);
+    int iy = tid / cam.width, ix = tid % cam.width;
+    float dir[3], origin[3];
+    cam2world_ray(ix, iy, cam, dir, origin);
+    grid_trace_ray_surface(
+        density_data,
+        surface_data,
+        SingleRaySpec(origin, dir),
+        offset,
+        scaling,
+        step_size,
+        stop_thresh,
         grid_weight);
 }
 
@@ -443,6 +611,38 @@ void grid_weight_render(
         grid_weight_out.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 }
+
+// void grid_surface_weight_render(
+//     torch::Tensor density_data, 
+//     torch::Tensor surface_data, 
+//     CameraSpec& cam,
+//     float step_size,
+//     float stop_thresh,
+//     torch::Tensor offset, torch::Tensor scaling,
+//     torch::Tensor grid_weight_out) {
+//     DEVICE_GUARD(density_data);
+//     DEVICE_GUARD(surface_data);
+//     CHECK_INPUT(density_data);
+//     CHECK_INPUT(surface_data);
+//     CHECK_INPUT(offset);
+//     CHECK_INPUT(scaling);
+//     CHECK_INPUT(grid_weight_out);
+//     cam.check();
+//     const size_t Q = size_t(cam.width) * cam.height;
+
+//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
+
+//     device::grid_surface_weight_render_kernel<<<blocks, MISC_CUDA_THREADS>>>(
+//         density_data.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+//         surface_data.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+//         cam,
+//         step_size,
+//         stop_thresh,
+//         offset.data_ptr<float>(),
+//         scaling.data_ptr<float>(),
+//         grid_weight_out.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+//     CUDA_CHECK_ERRORS;
+// }
 
 // For debugging
 // void sample_cubemap(torch::Tensor cubemap, // (6, R, R, C)

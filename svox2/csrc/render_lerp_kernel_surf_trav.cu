@@ -60,7 +60,6 @@ __device__ __inline__ void trace_ray_surf_trav(
     float outv = 0.f;
 
     float log_transmit = 0.f;
-    // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
 
     int32_t last_voxel[] = {-1,-1,-1};
 

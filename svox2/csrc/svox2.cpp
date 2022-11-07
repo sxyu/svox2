@@ -13,6 +13,8 @@ Tensor test_cubic_root_grad(Tensor, Tensor, Tensor);
 
 std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor,
                                                      bool);
+std::tuple<torch::Tensor, torch::Tensor> sample_grid_sh_surf(SparseGridSpec &, Tensor,
+                                                     bool, bool);
 void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
                           Tensor, bool);
 
@@ -114,6 +116,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(test_cubic_root_grad);
   _REG_FUNC(sample_grid);
   _REG_FUNC(sample_grid_backward);
+  _REG_FUNC(sample_grid_sh_surf);
   _REG_FUNC(volume_render_surface);
 //   _REG_FUNC(volume_render_surface_image);
   _REG_FUNC(volume_render_surface_backward);

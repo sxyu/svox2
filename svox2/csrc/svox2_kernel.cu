@@ -78,6 +78,40 @@ __global__ void sample_grid_density_kernel(
 }
 #undef MAYBE_READ_LINK_D
 
+__global__ void sample_grid_surface_kernel(
+        PackedSparseGridSpec grid,
+        const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> points,
+        // Output
+        torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out) {
+    CUDA_GET_THREAD_ID(tid, points.size(0));
+
+    float point[3] = {points[tid][0], points[tid][1], points[tid][2]};
+    transform_coord(point, grid._scaling, grid._offset);
+
+    int32_t l[3];
+#pragma unroll 3
+    for (int i = 0; i < 3; ++i) {
+        point[i] = fminf(fmaxf(point[i], 0.f), grid.size[i] - 1.f);
+        l[i] = min((int32_t)point[i], grid.size[i] - 2);
+        point[i] -= l[i];
+    }
+
+    const int offy = grid.size[2], offx = grid.size[1] * grid.size[2];
+    const int32_t* __restrict__ link_ptr = &grid.links[l[0] * offx + l[1] * offy + l[2]];
+
+#define MAYBE_READ_LINK_D(u) ((link_ptr[u] >= 0) ? grid.surface_data[link_ptr[u]] : 0.f)
+
+    const float ix0y0 = lerp(MAYBE_READ_LINK_D(0), MAYBE_READ_LINK_D(1), point[2]);
+    const float ix0y1 = lerp(MAYBE_READ_LINK_D(offy), MAYBE_READ_LINK_D(offy + 1), point[2]);
+    const float ix0 = lerp(ix0y0, ix0y1, point[1]);
+    const float ix1y0 = lerp(MAYBE_READ_LINK_D(offx), MAYBE_READ_LINK_D(offx + 1), point[2]);
+    const float ix1y1 = lerp(MAYBE_READ_LINK_D(offy + offx),
+                             MAYBE_READ_LINK_D(offy + offx + 1), point[2]);
+    const float ix1 = lerp(ix1y0, ix1y1, point[1]);
+    out[tid][0] = lerp(ix0, ix1, point[0]);
+}
+#undef MAYBE_READ_LINK_D
+
 __global__ void sample_grid_sh_backward_kernel(
         PackedSparseGridSpec grid,
         const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> points,
@@ -214,6 +248,47 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch
     cudaStreamSynchronize(stream_2);
     CUDA_CHECK_ERRORS;
     return std::tuple<torch::Tensor, torch::Tensor>{result_density, result_sh};
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor> sample_grid_sh_surf(SparseGridSpec& grid, torch::Tensor points,
+                                                             bool want_colors, bool want_surfaces) {
+    DEVICE_GUARD(points);
+    grid.check();
+    CHECK_INPUT(points);
+    TORCH_CHECK(points.ndimension() == 2);
+    const auto Q = points.size(0) * grid.sh_data.size(1);
+    const int cuda_n_threads = std::min<int>(Q, CUDA_MAX_THREADS);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    const int blocks_surface = CUDA_N_BLOCKS_NEEDED(points.size(0), cuda_n_threads);
+    torch::Tensor result_sh = torch::empty({want_colors ? points.size(0) : 0,
+                        grid.sh_data.size(1)}, points.options());
+    torch::Tensor result_surf = torch::empty({want_surfaces ? points.size(0) : 0,
+                        grid.surface_data.size(1)}, points.options());
+
+    cudaStream_t stream_1, stream_2;
+    cudaStreamCreate(&stream_1);
+    cudaStreamCreate(&stream_2);
+
+    if (want_colors) {
+        device::sample_grid_sh_kernel<<<blocks, cuda_n_threads, 0, stream_1>>>(
+                grid,
+                points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                // Output
+                result_sh.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+    }
+    if (want_surfaces) {
+        device::sample_grid_surface_kernel<<<blocks_surface, cuda_n_threads, 0, stream_2>>>(
+                grid,
+                points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                // Output
+                result_surf.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+    }
+
+    cudaStreamSynchronize(stream_1);
+    cudaStreamSynchronize(stream_2);
+    CUDA_CHECK_ERRORS;
+    return std::tuple<torch::Tensor, torch::Tensor>{result_sh, result_surf};
 }
 
 void sample_grid_backward(
