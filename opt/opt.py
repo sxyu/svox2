@@ -558,6 +558,7 @@ while True:
                 # with Timing("normal_loss"):
                 grid.inplace_surface_normal_grad(grid.surface_data.grad,
                         scaling=args.lambda_normal_loss,
+                        eikonal_scale=args.lambda_surface_eikonal,
                         sparse_frac=args.norm_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous,

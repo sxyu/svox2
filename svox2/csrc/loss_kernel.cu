@@ -254,7 +254,7 @@ __global__ void surface_normal_grad_kernel(
     const int x = xy / (links.size(1) - 1);
 
     #define __GRID_EXIST(x,y,z) (\
-    (x < links.size(0) - 2) && (y < links.size(1) - 2) && (z < links.size(2) - 2) && \
+    (x < links.size(0) - 1) && (y < links.size(1) - 1) && (z < links.size(2) - 1) && \
     (links[x][y][z] >= 0) && (links[x][y][z+1] >= 0) && (links[x][y+1][z] >= 0) && (links[x][y+1][z+1] >= 0) && (links[x+1][y][z] >= 0) && (links[x+1][y][z+1] >= 0) && (links[x+1][y+1][z] >= 0) && (links[x+1][y+1][z+1] >= 0))
 
     if (!__GRID_EXIST(x,y,z)) return;
@@ -353,7 +353,7 @@ __global__ void surface_normal_grad_kernel(
         assert(!(isnan(d0[2])));
 
         _add_surface_grad(x, y, z, d0, 
-                          scale, links, ddim, idx, nullptr, grad_data);
+                          scale * 1.f/norm_count, links, ddim, idx, nullptr, grad_data);
         
 
         float const d1[] = {
@@ -375,16 +375,9 @@ __global__ void surface_normal_grad_kernel(
         assert(!(isnan(d1[1])));
         assert(!(isnan(d1[2])));
 
-        float ux = x,
-              uy = y,
-              uz = z;
-        if (i==0){
-            ux += 1;
-        }else if(i==1){
-            uy += 1;
-        }else{
-            uz += 1;
-        }
+        float const ux = (i==0) ? x+1:x,
+                    uy = (i==1) ? y+1:y,
+                    uz = (i==2) ? z+1:z;
 
         _add_surface_grad(ux, uy, uz, d1,
                           scale * 1.f/norm_count, links, ddim, idx, nullptr, grad_data);
@@ -401,6 +394,7 @@ __global__ void surface_normal_grad_sparse_kernel(
         float const lv_set,
         int start_dim, int end_dim,
         float scale,
+        float eikonal_scale,
         size_t Q,
         // bool ignore_edge, // always false
         float ndc_coeffx, float ndc_coeffy,
@@ -416,7 +410,7 @@ __global__ void surface_normal_grad_sparse_kernel(
     const int x = xy / links.size(1);
 
     #define __GRID_EXIST(x,y,z) (\
-    (x < links.size(0) - 2) && (y < links.size(1) - 2) && (z < links.size(2) - 2) && \
+    (x < links.size(0) - 1) && (y < links.size(1) - 1) && (z < links.size(2) - 1) && \
     (links[x][y][z] >= 0) && (links[x][y][z+1] >= 0) && (links[x][y+1][z] >= 0) && (links[x][y+1][z+1] >= 0) && (links[x+1][y][z] >= 0) && (links[x+1][y][z+1] >= 0) && (links[x+1][y+1][z] >= 0) && (links[x+1][y+1][z+1] >= 0))
 
     if (!__GRID_EXIST(x,y,z)) return;
@@ -456,6 +450,8 @@ __global__ void surface_normal_grad_sparse_kernel(
                                                 ((s0 >= lv_set) && (s1 >= lv_set) && (s2 >= lv_set) && (s3 >= lv_set))))
 
                                             
+    // bool volatile ex1 = (__GRID_EXIST(x,y,z+1)); 
+    // bool volatile con1 = (__GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1))); 
 
     if ((__GRID_EXIST(x,y,z+1)) && \
         (__GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1)))){
@@ -486,12 +482,13 @@ __global__ void surface_normal_grad_sparse_kernel(
         skips[0] = true;
     }
 
+    float const N0 = _NORM3(_norm000);
+    // apply normal difference loss gradient
     for (int i=0; i<3; ++i){
         if (skips[i]){
             continue;
         }
         float const *_n1 = (i==0) ? _norm100 : ((i==1) ? _norm010 : _norm001);
-        float const N0 = _NORM3(_norm000);
         float const N1 = _NORM3(_n1);
 
         // dE/d0x, dE/d0y, dE/d0z
@@ -515,7 +512,7 @@ __global__ void surface_normal_grad_sparse_kernel(
         assert(!(isnan(d0[2])));
 
         _add_surface_grad(x, y, z, d0, 
-                          scale, links, ddim, idx, mask_out, grad_data);
+                          scale * 1.f/norm_count, links, ddim, idx, mask_out, grad_data);
         
 
         float const d1[] = {
@@ -537,20 +534,29 @@ __global__ void surface_normal_grad_sparse_kernel(
         assert(!(isnan(d1[1])));
         assert(!(isnan(d1[2])));
 
-        float ux = x,
-              uy = y,
-              uz = z;
-        if (i==0){
-            ux += 1;
-        }else if(i==1){
-            uy += 1;
-        }else{
-            uz += 1;
-        }
+        float const ux = (i==0) ? x+1:x,
+                    uy = (i==1) ? y+1:y,
+                    uz = (i==2) ? z+1:z;
 
         _add_surface_grad(ux, uy, uz, d1,
                           scale * 1.f/norm_count, links, ddim, idx, mask_out, grad_data);
 
+    }
+
+    // apply eikonal constraint gradient
+    if (eikonal_scale > 0.f){
+        float const d_eki[] = {
+            -2*_norm000[0]*(1 - N0)/N0,
+            -2*_norm000[1]*(1 - N0)/N0,
+            -2*_norm000[2]*(1 - N0)/N0
+        };
+
+        assert(!(isnan(d_eki[0])));
+        assert(!(isnan(d_eki[1])));
+        assert(!(isnan(d_eki[2])));
+
+        _add_surface_grad(x, y, z, d_eki, 
+                          eikonal_scale, links, ddim, idx, nullptr, grad_data);
     }
 }
 
@@ -1029,6 +1035,7 @@ void surface_normal_grad_sparse(torch::Tensor links,
              float lv_set,
              int start_dim, int end_dim,
              float scale,
+             float eikonal_scale,
              float ndc_coeffx,
              float ndc_coeffy,
              torch::Tensor grad_data) {
@@ -1058,6 +1065,7 @@ void surface_normal_grad_sparse(torch::Tensor links,
             start_dim,
             end_dim,
             scale / nl,
+            eikonal_scale / nl,
             Q,
             ndc_coeffx, ndc_coeffy,
             // Output

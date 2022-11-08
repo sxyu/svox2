@@ -728,6 +728,7 @@ class SparseGrid(nn.Module):
             # surface_init = None
             level_sets = torch.tensor([0.])
             level_sets = level_sets.to(device)
+            self.level_set_data = level_sets
             if surface_init == 'sphere' or surface_init is None:
                 # method 1: initialize with distance to grid center, then reduce each vertices by the mean from the 8?
                 surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
@@ -1519,625 +1520,6 @@ class SparseGrid(nn.Module):
             ray_ids = nugs_ridx[valid_l_mask]
 
         return l, ray_ids.long()
-
-    def _sdf_render_gradcheck_lerp_backup(
-        self,
-        rays: Rays,
-        rgb_gt: torch.Tensor = None,
-        randomize: bool = False,
-        beta_loss: float = 0.0,
-        sparsity_loss: float = 0.0,
-        return_raylen: bool = False,
-        return_depth: bool = False,
-        numerical_solution: bool = False, # no gradient flow!
-        dtype = torch.double,
-        allow_outside: bool = False, # allow intersections outside of voxel
-    ):
-        """
-        gradcheck version for sdf rendering
-        """
-
-        raise NotImplementedError
-
-        origins = self.world2grid(rays.origins).to(dtype)
-        dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
-        viewdirs = dirs
-        B = dirs.size(0)
-        assert origins.size(0) == B
-        gsz = self._grid_size()
-        dirs = dirs * (self._scaling * gsz).to(device=dirs.device)
-        delta_scale = 1.0 / dirs.norm(dim=1)
-        dirs *= delta_scale.unsqueeze(-1)
-
-        if self.basis_type == BASIS_TYPE_3D_TEXTURE:
-            sh_mult = self._eval_learned_bases(viewdirs)
-        elif self.basis_type == BASIS_TYPE_MLP:
-            sh_mult = torch.sigmoid(self._eval_basis_mlp(viewdirs))
-        else:
-            sh_mult = utils.eval_sh_bases(self.basis_dim, viewdirs)
-
-        invdirs = 1.0 / dirs
-
-        gsz = self._grid_size().to(dtype)
-        gsz_cu = gsz.to(device=dirs.device).to(dtype)
-
-        # find near/far per ray
-        # t1 = (-0.5 - origins) * invdirs
-        # t2 = (gsz_cu - 0.5 - origins) * invdirs
-
-        # t = torch.min(t1, t2)
-        # t[dirs == 0] = -1e9
-        # t = torch.max(t, dim=-1).values.clamp_min_(self.opt.near_clip)
-
-        # tmax = torch.max(t1, t2)
-        # tmax[dirs == 0] = 1e9
-        # tmax = torch.min(tmax, dim=-1).values
-
-        # ts_bd_1 = (gsz_cu*0 - origins) / dirs
-        # ts_bd_2 = (gsz_cu - origins) / dirs
-
-        # TODO: implement more efficient way to find a set of voxels intersect with given rays
-
-        # # method1: find intersections between rays and all voxel surfaces, then round them
-        # ray_ends = origins + tmax[:, None] * dirs
-        # ray_starts = origins + t[:, None] * dirs
-
-        # # maximum number of samples, could just use sum(reso)
-        # ray_ends = ray_ends.clamp(0, self.links.shape[0]-1)
-        # ray_starts = ray_starts.clamp(0, self.links.shape[0]-1)
-        # sample_num = torch.sum(
-        #     torch.abs(ray_ends.long() - ray_starts.long())
-        #     , axis=-1).max()
-
-        # voxels = torch.ones([B, sample_num, 0]) * -1.
-        # # ignore intersection at voxel edges for now -- it can create repetitive samples!
-        # # ts where ray intersect with x-plane
-        # ts_sect_x = torch.stack([
-        #     torch.arange(
-        #         ray_starts[i,0].long(), ray_ends[i,0].long(), 
-        #         -1 if ray_starts[i,0].long() > ray_ends[i,0].long() else 1
-        #         ) for i in range(B)]) # too slow!
-        
-
-        # method2: adaptive step size for each ray
-
-        # debug helpers:
-
-        def pos():
-            return origins + t[:, None] * dirs
-
-        def next_pos():
-            return origins + find_next_intersection(t, origins, dirs)[:, None] * dirs
-
-        def global_id_to_current_id(global_id):
-            return torch.arange(good_indices.shape[0])[good_indices == global_id]
-
-        def save_rays():
-            cache = {
-                'origins': origins_ini.cpu().detach().numpy(),
-                'dirs': dirs_ini.cpu().detach().numpy()
-            }
-            np.save('rays.npy', cache)
-
-        def index(tensor, ele):
-            return torch.arange(tensor.shape[0])[tensor==ele]
-
-        def save_vis_cache():
-            '''
-            Save parameters for visualization
-            '''
-            cache = {
-                'origins': origins.cpu().detach().numpy(),
-                'dirs': dirs.cpu().detach().numpy(),
-                'sdf000': sdf000.cpu().detach().numpy(),
-                'sdf001': sdf001.cpu().detach().numpy(),
-                'sdf010': sdf010.cpu().detach().numpy(),
-                'sdf011': sdf011.cpu().detach().numpy(),
-                'sdf100': sdf100.cpu().detach().numpy(),
-                'sdf101': sdf101.cpu().detach().numpy(),
-                'sdf110': sdf110.cpu().detach().numpy(),
-                'sdf111': sdf111.cpu().detach().numpy(),
-                'l': l.cpu().detach().numpy(),
-                't': t.cpu().detach().numpy(),
-            }
-
-            np.save('vis_cache.npy', cache)
-
-        def check_sdf(samples): 
-            # interpolate sdfs to check solutions
-            wa, wb = 1. - (samples - l), (samples - l)
-            c00 = sdf000 * wa[:, 2:] + sdf001 * wb[:, 2:]
-            c01 = sdf010 * wa[:, 2:] + sdf011 * wb[:, 2:]
-            c10 = sdf100 * wa[:, 2:] + sdf101 * wb[:, 2:]
-            c11 = sdf110 * wa[:, 2:] + sdf111 * wb[:, 2:]
-            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-            sdfs = c0 * wa[:, :1] + c1 * wb[:, :1]
-
-            return sdfs
-
-
-        ts_bd = torch.cat([(gsz_cu*0 - origins) / dirs, (gsz_cu-1 - origins) / dirs], axis=-1)
-        
-        # remove intersection in inverse directions
-        ts_bd.view(-1)[ts_bd.view(-1) < 0] = torch.nan
-
-        # remove intersections outside of voxel
-        for i in range(ts_bd.shape[1]):
-            ts_bd[~self.within_grid(ts_bd[:, i, None] * dirs + origins), i] = torch.nan
-
-        t = torch.nan_to_num(ts_bd, torch.inf).min(axis=-1).values
-        tmax = torch.nan_to_num(ts_bd, -torch.inf).max(axis=-1).values
-        # for cameras within voxel grids, t_near = 0
-        t[self.within_grid(origins)] = 0.
-
-        if return_raylen:
-            return tmax - t
-
-        origins_ini = origins
-        dirs_ini = dirs
-
-        good_indices = torch.arange(B, device=origins.device)
-        # record a list of intersecting voxels
-        voxels = torch.ones((B, torch.sum(gsz_cu).long(), 3), device=origins.device, dtype=torch.long) * -1
-        voxels_i = torch.zeros(B, device=origins.device, dtype=torch.long)
-
-        del invdirs
-        
-        l, voxels_i, valid_sample_ids, origins, dirs, sh_mult = self.find_ray_voxels_intersection(t, origins, dirs, sh_mult)
-        VV = voxels_i.sum()
-
-        ###### find intersections within each voxel ######
-
-        lx, ly, lz = l.unbind(-1) 
-        links000 = self.links[lx, ly, lz]
-        links001 = self.links[lx, ly, lz + 1]
-        links010 = self.links[lx, ly + 1, lz]
-        links011 = self.links[lx, ly + 1, lz + 1]
-        links100 = self.links[lx + 1, ly, lz]
-        links101 = self.links[lx + 1, ly, lz + 1]
-        links110 = self.links[lx + 1, ly + 1, lz]
-        links111 = self.links[lx + 1, ly + 1, lz + 1]
-
-        # mask out voxels that don't exist
-        exist_l_mask = [links != -1 for links in [links000, links001, links010, links011, links100, links101, links110, links111]]
-        exist_l_mask = torch.stack(exist_l_mask).T.all(axis=-1) # [VV]
-        VEV = torch.count_nonzero(exist_l_mask) # number of visited and exist voxels
-        valid_sample_ids = valid_sample_ids[exist_l_mask] # [VEV]
-        exist_l = l[exist_l_mask]
-
-        alpha000, rgb000, sdf000 = self._fetch_links(links000)
-        alpha001, rgb001, sdf001 = self._fetch_links(links001)
-        alpha010, rgb010, sdf010 = self._fetch_links(links010)
-        alpha011, rgb011, sdf011 = self._fetch_links(links011)
-        alpha100, rgb100, sdf100 = self._fetch_links(links100)
-        alpha101, rgb101, sdf101 = self._fetch_links(links101)
-        alpha110, rgb110, sdf110 = self._fetch_links(links110)
-        alpha111, rgb111, sdf111 = self._fetch_links(links111)
-
-
-        # avg_norm = torch.mean(torch.stack(list(map(lambda s: torch.abs(s), 
-        #     [sdf000, sdf001, sdf010, sdf011, sdf100, sdf101, sdf110, sdf111]))), axis=0)
-
-        # sdf000 = sdf000 / avg_norm
-        # sdf001 = sdf001 / avg_norm
-        # sdf010 = sdf010 / avg_norm
-        # sdf011 = sdf011 / avg_norm
-        # sdf100 = sdf100 / avg_norm
-        # sdf101 = sdf101 / avg_norm
-        # sdf110 = sdf110 / avg_norm
-        # sdf111 = sdf111 / avg_norm
-
-        # sdf000 = torch.tanh(sdf000)
-        # sdf001 = torch.tanh(sdf001)
-        # sdf010 = torch.tanh(sdf010)
-        # sdf011 = torch.tanh(sdf011)
-        # sdf100 = torch.tanh(sdf100)
-        # sdf101 = torch.tanh(sdf101)
-        # sdf110 = torch.tanh(sdf110)
-        # sdf111 = torch.tanh(sdf111)
-
-        ################## Simplifying Trlinear Interpolation Function ########################
-        def trilinear_simplify():
-        ################## Finishing Trlinear Interpolation Function ########################
-            '''
-            Math for simplyfing trilinear interpolation (with syntax highlighting)
-            This function shouldn't be called
-            '''
-            _t = None # _t is the exact depth we want to calculate
-            ox, oy, oz = origins[new_voxel_ids][:, :1], origins[new_voxel_ids][:, 1:2], origins[new_voxel_ids][:, 2:]
-            vx, vy, vz = dirs[new_voxel_ids][:, :1], dirs[new_voxel_ids][:, 1:2], dirs[new_voxel_ids][:, 2:]
-            wx = ox + _t * vx - lx
-            wy = oy + _t * vy - ly
-            wz = oz + _t * vz - lz
-
-            sdf = ((sdf000 * (1.-wz) + sdf001 * (wz)) * (1.-wy) + (sdf010 * (1.-wz) + sdf011 * (wz)) * (wy)) * (1.-wx) + \
-                    ((sdf100 * (1.-wz) + sdf101 * (wz)) * (1.-wy) + (sdf110 * (1.-wz) + sdf111 * (wz)) * (wy)) * (wx)
-
-            # substituite wz
-
-            sdf = ((sdf000 * (1-oz) + sdf001 * (oz) + _t * vz * (-sdf000 + sdf001)) * (1.-wy) + (sdf010 * (1-oz) + sdf011 * (oz) + _t * vz * (-sdf010 + sdf011)) * (wy)) * (1.-wx) + \
-                    ((sdf100 * (1-oz) + sdf101 * (oz) + _t * vz * (-sdf100 + sdf101)) * (1.-wy) + (sdf110 * (1-oz) + sdf111 * (oz) + _t * vz * (-sdf110 + sdf111)) * (wy)) * (wx)
-            
-            a00 = sdf000 * (1-oz+lz) + sdf001 * (oz-lz)
-            a01 = sdf010 * (1-oz+lz) + sdf011 * (oz-lz)
-            a10 = sdf100 * (1-oz+lz) + sdf101 * (oz-lz)
-            a11 = sdf110 * (1-oz+lz) + sdf111 * (oz-lz)
-
-            b00 = -sdf000 + sdf001
-            b01 = -sdf010 + sdf011
-            b10 = -sdf100 + sdf101
-            b11 = -sdf110 + sdf111
-
-            sdf = ((a00 + _t * vz * b00) * (1.-wy) + (a01 + _t * vz * b01) * (wy)) * (1.-wx) + \
-                    ((a10 + _t * vz * b10) * (1.-wy) + (a11 + _t * vz * b11) * (wy)) * (wx)
-
-            # substitute wy
-
-            sdf = ((a00*(1-oy+ly) - _t * (a00*vy - vz*b00*(1-oy+ly)) - (_t**2) * vy*vz*b00) + (a01*(oy-ly) + _t * (a01*vy + vz*b01*(oy-ly)) + (_t**2) * (vy*vz*b01))) * (1.-wx) + \
-                    ((a10*(1-oy+ly) - _t * (a10*vy - vz*b10*(1-oy+ly)) - (_t**2) * vy*vz*b10) + (a11*(oy-ly) + _t * (a11*vy + vz*b11*(oy-ly)) + (_t**2) * (vy*vz*b11))) * (wx)
-
-
-            c0 = a00*(1-oy+ly) + a01*(oy-ly)
-            c1 = a10*(1-oy+ly) + a11*(oy-ly)
-
-            d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
-            d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
-
-            e0 = -vy*vz*b00 + vy*vz*b01
-            e1 = -vy*vz*b10 + vy*vz*b11
-
-            sdf = (c0 + _t*d0 + (_t**2)*e0) * (1.-wx) + \
-                    (c1 + _t*d1 + (_t**2)*e1) * (wx)
-
-            # substitute wz
-
-            sdf = (c0*(1-ox+lx) + _t*(-c0*vx + d0*(1-ox+lx)) + (_t**2)*(-d0*vx+e0*(1-ox+lx)) + (_t**3)*(-e0*vx)) + \
-                    (c1*(ox-lx  ) + _t*( c1*vx + d1*(ox-lx  )) + (_t**2)*( d1*vx+e1*(ox-lx  )) + (_t**3)*( e1*vx) )
-
-            # final cubic form
-
-            f0 = c0*(1-ox+lx) + c1*(ox-lx)
-            f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
-            f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
-            f3 = -e0*vx + e1*vx
-
-            sdf = f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3
-
-            return NotImplementedError
-
-
-        ox, oy, oz = origins[visited_l_mask].to(dtype).unbind(-1)
-        vx, vy, vz = dirs[visited_l_mask].to(dtype).unbind(-1)
-
-        a00 = sdf000[:,0].to(dtype) * (1-oz+lz) + sdf001[:,0].to(dtype) * (oz-lz)
-        a01 = sdf010[:,0].to(dtype) * (1-oz+lz) + sdf011[:,0].to(dtype) * (oz-lz)
-        a10 = sdf100[:,0].to(dtype) * (1-oz+lz) + sdf101[:,0].to(dtype) * (oz-lz)
-        a11 = sdf110[:,0].to(dtype) * (1-oz+lz) + sdf111[:,0].to(dtype) * (oz-lz)
-
-        b00 = -sdf000[:,0].to(dtype) + sdf001[:,0].to(dtype)
-        b01 = -sdf010[:,0].to(dtype) + sdf011[:,0].to(dtype)
-        b10 = -sdf100[:,0].to(dtype) + sdf101[:,0].to(dtype)
-        b11 = -sdf110[:,0].to(dtype) + sdf111[:,0].to(dtype)
-
-        c0 = a00*(1-oy+ly) + a01*(oy-ly)
-        c1 = a10*(1-oy+ly) + a11*(oy-ly)
-
-        d0 = -(a00*vy - vz*b00*(1-oy+ly)) + (a01*vy + vz*b01*(oy-ly))
-        d1 = -(a10*vy - vz*b10*(1-oy+ly)) + (a11*vy + vz*b11*(oy-ly))
-
-        e0 = -vy*vz*b00 + vy*vz*b01
-        e1 = -vy*vz*b10 + vy*vz*b11
-
-        f0 = c0*(1-ox+lx) + c1*(ox-lx)
-        f1 = -c0*vx + d0*(1-ox+lx) + c1*vx + d1*(ox-lx)
-        f2 = -d0*vx+e0*(1-ox+lx) + d1*vx+e1*(ox-lx)
-        f3 = -e0*vx + e1*vx
-
-        if numerical_solution: # TODO use Aesara instead https://aesara.readthedocs.io/en/latest/
-            print('using slow numerical solver for cubic functions!')
-            print('no gradient is enabled at the moment!')
-            ts = torch.ones([f0.numel(), 3]).to(device=dirs.device) * -1
-            for i in range(f0.shape[0]):
-                x = Symbol('x')
-                a_np = f3.cpu().detach().numpy() 
-                b_np = f2.cpu().detach().numpy()
-                c_np = f1.cpu().detach().numpy()
-                d_np = f0.cpu().detach().numpy()
-                solutions = sympy.solveset(a_np[i] * x**3 + b_np[i] * x**2 + c_np[i] * x + d_np[i], x, domain=sympy.S.Reals)
-                solutions = torch.tensor(list(solutions),dtype=torch.float32).to(device=dirs.device)
-                ts[i, :solutions.shape[0]] = solutions
-        else:
-
-            # analyical solution for f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3 = 0
-            # https://github.com/shril/CubicEquationSolver/blob/master/CubicEquationSolver.py
-
-            # negative roots are considered no roots and are filtered out later
-            ts = torch.ones([f0.numel(), 3]).to(dtype).to(device=dirs.device) * -1 # [VV, 3]
-
-            # check for trivial a and b -- reduce to linear or polynomial solutions
-            tri_a_mask = f3 == 0.
-            tri_ab_mask = tri_a_mask & (f2 == 0.) & (~(f1 == 0.)) # if f1, f2, f3 all 0, then no solution
-
-            ########### Linear Roots ###########
-            if ts[tri_ab_mask].numel() > 0:
-                ts[tri_ab_mask, 0] = (-f0[tri_ab_mask] * 1.0) / f1[tri_ab_mask]
-
-            ########### Quadratic Roots ###########
-            quad_mask = tri_a_mask & (~tri_ab_mask) & (~(f1 == 0.))
-            if ts[quad_mask].numel() > 0:
-                _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
-                D = _c**2 - 4.0 * _b * _d
-
-                D_mask = D >+ 0 # two real roots
-                sqrt_D = torch.sqrt(D[D_mask])
-                ids = torch.arange(quad_mask.shape[0])[quad_mask][D_mask]
-                ts[ids, 0] = (-_c[D_mask] + sqrt_D) / (2.0 * _b[D_mask])
-                ts[ids, 1] = (-_c[D_mask] - sqrt_D) / (2.0 * _b[D_mask])
-
-            # otherwise, has no real roots
-
-            ########### Cubic Roots ###########
-
-            cubic_mask = (~tri_a_mask) & (~tri_ab_mask)
-            # cubic_mask = ~torch.isnan(a)
-
-            # normalize 
-            a = f3 / f3
-            b = f2 / f3
-            c = f1 / f3
-            d = f0 / f3
-
-            # TODO: remove voxels with invalid SDFs as they can cause numerical issues
-
-            def cond_cbrt(x, eps=1e-6):
-                '''
-                Compute cubic root of x based on sign
-                '''
-                ret = torch.zeros_like(x)
-                ret[x >= 0] = torch.pow(torch.clamp_min_(x[x >= 0], eps), 1/3.)
-                ret[x < 0] = torch.pow(torch.clamp_min_(-x[x < 0], eps), 1/3.) * -1
-                return ret
-
-            f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
-            g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
-            h = ((g**2.) / 4. + (f**3.) / 27.)
-
-            # h = torch.clamp_max_(h, 1e10) # might need to clamp min as well
-            # h = torch.clamp(h, -1e12, 1e12) 
-
-            # all three roots are real and equal
-            _mask = ((f == 0) & (g == 0) & (h == 0)) & cubic_mask
-            ts[_mask, 0] = cond_cbrt(d[_mask]/a[_mask])
-
-            # all three roots are real 
-            _mask = (h <= 0) & (~((f == 0) & (g == 0) & (h == 0))) & cubic_mask
-            _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
-            
-            _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
-            _j = _i ** (1 / 3.)                      
-            _k = torch.acos(-(_g / (2 * _i)))              
-            _L = _j * -1                              
-            _M = torch.cos(_k / 3.)       
-            _N = np.sqrt(3) * torch.sin(_k / 3.)    
-            _P = (_b / (3. * _a)) * -1                
-
-            ts[_mask, 0] = 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
-            ts[_mask, 1] = _L * (_M + _N) + _P
-            ts[_mask, 2] = _L * (_M - _N) + _P
-
-            # only one root is real
-            _mask = (h > 0) & cubic_mask
-            _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
-
-            _R = -(_g / 2.) + torch.sqrt(_h)    
-            _S = cond_cbrt(_R)
-
-            _T = -(_g / 2.) - torch.sqrt(_h)
-            _U = cond_cbrt(_T)
-
-            ts[_mask, 0] = (_S + _U) - (_b / (3. * _a))
-            # ts[_mask, 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
-            # ts[_mask, 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
-
-
-            assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots, possbily due to small coefficients'
-            assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
-
-            def check_solution(i,j):
-                return ts[i,j]**3 * a[i] + ts[i,j]**2 * b[i] + ts[i,j] * c[i] + d[i]
-
-        # TODO: issue, the root can be coarse!
-
-        ts = ts[..., None]
-        samples = origins[visited_l_mask, None, :] + ts * dirs[visited_l_mask, None, :] # B, three intersections, xyz
-
-        # filter out roots with negative t
-        neg_roots = ts.view(-1) < 0
-        samples.view(-1, 3)[neg_roots, :] = -1e9 # FIXME better way
-
-        # find the intersection that is closest to voxel center
-        # FIXME it is possible to have more than one intersections per voxel, need to deal with that!
-        centers = (l+.5)[:,None,:]
-        sq_dists = torch.sum((samples - centers) ** 2,axis=-1)
-        min_ids = torch.min(sq_dists,axis=-1).indices
-        samples = samples[torch.arange(samples.shape[0]), min_ids, :]
-        # note that the samples could still contain invalid coords -- when ray does not intersect with any surface!
-
-        if allow_outside:
-            invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
-        else:
-            # remove all samples outside of the voxel
-            invalid_sample_mask = (samples < l).any(axis=-1) | (samples > l+1).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
-        invalid_sample_ids = torch.arange(samples.shape[0])[invalid_sample_mask] 
-        
-        # TODO only interpolate for valid samples to save computation
-        # interpolate opacity
-        wa, wb = 1. - (samples - l), (samples - l)
-        if allow_outside:
-            torch.clamp_(wa, 0., 1.)
-            torch.clamp_(wb, 0., 1.)
-        c00 = alpha000 * wa[:, 2:] + alpha001 * wb[:, 2:]
-        c01 = alpha010 * wa[:, 2:] + alpha011 * wb[:, 2:]
-        c10 = alpha100 * wa[:, 2:] + alpha101 * wb[:, 2:]
-        c11 = alpha110 * wa[:, 2:] + alpha111 * wb[:, 2:]
-        c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-        c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-        _alpha = c0 * wa[:, :1] + c1 * wb[:, :1]
-        # post sigmoid activation
-        _alpha = torch.sigmoid(_alpha)
-
-        # remove invalid samples -- note this has to come after sigmoid
-        alpha = torch.clone(_alpha)
-        alpha[invalid_sample_ids] = 0.
-
-
-        # interpolate rgb
-        c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
-        c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
-        c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
-        c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
-        c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-        c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-        rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
-
-        # END CRAZY TRILERP
-
-        B_rgb = torch.zeros((B*MV, 3), device=origins.device)
-        B_alpha = torch.zeros(B*MV, device=origins.device)
-
-        rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-        B_rgb[visited_l_mask,:] = torch.clamp_min(
-            torch.sum(sh_mult[visited_l_mask, None, :] * rgb_sh, dim=-1).to(B_rgb.dtype) + 0.5,
-            0.0,
-        )  # [VV, 3]
-
-        # log_att = torch.log(1 - torch.clamp(alpha[:,0], 0., 1-1e-6))
-        B_alpha[visited_l_mask] = alpha[:,0].to(B_rgb.dtype) # [VV]
-
-        assert not torch.isnan(B_alpha).any(), 'NaN detcted in alpha!'
-
-        B_rgb = B_rgb.reshape(B, MV, 3)
-        B_alpha = B_alpha.reshape(B, MV)
-
-        # TODO check if it makes sense!
-        B_weights = B_alpha * torch.cumprod(
-            torch.cat([torch.ones((B_alpha.shape[0], 1)).to(B_alpha.device), 1.-B_alpha + 1e-10], -1), -1
-            )[:, :-1] # [B, MV, 3]
-        
-        out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
-
-        # weight = torch.exp(log_light_intensity[good_indices]) * alpha[:,0]
-        # [B', 3, n_sh_coeffs]
-        # rgb = weight[:, None] * rgb[:, :3]
-
-        # assert not torch.isnan(rgb).any(), 'NaN detcted in rgb!'
-
-        # out_rgb[good_indices] += rgb
-        # log_light_intensity[good_indices] += log_att
-
-
-        if self.use_background:
-            raise NotImplementedError
-            # Render the MSI background model
-            csi = utils.ConcentricSpheresIntersector(
-                    gsz_cu,
-                    origins_ini,
-                    dirs_ini,
-                    delta_scale)
-            inner_radius = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1) + 1e-3
-            inner_radius = inner_radius.clamp_min(1.0)
-            _, t_last = csi.intersect(inner_radius)
-            n_steps = int(self.background_nlayers / self.opt.step_size) + 2
-            layer_scale = (self.background_nlayers - 1) / (n_steps + 1)
-
-            def fetch_bg_link(lx, ly, lz):
-                results = torch.zeros([lx.shape[0], self.background_data.size(-1)],
-                                        device=lx.device)
-                lnk = self.background_links[lx, ly]
-                mask = lnk >= 0
-                results[mask] = self.background_data[lnk[mask].long(), lz[mask]]
-                return results
-
-            for i in range(n_steps):
-                r : float = n_steps / (n_steps - i - 0.5)
-                normalized_inv_radius = min((i + 1) * layer_scale, self.background_nlayers - 1)
-                layerid = min(int(normalized_inv_radius), self.background_nlayers - 2);
-                interp_wt = normalized_inv_radius - layerid;
-
-                active_mask, t = csi.intersect(r)
-                active_mask = active_mask & (r >= inner_radius)
-                if active_mask.count_nonzero() == 0:
-                    continue
-                t_sub = t[active_mask]
-                t_mid_sub = (t_sub + t_last[active_mask]) * 0.5
-                sphpos = csi.origins[active_mask] + \
-                         t_mid_sub.unsqueeze(-1) * csi.dirs[active_mask]
-                invr_mid = 1.0 / torch.norm(sphpos, dim=-1)
-                sphpos *= invr_mid.unsqueeze(-1)
-
-                xy = utils.xyz2equirect(sphpos, self.background_links.size(1))
-                z = torch.clamp((1.0 - invr_mid) * self.background_nlayers - 0.5, 0.0,
-                               self.background_nlayers - 1);
-                points = torch.cat([xy, z.unsqueeze(-1)], dim=-1)
-                l = points.to(torch.long)
-                l[..., 0].clamp_max_(self.background_links.size(0) - 1)
-                l[..., 1].clamp_max_(self.background_links.size(1) - 1)
-                l[..., 2].clamp_max_(self.background_nlayers - 2)
-
-                wb = points - l
-                wa = 1.0 - wb
-                lx, ly, lz = l.unbind(-1)
-                lnx = (lx + 1) % self.background_links.size(0)
-                lny = (ly + 1) % self.background_links.size(1)
-                lnz = lz + 1
-
-                v000 = fetch_bg_link(lx, ly, lz)
-                v001 = fetch_bg_link(lx, ly, lnz)
-                v010 = fetch_bg_link(lx, lny, lz)
-                v011 = fetch_bg_link(lx, lny, lnz)
-                v100 = fetch_bg_link(lnx, ly, lz)
-                v101 = fetch_bg_link(lnx, ly, lnz)
-                v110 = fetch_bg_link(lnx, lny, lz)
-                v111 = fetch_bg_link(lnx, lny, lnz)
-
-                c00 = v000 * wa[:, 2:] + v001 * wb[:, 2:]
-                c01 = v010 * wa[:, 2:] + v011 * wb[:, 2:]
-                c10 = v100 * wa[:, 2:] + v101 * wb[:, 2:]
-                c11 = v110 * wa[:, 2:] + v111 * wb[:, 2:]
-                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-                rgba = c0 * wa[:, :1] + c1 * wb[:, :1]
-
-                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * (
-                            t_sub - t_last[active_mask]
-                        )
-                weight = torch.exp(log_light_intensity[active_mask]) * (
-                    1.0 - torch.exp(log_att)
-                )
-                rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
-                out_rgb[active_mask] += rgb * weight[:, None]
-                log_light_intensity[active_mask] += log_att
-                t_last[active_mask] = t[active_mask]
-
-        # Add background color
-        if self.opt.background_brightness:
-            out_rgb += (1-torch.sum(B_weights, -1))[:, None] * self.opt.background_brightness
-
-        out = {'rgb': out_rgb}
-        if return_depth:
-            # render depth -- find out t from valid samples
-            _ts = ((samples[:,0] - origins[visited_l_mask][:,0]) / dirs[visited_l_mask][:,0])
-            _ts[invalid_sample_ids] = 0 
-
-            B_ts = torch.zeros(B*MV, device=origins.device)
-            B_ts[visited_l_mask] = _ts.to(B_ts.dtype) # [VV]
-            B_ts = B_ts.reshape(B, MV)
-
-            out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
-            out['depth'] = out_depth
-
-        return out
 
 
     def _surface_render_gradcheck_lerp(
@@ -3409,7 +2791,7 @@ class SparseGrid(nn.Module):
             device = self.level_set_data.device
             # reset surface level set
             # currently only support UDF single lv set
-            self.level_set_data = torch.tensor([64.], device=device)
+            self.level_set_data = torch.tensor([0. if self.surface_type == SURFACE_TYPE_SDF else 64.], device=device)
             # convert alpha lv set into alpha raw values
             alpha_lv_sets = torch.tensor(alpha_lv_sets, device=device)
             alpha_lv_sets = torch.logit(alpha_lv_sets)
@@ -4777,8 +4159,163 @@ class SparseGrid(nn.Module):
                     grad)
             self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
+    def _surface_normal_loss_grad_check(self, rand_cells, scaling, device='cuda'):
+        xyz = rand_cells
+        z = (xyz % self.links.shape[2]).long()
+        xy = xyz / self.links.shape[2]
+        y = (xy % self.links.shape[1]).long()
+        x = (xy / self.links.shape[1]).long()
+
+        coords = torch.tensor([
+            [0,0,0],
+            [0,0,1],
+            [0,1,0],
+            [0,1,1],
+            [1,0,0],
+            [1,0,1],
+            [1,1,0],
+            [1,1,1],
+
+            [0,0,2],
+            [0,1,2],
+            [1,0,2],
+            [1,1,2],
+
+            [0,2,0],
+            [0,2,1],
+            [1,2,0],
+            [1,2,1],
+
+            [2,0,0],
+            [2,0,1],
+            [2,1,0],
+            [2,1,1],
+        ], dtype=torch.long, device=device)
+
+        links=torch.zeros([3,3,3,xyz.shape[0]], dtype=torch.long, device=device)
+        alphas=torch.zeros([3,3,3,xyz.shape[0], 1], dtype=self.density_data.dtype, device=device)
+        surfaces=torch.zeros([3,3,3,xyz.shape[0], 1], dtype=self.surface_data.dtype, device=device)
+
+        for i in range(coords.shape[0]):
+            def maybe_get_link(x,y,z):
+                _links = torch.ones_like(x, dtype=torch.long) * -1
+                invalid_xyz_mask = (torch.stack([x,y,z], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
+                _links[~invalid_xyz_mask] = self.links[x[~invalid_xyz_mask], y[~invalid_xyz_mask], z[~invalid_xyz_mask]].long()
+
+                return _links
+
+            links[coords[i,0], coords[i,1], coords[i,2]] = maybe_get_link(x+coords[i,0], y+coords[i,1], z+coords[i,2])
+            alphas[coords[i,0], coords[i,1], coords[i,2]], _ , \
+                surfaces[coords[i,0], coords[i,1], coords[i,2]] = self._fetch_links(links[coords[i,0], coords[i,1], coords[i,2]])
+
+        def find_normal(norm_xyz):
+            x,y,z = norm_xyz.unbind(-1)
+
+            dx = ((surfaces[x+1,y,z]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
+                (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x,y+1,z]+surfaces[x,y+1,z+1])) /4
+            dy = ((surfaces[x,y+1,z]+surfaces[x,y+1,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
+                (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x+1,y,z]+surfaces[x+1,y,z+1]))/4
+            dz = ((surfaces[x,y,z+1]+surfaces[x,y+1,z+1]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z+1]) - \
+                (surfaces[x,y,z]+surfaces[x,y+1,z]+surfaces[x+1,y,z]+surfaces[x+1,y+1,z]))/4
+
+            normals = torch.stack([dx, dy, dz], dim=-1)
+            # normals = normals / torch.clamp(torch.norm(normals, dim=-1, keepdim=True), 1e-10)
+
+            # check if there is non-exist vertex
+            coords = torch.tensor([
+                [0,0,0],
+                [0,0,1],
+                [0,1,0],
+                [0,1,1],
+                [1,0,0],
+                [1,0,1],
+                [1,1,0],
+                [1,1,1],
+                ], dtype=torch.long, device=device)
+            ver_xyzs = norm_xyz[None, :] + coords
+            valid_mask = torch.ones(links.shape[-1], device=links.device).bool()
+            for i in range(ver_xyzs.shape[0]):
+                valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
+
+            alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
+            alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
+
+            return normals, valid_mask, torch.sigmoid(alpha_v.detach().clone())
+
+        # find normals
+        norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=device)
+        norm000, mask000, alpha_v000 = find_normal(norm_xyzs[0])
+        norm001, mask001, alpha_v001 = find_normal(norm_xyzs[1])
+        norm010, mask010, alpha_v010 = find_normal(norm_xyzs[2])
+        norm100, mask100, alpha_v100 = find_normal(norm_xyzs[3])
+
+        Norm000 = norm000 / torch.clamp(torch.norm(norm000, dim=-1, keepdim=True), 1e-10)
+        Norm001 = norm001 / torch.clamp(torch.norm(norm001, dim=-1, keepdim=True), 1e-10)
+        Norm010 = norm010 / torch.clamp(torch.norm(norm010, dim=-1, keepdim=True), 1e-10)
+        Norm100 = norm100 / torch.clamp(torch.norm(norm100, dim=-1, keepdim=True), 1e-10)
+
+
+        # check connectivity of surfaces
+        face001 = torch.concat([surfaces[0,0,1], surfaces[0,1,1], surfaces[1,0,1], surfaces[1,1,1]], axis=-1)
+        face010 = torch.concat([surfaces[0,1,0], surfaces[0,1,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+        face100 = torch.concat([surfaces[1,0,0], surfaces[1,0,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+        con001 = torch.count_nonzero(
+            (self.level_set_data[None, :] >= face001.min(axis=-1, keepdim=True).values) & \
+            (self.level_set_data[None, :] <= face001.max(axis=-1, keepdim=True).values),
+            axis=-1
+            ) > 0
+        con010 = torch.count_nonzero(
+            (self.level_set_data[None, :] >= face010.min(axis=-1, keepdim=True).values) & \
+            (self.level_set_data[None, :] <= face010.max(axis=-1, keepdim=True).values),
+            axis=-1
+            ) > 0
+        con100 = torch.count_nonzero(
+            (self.level_set_data[None, :] >= face100.min(axis=-1, keepdim=True).values) & \
+            (self.level_set_data[None, :] <= face100.max(axis=-1, keepdim=True).values),
+            axis=-1
+            ) > 0
+
+        norm_dz = torch.norm(Norm001 - Norm000, dim=-1)**2
+        norm_dy = torch.norm(Norm010 - Norm000, dim=-1)**2
+        norm_dx = torch.norm(Norm100 - Norm000, dim=-1)**2
+
+        norm_count = torch.ones_like(norm_dz) * 3
+
+        norm_count[(~mask001)|(~mask000)|(~con001)] -= 1
+        norm_count[(~mask010)|(~mask000)|(~con010)] -= 1
+        norm_count[(~mask100)|(~mask000)|(~con100)] -= 1
+
+        # filter out gradients on non-exist voxel or non-connected surfaces
+        norm_dz[(~mask001)|(~mask000)|(~con001)] = 0.
+        norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
+        norm_dx[(~mask100)|(~mask000)|(~con100)] = 0.
+
+        # if alpha_weighted_norm_loss:
+        #     # use alpha value to re-weight the normal loss
+        #     norm_dz = norm_dz * alpha_v000[:, None] * alpha_v001[:, None]
+        #     norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
+        #     norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
+
+        normal_loss = scaling * torch.sum((norm_dx+norm_dy+norm_dz) / norm_count)
+
+        surfaces.retain_grad()
+        norm000.retain_grad()
+        norm001.retain_grad()
+        norm010.retain_grad()
+        norm100.retain_grad()
+        Norm000.retain_grad()
+        Norm001.retain_grad()
+        Norm010.retain_grad()
+        Norm100.retain_grad()
+
+        normal_loss.backward()
+
+        return normal_loss
+
+
     def inplace_surface_normal_grad(self, grad: torch.Tensor,
                                 scaling: float = 1.0,
+                                eikonal_scale: float = 0.,
                                 sparse_frac: float = 0.01,
                                 ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
                                 contiguous: bool = True,
@@ -4905,7 +4442,7 @@ class SparseGrid(nn.Module):
                             rand_cells,
                             self._get_sparse_grad_indexer(),
                             self.level_set_data[0],
-                            0, 1, scaling,
+                            0, 1, scaling, eikonal_scale,
                             ndc_coeffs[0], ndc_coeffs[1],
                             grad)
             else:
