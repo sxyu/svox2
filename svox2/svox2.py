@@ -2802,7 +2802,7 @@ class SparseGrid(nn.Module):
             delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
 
             alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 0) * delta_scale * self.opt.step_size)
-            raw_alpha_data = torch.logit(torch.clamp_min(alpha_data, 1e-8))
+            raw_alpha_data = torch.logit(torch.clamp(alpha_data, 1e-10, 1-1e-7))
             if reset_alpha:
                 self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha).to(torch.float32))
             else:
