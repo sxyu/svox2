@@ -348,9 +348,9 @@ __global__ void surface_normal_grad_kernel(
                 + -2.f*_norm000[1]*_norm000[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0)
         };
 
-        assert(!(isnan(d0[0])));
-        assert(!(isnan(d0[1])));
-        assert(!(isnan(d0[2])));
+        ASSERT_NUM(d0[0]);
+        ASSERT_NUM(d0[1]);
+        ASSERT_NUM(d0[2]);
 
         _add_surface_grad(x, y, z, d0, 
                           scale * 1.f/norm_count, links, ddim, idx, nullptr, grad_data);
@@ -371,9 +371,9 @@ __global__ void surface_normal_grad_kernel(
                 + 2.f*_n1[1]*_n1[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1)
         };
 
-        assert(!(isnan(d1[0])));
-        assert(!(isnan(d1[1])));
-        assert(!(isnan(d1[2])));
+        ASSERT_NUM(d1[0]);
+        ASSERT_NUM(d1[1]);
+        ASSERT_NUM(d1[2]);
 
         float const ux = (i==0) ? x+1:x,
                     uy = (i==1) ? y+1:y,
@@ -483,6 +483,7 @@ __global__ void surface_normal_grad_sparse_kernel(
     }
 
     float const N0 = _NORM3(_norm000);
+    ASSERT_NUM(N0);
     // apply normal difference loss gradient
     for (int i=0; i<3; ++i){
         if (skips[i]){
@@ -490,6 +491,7 @@ __global__ void surface_normal_grad_sparse_kernel(
         }
         float const *_n1 = (i==0) ? _norm100 : ((i==1) ? _norm010 : _norm001);
         float const N1 = _NORM3(_n1);
+        ASSERT_NUM(N1);
 
         // dE/d0x, dE/d0y, dE/d0z
         float const d0[] = {
@@ -507,9 +509,9 @@ __global__ void surface_normal_grad_sparse_kernel(
                 + -2.f*_norm000[1]*_norm000[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0)
         };
 
-        assert(!(isnan(d0[0])));
-        assert(!(isnan(d0[1])));
-        assert(!(isnan(d0[2])));
+        ASSERT_NUM(d0[0]);
+        ASSERT_NUM(d0[1]);
+        ASSERT_NUM(d0[2]);
 
         _add_surface_grad(x, y, z, d0, 
                           scale * 1.f/norm_count, links, ddim, idx, mask_out, grad_data);
@@ -530,9 +532,9 @@ __global__ void surface_normal_grad_sparse_kernel(
                 + 2.f*_n1[1]*_n1[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1)
         };
 
-        assert(!(isnan(d1[0])));
-        assert(!(isnan(d1[1])));
-        assert(!(isnan(d1[2])));
+        ASSERT_NUM(d1[0]);
+        ASSERT_NUM(d1[1]);
+        ASSERT_NUM(d1[2]);
 
         float const ux = (i==0) ? x+1:x,
                     uy = (i==1) ? y+1:y,
@@ -551,9 +553,9 @@ __global__ void surface_normal_grad_sparse_kernel(
             -2*_norm000[2]*(1 - N0)/N0
         };
 
-        assert(!(isnan(d_eki[0])));
-        assert(!(isnan(d_eki[1])));
-        assert(!(isnan(d_eki[2])));
+        ASSERT_NUM(d_eki[0]);
+        ASSERT_NUM(d_eki[1]);
+        ASSERT_NUM(d_eki[2]);
 
         _add_surface_grad(x, y, z, d_eki, 
                           eikonal_scale, links, ddim, idx, nullptr, grad_data);
