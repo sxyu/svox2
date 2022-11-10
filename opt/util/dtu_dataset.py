@@ -73,6 +73,7 @@ class DTUDataset(DatasetBase):
             scale = 1.0
         
         self.scene_radius = [1., 1., 1.]
+        self.scene_radius = [.5, .5, .5]
         self.device = device
         self.permutation = permutation
         self.epoch_size = epoch_size
@@ -197,6 +198,15 @@ class DTUDataset(DatasetBase):
 
         self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
         self.rays = self.rays_init
+
+    def near_far_from_sphere(self, rays_o, rays_d):
+        # TODO: find out what this does
+        a = torch.sum(rays_d**2, dim=-1, keepdim=True)
+        b = 2.0 * torch.sum(rays_o * rays_d, dim=-1, keepdim=True)
+        mid = 0.5 * (-b) / a
+        near = mid - 1.0
+        far = mid + 1.0
+        return near, far
 
     def world2rescale(self, pts: np.ndarray):
         '''

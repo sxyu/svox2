@@ -483,12 +483,12 @@ __global__ void surface_normal_grad_sparse_kernel(
     }
 
     float const N0 = _NORM3(_norm000);
-    if ((isnan(N0) || (isinf(N0)))){
-        printf("N0: %f\n", N0);
-        printf("_norm000[0]: %f\n", _norm000[0]);
-        printf("_norm000[1]: %f\n", _norm000[1]);
-        printf("_norm000[2]: %f\n", _norm000[2]);
-    }
+    // if ((isnan(N0) || (isinf(N0)))){
+    //     printf("N0: %f\n", N0);
+    //     printf("_norm000[0]: %f\n", _norm000[0]);
+    //     printf("_norm000[1]: %f\n", _norm000[1]);
+    //     printf("_norm000[2]: %f\n", _norm000[2]);
+    // }
     ASSERT_NUM(N0);
     // apply normal difference loss gradient
     for (int i=0; i<3; ++i){
