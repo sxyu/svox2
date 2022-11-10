@@ -729,7 +729,9 @@ class SparseGrid(nn.Module):
             level_sets = torch.tensor([0.])
             level_sets = level_sets.to(device)
             self.level_set_data = level_sets
-            if surface_init == 'sphere' or surface_init is None:
+            if surface_init is None:
+                surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+            elif surface_init == 'sphere':
                 # method 1: initialize with distance to grid center, then reduce each vertices by the mean from the 8?
                 surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
@@ -824,7 +826,11 @@ class SparseGrid(nn.Module):
             or surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
             # unsigned distance field with fixed level sets
             # udf_alpha: each level set has an alpha, instead of each vertex
-            if surface_init == 'sphere' or surface_init is None:
+            if surface_init is None:
+                surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+                level_sets = torch.tensor([64.])
+                level_sets = level_sets.to(device)
+            elif surface_init == 'sphere':
                 surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
                 coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
                 coords = torch.stack(coords).view(3, -1).T
