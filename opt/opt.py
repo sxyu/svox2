@@ -35,6 +35,8 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from typing import NamedTuple, Optional, Union
 
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # parser = argparse.ArgumentParser()
@@ -74,7 +76,8 @@ with open(path.join(args.train_dir, 'args.yaml'), 'w') as file:
     for arg in sorted(vars(args)):
         attr = getattr(args, arg)
         file.write('{} = {}\n'.format(arg, attr))
-shutil.copyfile(args.config, path.join(args.train_dir, 'config.yaml'))
+if args.config != path.join(args.train_dir, 'config.yaml'):
+    shutil.copyfile(args.config, path.join(args.train_dir, 'config.yaml'))
 
 torch.manual_seed(20200823)
 np.random.seed(20200823)
@@ -554,7 +557,7 @@ while True:
                         sparse_frac=args.tv_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
-            if args.lambda_normal_loss > 0.0 and not no_surface:
+            if args.lambda_normal_loss > 0.0 and not no_surface and USE_KERNEL:
                 # with Timing("normal_loss"):
                 grid.inplace_surface_normal_grad(grid.surface_data.grad,
                         scaling=args.lambda_normal_loss,
@@ -598,11 +601,14 @@ while True:
             if gstep_id >= args.lr_fg_begin_step:
                 grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
                 if not no_surface:
-                    if args.surf_grad_abs_max is not None:
-                        # apply gradient clipping
-                        thresh = np.abs(args.surf_grad_abs_max)
-                        torch.clamp_(grid.surface_data.grad, -thresh, thresh)
-                    grid.optim_surface_step(lr_surface, beta=args.rms_beta, optim=args.surface_optim)
+                    if gstep_id < args.surface_init_freeze + args.no_surface_init_iters:
+                        grid.surface_data.grad[:] = 0.
+                    else: 
+                        if args.surf_grad_abs_max is not None:
+                            # apply gradient clipping
+                            thresh = np.abs(args.surf_grad_abs_max)
+                            torch.clamp_(grid.surface_data.grad, -thresh, thresh)
+                        grid.optim_surface_step(lr_surface, beta=args.rms_beta, optim=args.surface_optim)
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
                 grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
@@ -613,7 +619,7 @@ while True:
                     optim_basis_mlp.step()
                     optim_basis_mlp.zero_grad()
 
-            if (gstep_id % args.eval_every_iter) == 0: # and gstep_id > 0:
+            if ((gstep_id % args.eval_every_iter) == 0) or (gstep_id == args.surface_init_freeze + args.no_surface_init_iters): # and gstep_id > 0:
                 eval_step(step_id=gstep_id)
                 gc.collect()
 

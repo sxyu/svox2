@@ -2257,7 +2257,7 @@ class SparseGrid(nn.Module):
             samples = origins[ray_ids, None, :] + ts[..., None] * dirs[ray_ids, None, :] # [VEV, N_INTERSECT, 3]
             ray_ids = ray_ids[:, None].repeat(1, N_INTERSECT)
             l_ids = l_ids[:, None].repeat(1, N_INTERSECT)
-            lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
+            # lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
 
             def check_solution(ts=ts):
                 return ts**3 * f3[:, None].repeat(1, N_INTERSECT) + ts**2 * f2[:, None].repeat(1, N_INTERSECT) + \
@@ -2311,7 +2311,7 @@ class SparseGrid(nn.Module):
             ts = ts[valid_sample_mask] # [VEV * N_INTERSECT]
             ray_ids = ray_ids[valid_sample_mask] # [VEV * N_INTERSECT]
             l_ids = l_ids[valid_sample_mask] # [VEV * N_INTERSECT]
-            lv_set_ids = lv_set_ids[valid_sample_mask] # [VEV * N_INTERSECT]
+            # lv_set_ids = lv_set_ids[valid_sample_mask] # [VEV * N_INTERSECT]
             samples = samples[valid_sample_mask, :] # [VEV * N_INTERSECT, 3]
             l = l[l_ids, :]
 
@@ -4304,15 +4304,15 @@ class SparseGrid(nn.Module):
 
         normal_loss = scaling * torch.sum((norm_dx+norm_dy+norm_dz) / norm_count)
 
-        surfaces.retain_grad()
-        norm000.retain_grad()
-        norm001.retain_grad()
-        norm010.retain_grad()
-        norm100.retain_grad()
-        Norm000.retain_grad()
-        Norm001.retain_grad()
-        Norm010.retain_grad()
-        Norm100.retain_grad()
+        # surfaces.retain_grad()
+        # norm000.retain_grad()
+        # norm001.retain_grad()
+        # norm010.retain_grad()
+        # norm100.retain_grad()
+        # Norm000.retain_grad()
+        # Norm001.retain_grad()
+        # Norm010.retain_grad()
+        # Norm100.retain_grad()
 
         normal_loss.backward()
 
@@ -4421,106 +4421,8 @@ class SparseGrid(nn.Module):
         
         if not use_kernel:
             # pytorch version
-
             rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
-            if rand_cells is None:
-                rand_cells = self.links[self.links >= 0]
-
-            # z = (rand_cells % self.links.shape[2]).long()
-            # xy = (rand_cells / self.links.shape[2]).long()
-            # y = (xy % self.links.shape[1]).long()
-            # x = (xy / self.links.shape[1]).long()
-            x,y,z = utils.inv_morton_code_3(rand_cells)
-            x,y,z = torch.clamp(x.long(), 0, self.links.shape[0]-3), \
-                    torch.clamp(y.long(), 0, self.links.shape[1]-3), \
-                    torch.clamp(z.long(), 0, self.links.shape[2]-3)
-
-
-            coords = torch.tensor([
-                [0,0,0],
-                [0,0,1],
-                [0,1,0],
-                [0,1,1],
-                [1,0,0],
-                [1,0,1],
-                [1,1,0],
-                [1,1,1],
-
-                [0,0,2],
-                [0,1,2],
-                [1,0,2],
-                [1,1,2],
-
-                [0,2,0],
-                [0,2,1],
-                [1,2,0],
-                [1,2,1],
-
-                [2,0,0],
-                [2,0,1],
-                [2,1,0],
-                [2,1,1],
-            ], dtype=torch.long, device=rand_cells.device)
-
-            links=torch.zeros([3,3,3,rand_cells.numel()], dtype=torch.long, device=rand_cells.device)
-            alphas=torch.zeros([3,3,3,rand_cells.numel(), 1], dtype=self.density_data.dtype, device=rand_cells.device)
-            surfaces=torch.zeros([3,3,3,rand_cells.numel(), 1], dtype=self.surface_data.dtype, device=rand_cells.device)
-
-            for i in range(coords.shape[0]):
-                links[coords[i,0], coords[i,1], coords[i,2]] = self.links[x+coords[i,0], y+coords[i,1], z+coords[i,2]]
-                alphas[coords[i,0], coords[i,1], coords[i,2]], _ , \
-                    surfaces[coords[i,0], coords[i,1], coords[i,2]] = self._fetch_links(self.links[x+coords[i,0], y+coords[i,1], z+coords[i,2]])
-
-            def find_normal(norm_xyz):
-                x,y,z = norm_xyz.unbind(-1)
-
-                dx = ((surfaces[x+1,y,z]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
-                    (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x,y+1,z]+surfaces[x,y+1,z+1])) /4
-                dy = ((surfaces[x,y+1,z]+surfaces[x,y+1,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
-                    (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x+1,y,z]+surfaces[x+1,y,z+1]))/4
-                dz = ((surfaces[x,y,z+1]+surfaces[x,y+1,z+1]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z+1]) - \
-                    (surfaces[x,y,z]+surfaces[x,y+1,z]+surfaces[x+1,y,z]+surfaces[x+1,y+1,z]))/4
-
-                normals = torch.stack([dx, dy, dz], dim=-1)
-                normals = normals / torch.norm(normals, dim=-1, keepdim=True)
-
-                # check if there is non-exist vertex
-                coords = torch.tensor([
-                    [0,0,0],
-                    [0,0,1],
-                    [0,1,0],
-                    [0,1,1],
-                    [1,0,0],
-                    [1,0,1],
-                    [1,1,0],
-                    [1,1,1],
-                    ], dtype=torch.long, device=rand_cells.device)
-                ver_xyzs = norm_xyz[None, :] + coords
-                valid_mask = torch.ones(links.shape[-1], device=links.device).bool()
-                for i in range(ver_xyzs.shape[0]):
-                    valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
-
-                return normals, valid_mask
-
-            # find normals
-            norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=rand_cells.device)
-            norm000, mask000 = find_normal(norm_xyzs[0])
-            norm001, mask001 = find_normal(norm_xyzs[1])
-            norm010, mask010 = find_normal(norm_xyzs[2])
-            norm100, mask100 = find_normal(norm_xyzs[3])
-
-            norm_dx = torch.norm(norm001 - norm000, dim=-1)
-            norm_dy = torch.norm(norm010 - norm000, dim=-1)
-            norm_dz = torch.norm(norm100 - norm000, dim=-1)
-            norm_dx[(~mask001)|(~mask000)] = 0.
-            norm_dy[(~mask010)|(~mask000)] = 0.
-            norm_dz[(~mask100)|(~mask000)] = 0.
-
-            norm_loss = torch.mean(torch.concat([norm_dx,norm_dy,norm_dz],axis=-1))
-
-            norm_loss.backward()
-
-            return norm_loss
+            return self._surface_normal_loss_grad_check(rand_cells, scaling / rand_cells.shape[0])
 
         else:
             assert (
