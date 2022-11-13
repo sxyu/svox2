@@ -179,7 +179,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("surface_type", &SparseGridSpec::surface_type)
       .def_readwrite("basis_data", &SparseGridSpec::basis_data)
       .def_readwrite("background_links", &SparseGridSpec::background_links)
-      .def_readwrite("background_data", &SparseGridSpec::background_data);
+      .def_readwrite("background_data", &SparseGridSpec::background_data)
+      .def_readwrite("fake_sample_std", &SparseGridSpec::fake_sample_std);
 
   py::class_<CameraSpec>(m, "CameraSpec")
       .def(py::init<>())
@@ -213,7 +214,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("stop_thresh", &RenderOptions::stop_thresh)
       .def_readwrite("near_clip", &RenderOptions::near_clip)
       .def_readwrite("use_spheric_clip", &RenderOptions::use_spheric_clip)
-      .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque);
+      .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque)
+      .def_readwrite("surf_fake_sample", &RenderOptions::surf_fake_sample)
+      .def_readwrite("surf_fake_sample_min_vox_len", &RenderOptions::surf_fake_sample_min_vox_len);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
   // .def_readwrite("random_sigma_std_background",

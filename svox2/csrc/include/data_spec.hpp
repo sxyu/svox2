@@ -47,6 +47,7 @@ struct SparseGridSpec {
   uint8_t basis_type;
   uint8_t surface_type;
   Tensor basis_data;
+  float fake_sample_std;
 
   inline void check() {
     CHECK_INPUT(density_data);
@@ -162,6 +163,9 @@ struct RenderOptions {
   bool use_spheric_clip;
 
   bool last_sample_opaque;
+
+  bool surf_fake_sample;
+  float surf_fake_sample_min_vox_len;
 
   // bool randomize;
   // float random_sigma_std;

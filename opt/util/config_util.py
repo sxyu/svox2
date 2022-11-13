@@ -127,6 +127,15 @@ def define_common_args(parser : configargparse.ArgumentParser):
                         default=1,
                         help='do not use cuda kernel to speed up training')
 
+    group.add_argument('--surf_fake_sample', 
+                        action='store_true',
+                        default=False,
+                        help='Render with fake sample for surface')
+    group.add_argument('--surf_fake_sample_min_vox_len', 
+                         type=float,
+                         default=0.05,
+                        help='minimum length for the ray in voxel to be considered for fake sampling')
+
 
 def build_data_options(args):
     """
@@ -174,6 +183,8 @@ def setup_render_opts(opt, args):
     opt.last_sample_opaque = args.last_sample_opaque
     opt.near_clip = args.near_clip
     opt.use_spheric_clip = args.use_spheric_clip
+    opt.surf_fake_sample = args.surf_fake_sample
+    opt.surf_fake_sample_min_vox_len = args.surf_fake_sample_min_vox_len
 
 
 def setup_train_conf():
@@ -270,7 +281,7 @@ def setup_train_conf():
     group.add_argument('--surf_grad_abs_max', type=float, default=None, help='Apply max gradient clipping on the surface grad')
 
     group.add_argument('--fake_sample_std', type=float, default=1, help='std for fake samples')
-    group.add_argument('--fake_sample_std_final', type=float, default=1e-4)
+    group.add_argument('--fake_sample_std_final', type=float, default=0.05)
     group.add_argument('--fake_sample_std_decay_steps', type=lambda x: int(float(x)), default=50000)
 
 
