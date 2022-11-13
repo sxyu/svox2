@@ -565,7 +565,9 @@ while True:
                         sparse_frac=args.norm_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous,
-                        use_kernel=USE_KERNEL)
+                        use_kernel=USE_KERNEL,
+                        # connectivity_check=False,
+                        )
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):
                 grid.inplace_tv_color_grad(grid.sh_data.grad,

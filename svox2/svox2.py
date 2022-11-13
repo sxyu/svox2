@@ -4165,7 +4165,14 @@ class SparseGrid(nn.Module):
                     grad)
             self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
-    def _surface_normal_loss_grad_check(self, rand_cells, scaling, device='cuda'):
+    def _surface_normal_loss_grad_check(
+        self, 
+        rand_cells, 
+        scaling, 
+        device='cuda', 
+        connectivity_check=True, 
+        alpha_weighted_norm_loss=False
+        ):
         xyz = rand_cells
         z = (xyz % self.links.shape[2]).long()
         xy = xyz / self.links.shape[2]
@@ -4260,47 +4267,47 @@ class SparseGrid(nn.Module):
         Norm010 = norm010 / torch.clamp(torch.norm(norm010, dim=-1, keepdim=True), 1e-10)
         Norm100 = norm100 / torch.clamp(torch.norm(norm100, dim=-1, keepdim=True), 1e-10)
 
-
-        # check connectivity of surfaces
-        face001 = torch.concat([surfaces[0,0,1], surfaces[0,1,1], surfaces[1,0,1], surfaces[1,1,1]], axis=-1)
-        face010 = torch.concat([surfaces[0,1,0], surfaces[0,1,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
-        face100 = torch.concat([surfaces[1,0,0], surfaces[1,0,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
-        con001 = torch.count_nonzero(
-            (self.level_set_data[None, :] >= face001.min(axis=-1, keepdim=True).values) & \
-            (self.level_set_data[None, :] <= face001.max(axis=-1, keepdim=True).values),
-            axis=-1
-            ) > 0
-        con010 = torch.count_nonzero(
-            (self.level_set_data[None, :] >= face010.min(axis=-1, keepdim=True).values) & \
-            (self.level_set_data[None, :] <= face010.max(axis=-1, keepdim=True).values),
-            axis=-1
-            ) > 0
-        con100 = torch.count_nonzero(
-            (self.level_set_data[None, :] >= face100.min(axis=-1, keepdim=True).values) & \
-            (self.level_set_data[None, :] <= face100.max(axis=-1, keepdim=True).values),
-            axis=-1
-            ) > 0
-
         norm_dz = torch.norm(Norm001 - Norm000, dim=-1)**2
         norm_dy = torch.norm(Norm010 - Norm000, dim=-1)**2
         norm_dx = torch.norm(Norm100 - Norm000, dim=-1)**2
 
         norm_count = torch.ones_like(norm_dz) * 3
 
-        norm_count[(~mask001)|(~mask000)|(~con001)] -= 1
-        norm_count[(~mask010)|(~mask000)|(~con010)] -= 1
-        norm_count[(~mask100)|(~mask000)|(~con100)] -= 1
+        if connectivity_check:
+            # check connectivity of surfaces
+            face001 = torch.concat([surfaces[0,0,1], surfaces[0,1,1], surfaces[1,0,1], surfaces[1,1,1]], axis=-1)
+            face010 = torch.concat([surfaces[0,1,0], surfaces[0,1,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+            face100 = torch.concat([surfaces[1,0,0], surfaces[1,0,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+            con001 = torch.count_nonzero(
+                (self.level_set_data[None, :] >= face001.min(axis=-1, keepdim=True).values) & \
+                (self.level_set_data[None, :] <= face001.max(axis=-1, keepdim=True).values),
+                axis=-1
+                ) > 0
+            con010 = torch.count_nonzero(
+                (self.level_set_data[None, :] >= face010.min(axis=-1, keepdim=True).values) & \
+                (self.level_set_data[None, :] <= face010.max(axis=-1, keepdim=True).values),
+                axis=-1
+                ) > 0
+            con100 = torch.count_nonzero(
+                (self.level_set_data[None, :] >= face100.min(axis=-1, keepdim=True).values) & \
+                (self.level_set_data[None, :] <= face100.max(axis=-1, keepdim=True).values),
+                axis=-1
+                ) > 0
 
-        # filter out gradients on non-exist voxel or non-connected surfaces
-        norm_dz[(~mask001)|(~mask000)|(~con001)] = 0.
-        norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
-        norm_dx[(~mask100)|(~mask000)|(~con100)] = 0.
+            norm_count[(~mask001)|(~mask000)|(~con001)] -= 1
+            norm_count[(~mask010)|(~mask000)|(~con010)] -= 1
+            norm_count[(~mask100)|(~mask000)|(~con100)] -= 1
 
-        # if alpha_weighted_norm_loss:
-        #     # use alpha value to re-weight the normal loss
-        #     norm_dz = norm_dz * alpha_v000[:, None] * alpha_v001[:, None]
-        #     norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
-        #     norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
+            # filter out gradients on non-exist voxel or non-connected surfaces
+            norm_dz[(~mask001)|(~mask000)|(~con001)] = 0.
+            norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
+            norm_dx[(~mask100)|(~mask000)|(~con100)] = 0.
+
+        if alpha_weighted_norm_loss:
+            # use alpha value to re-weight the normal loss
+            norm_dz = norm_dz * alpha_v000[:, None] * alpha_v001[:, None]
+            norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
+            norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
 
         normal_loss = scaling * torch.sum((norm_dx+norm_dy+norm_dz) / norm_count)
 
@@ -4412,6 +4419,7 @@ class SparseGrid(nn.Module):
                                 ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
                                 contiguous: bool = True,
                                 use_kernel: bool = True,
+                                **kwargs
                             ):
         """
         Add gradient of total variation for sigma as in Neural Volumes
@@ -4422,7 +4430,7 @@ class SparseGrid(nn.Module):
         if not use_kernel:
             # pytorch version
             rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
-            return self._surface_normal_loss_grad_check(rand_cells, scaling / rand_cells.shape[0])
+            return self._surface_normal_loss_grad_check(rand_cells, scaling / rand_cells.shape[0], **kwargs)
 
         else:
             assert (
