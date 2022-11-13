@@ -411,11 +411,11 @@ while True:
                 lr_sh = args.lr_sh * lr_sh_factor
                 lr_basis = args.lr_basis * lr_basis_factor
 
-            fake_sample_std = fake_sample_std_func(gstep_id)
             # update fake_sample_std if needed
             if grid.fake_sample_std is not None:
-                grid.fake_sample_std = torch.tensor(fake_sample_std, 
-                device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
+                # grid.fake_sample_std = torch.tensor(fake_sample_std, 
+                # device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
+                grid.fake_sample_std = fake_sample_std_func(gstep_id)
 
             no_surface = gstep_id < args.no_surface_init_iters
 
@@ -520,7 +520,8 @@ while True:
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
-                summary_writer.add_scalar("fake_sample_std", fake_sample_std, global_step=gstep_id)
+                if grid.fake_sample_std is not None:
+                    summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std, global_step=gstep_id)
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
                 if grid.use_background:

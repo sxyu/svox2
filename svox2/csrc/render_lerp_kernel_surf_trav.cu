@@ -166,6 +166,7 @@ __device__ __inline__ void trace_ray_surf_trav(
                 st
                 );
 
+            bool has_sample = false;
             
             ////////////// TRILINEAR INTERPOLATE //////////////
             for (int j=0; j < 3; ++j){
@@ -178,8 +179,6 @@ __device__ __inline__ void trace_ray_surf_trav(
                 for (int k=0; k < 3; ++k){
                     // assert(!isnan(st[j]));
                     ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
-                    ray.pos[k] = fmaf(st[j], ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
-                    ray.l[k] = voxel_l[k]; // get l
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                     ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
                 }
@@ -189,14 +188,14 @@ __device__ __inline__ void trace_ray_surf_trav(
                 // float const volatile ray_origin[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
 
                 // float const volatile ray_pos0[] = {fmaf(st[j], ray.dir[0], ray.origin[0]), fmaf(st[j], ray.dir[1], ray.origin[1]), fmaf(st[j], ray.dir[2], ray.origin[2])};
-                // float const volatile ray_l[] = {ray.l[0], ray.l[1], ray.l[2]};
+                // int32_t const volatile ray_l[] = {ray.l[0], ray.l[1], ray.l[2]};
 
                 // check if intersection is within grid
                 if ((ray.pos[0] < 0) | (ray.pos[0] > 1) | (ray.pos[1] < 0) | (ray.pos[1] > 1) | (ray.pos[2] < 0) | (ray.pos[2] > 1)){
                     continue;
                 }
 
-
+                has_sample = true;
                 float alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
@@ -229,6 +228,121 @@ __device__ __inline__ void trace_ray_surf_trav(
             }
 
 
+
+            if ((!has_sample) && (opt.surf_fake_sample)){
+                // there is no intersection between ray and surface
+                // take fake sample if allowed
+
+                // https://math.stackexchange.com/questions/967268/finding-the-closest-distance-between-a-point-a-curve
+                
+
+                // first find middle point of the ray in the voxel
+                int32_t const close_plane[] = {
+                    ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+                    ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+                    ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+                };
+                int32_t const far_plane[] = {
+                    ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+                    ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+                    ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+                };
+
+                float const t_close = max(
+                    max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+                    (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]);
+                float const t_far = min(
+                    min((static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1]),
+                    (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]);
+
+
+
+                if ((t_far - t_close) > opt.surf_fake_sample_min_vox_len){
+#pragma unroll 3
+                    for (int k=0; k < 3; ++k){
+                        // assert(!isnan(st[j]));
+                        ray.pos[k] = fmaf((t_far + t_close) / 2, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                        ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
+                        ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
+
+                        // if ((!(ray.pos[k] >= 0.f)) || (!(ray.pos[k] <= 1.f)) ){
+                        //     printf("t_far: %f\n", t_far);
+                        //     printf("t_close: %f\n", t_close);
+                        //     printf("ray_l_k: %d\n", ray.l[k]);
+                        //     printf("ray_pos_k: %f\n", ray.pos[k]);
+                        // }
+                        
+                        // assert(ray.pos[k] <= 1.f);
+                        // assert(ray.pos[k] >= 0.f);
+                    }
+
+                    float alpha = trilerp_cuvol_one(
+                            grid.links, grid.density_data,
+                            grid.stride_x,
+                            grid.size[2],
+                            1,
+                            ray.l, ray.pos,
+                            0);
+
+                    if (alpha > opt.sigma_thresh) {
+                        alpha = _SIGMOID(alpha);
+
+                        // use distance to surface to re-weight alpha
+                        // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
+                        // we approximate the distance by normalizing the surface scalar values
+                        // so the distance no longer relates to the scale of surface
+
+                        float const surf_norm = sqrtf(
+                            max(1e-9f, 
+                            _SQR(surface[0]) + _SQR(surface[1]) + _SQR(surface[2]) + _SQR(surface[3]) + _SQR(surface[4]) + _SQR(surface[5]) + _SQR(surface[6]) + _SQR(surface[7])
+                            )
+                        );
+
+                        // tri-lerp to get distance
+
+                        #define _norm_surf(x) (static_cast<float>(surface[x]) / surf_norm)
+
+                        const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
+                        const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
+                        const float ix0 = lerp(ix0y0, ix0y1, ray.pos[1]);
+                        const float ix1y0 = lerp(_norm_surf(4), _norm_surf(5), ray.pos[2]);
+                        const float ix1y1 = lerp(_norm_surf(6),
+                                                _norm_surf(7), ray.pos[2]);
+                        const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
+                        const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
+
+                        #undef _norm_surf
+
+                        
+                        // re-weight alpha using a simple gaussian
+                        alpha = alpha * _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
+
+
+                        float lane_color = trilerp_cuvol_one(
+                                        grid.links,
+                                        grid.sh_data,
+                                        grid.stride_x,
+                                        grid.size[2],
+                                        grid.sh_data_dim,
+                                        ray.l, ray.pos, lane_id);
+                        lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
+
+                        // const float pcnt = ray.world_step * sigma;
+                        const float pcnt = -1 * _LOG(1 - alpha);
+                        const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+                        log_transmit -= pcnt; // log_trans = sum(log(1-alpha)) = log(prod(1-alpha))
+                        // log_transmit is now T_{i+1}
+
+                        float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
+                                                    lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
+                        outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
+                    }
+
+                }
+
+                
+
+            }
 
         }
 
@@ -664,6 +778,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
         // only supports single level set!
         const int level_set_num = 1;
+
         
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); 
         for (int i=0; i < level_set_num; ++i){
@@ -689,6 +804,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
             // sort index instead to keep track of root computation
             // thrust::sort(thrust::device, st, st + 3);
             // thrust::sort(thrust::device, st_ids, st_ids + 3, [&st](int i,int j){return st[i]<st[j];} );
+
+            bool has_sample = false;
 
             ////////////// TRILINEAR INTERPOLATE //////////////
             for (int st_id=0; st_id < 3; ++st_id){
@@ -717,6 +834,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                 // float volatile ray_dir[] = {ray.dir[0],ray.dir[1],ray.dir[2]};
                 // float volatile ray_pos[] = {ray.pos[0],ray.pos[1],ray.pos[2]};
 
+                has_sample = true;
                 float const  raw_alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
@@ -778,7 +896,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     accum -= weight * total_color;
                     // compute d_mse/d_alpha_i
                     float  curr_grad_alpha = accum / min(alpha-1.f, -1e-9f) + total_color * _EXP(log_transmit); 
-                    log_transmit -= pcnt; // log_transmit is not log(T_{i+1})
+                    log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
                     if (sparsity_loss > 0.f) {
                         // Cauchy version (from SNeRG)
                         // TODO: check if expected!
@@ -860,6 +978,230 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
 
             }
+        
+            if ((!has_sample) && (opt.surf_fake_sample)){
+                // there is no intersection between ray and surface
+                // take fake sample if allowed                
+
+                // first find middle point of the ray in the voxel
+                int32_t const close_plane[] = {
+                    ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+                    ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+                    ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+                };
+                int32_t const far_plane[] = {
+                    ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+                    ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+                    ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+                };
+
+                float const t_close = max(
+                    max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+                    (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]);
+                float const t_far = min(
+                    min((static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1]),
+                    (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]);
+
+
+
+                if ((t_far - t_close) > opt.surf_fake_sample_min_vox_len){
+#pragma unroll 3
+                    for (int k=0; k < 3; ++k){
+                        // assert(!isnan(st[j]));
+                        ray.pos[k] = fmaf((t_far + t_close) / 2, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                        ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
+                        ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
+
+                        // if ((!(ray.pos[k] >= 0.f)) || (!(ray.pos[k] <= 1.f)) ){
+                        //     printf("t_far: %f\n", t_far);
+                        //     printf("t_close: %f\n", t_close);
+                        //     printf("ray_l_k: %d\n", ray.l[k]);
+                        //     printf("ray_pos_k: %f\n", ray.pos[k]);
+                        // }
+                        
+                        // assert(ray.pos[k] <= 1.f);
+                        // assert(ray.pos[k] >= 0.f);
+                    }
+
+                    float const raw_alpha = trilerp_cuvol_one(
+                            grid.links, grid.density_data,
+                            grid.stride_x,
+                            grid.size[2],
+                            1,
+                            ray.l, ray.pos,
+                            0);
+
+                    if (raw_alpha > opt.sigma_thresh) {
+                        float const alpha = _SIGMOID(raw_alpha);
+
+                        // use distance to surface to re-weight alpha
+                        // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
+                        // we approximate the distance by normalizing the surface scalar values
+                        // so the distance no longer relates to the scale of surface
+
+                        float const surf_norm = sqrtf(
+                            max(1e-9f, 
+                            _SQR(surface[0]) + _SQR(surface[1]) + _SQR(surface[2]) + _SQR(surface[3]) + _SQR(surface[4]) + _SQR(surface[5]) + _SQR(surface[6]) + _SQR(surface[7])
+                            )
+                        );
+
+                        // tri-lerp to get distance
+
+                        #define _norm_surf(x) (static_cast<float>(surface[x]) / surf_norm)
+
+                        const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
+                        const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
+                        const float ix0 = lerp(ix0y0, ix0y1, ray.pos[1]);
+                        const float ix1y0 = lerp(_norm_surf(4), _norm_surf(5), ray.pos[2]);
+                        const float ix1y1 = lerp(_norm_surf(6),
+                                                _norm_surf(7), ray.pos[2]);
+                        const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
+                        const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
+
+                        #undef _norm_surf
+
+                        
+                        // re-weight alpha using a simple gaussian
+                        float const reweight = _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
+                        float const rw_alpha = alpha * reweight;
+
+
+                        float lane_color = trilerp_cuvol_one(
+                                        grid.links,
+                                        grid.sh_data,
+                                        grid.stride_x,
+                                        grid.size[2],
+                                        grid.sh_data_dim,
+                                        ray.l, ray.pos, lane_id);
+                        lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
+
+
+                        // backward gradient computation
+                        float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
+                        const float  pcnt = -1 * _LOG(1 - rw_alpha);
+                        const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+                        
+
+                        const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
+                                                    weighted_lane_color, lane_colorgrp_id == 0) + 0.5f; 
+                        float total_color = fmaxf(lane_color_total, 0.f); // Clamp to [+0, infty), ci -- one channel of radiance of the sample
+                        float color_in_01 = total_color == lane_color_total; // 1 if color >= 0.
+                        // substract for background color? -- seems to have already been done somewhere
+                        total_color *= gout; // d_mse/d_pred_c * ci
+
+                        // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-description 
+                        float total_color_c1 = __shfl_sync(leader_mask, total_color, grid.basis_dim); 
+                        // taking d_mse/d_pred_c * ci of each RGB channels
+                        total_color += __shfl_sync(leader_mask, total_color, 2 * grid.basis_dim); 
+                        total_color += total_color_c1;
+
+                        // get color_in_01 from 'parent' lane in the color group where the channel color is computed
+                        color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim); 
+                        // d_mse/d_ci in the final computed color is within clamp range, compute proper gradient 
+                        const float  grad_common = weight * color_in_01 * gout; 
+                        // gradient wrt sh coefficient (d_mse/d_sh)
+                        const float  curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
+
+                        // if (grid.basis_type != BASIS_TYPE_SH) {
+                        //     float curr_grad_sphfunc = lane_color * grad_common;
+                        //     const float curr_grad_up2 = __shfl_down_sync((1U << grid.sh_data_dim) - 1,
+                        //             curr_grad_sphfunc, 2 * grid.basis_dim);
+                        //     curr_grad_sphfunc += __shfl_down_sync((1U << grid.sh_data_dim) - 1,
+                        //             curr_grad_sphfunc, grid.basis_dim);
+                        //     curr_grad_sphfunc += curr_grad_up2;
+                        //     if (lane_id < grid.basis_dim) {
+                        //         grad_sphfunc_val[lane_id] += curr_grad_sphfunc;
+                        //     }
+                        // }
+
+                        // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
+                        accum -= weight * total_color;
+                        // compute d_mse/d_rwalpha_i (reweighted alpha)
+                        float  curr_grad_rwalpha = accum / min(alpha-1.f, -1e-9f) + total_color * _EXP(log_transmit); 
+                        log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
+                        // if (sparsity_loss > 0.f) {
+                        //     // Cauchy version (from SNeRG)
+                        //     // TODO: check if expected!
+                        //     curr_grad_rwalpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
+
+                        //     // Alphs version (from PlenOctrees)
+                        //     // curr_grad_alpha += sparsity_loss * _EXP(-pcnt) * ray.world_step;
+                        // }
+
+                        // curr_grad_alpha is now d_mse/d_alpha_i
+                        float const curr_grad_alpha = curr_grad_rwalpha * reweight;
+
+                        trilerp_backward_cuvol_one(grid.links, grads.grad_sh_out,
+                                grid.stride_x,
+                                grid.size[2],
+                                grid.sh_data_dim,
+                                ray.l, ray.pos,
+                                curr_grad_color, lane_id);
+
+
+                        if (lane_id == 0) {
+                            // compute gradient for sigmoid
+                            float const  curr_grad_raw_alpha = curr_grad_alpha * _D_SIGMOID(raw_alpha);
+                            ASSERT_NUM(curr_grad_raw_alpha);
+                            trilerp_backward_cuvol_one_density(
+                                    grid.links,
+                                    grads.grad_density_out,
+                                    grads.mask_out,
+                                    grid.stride_x,
+                                    grid.size[2],
+                                    ray.l, ray.pos, curr_grad_raw_alpha);
+
+                            
+                            // gradient to surface via fake sample
+                            // via curr_grad_rwalpha
+
+                            float const grad_fake_dist = curr_grad_rwalpha * (-alpha) * fake_sample_dist * reweight / _SQR(grid.fake_sample_std);
+                            float grad_ns[8]; // grad of normalized surface values
+
+                            const float ay = 1.f - ray.pos[1], az = 1.f - ray.pos[2];
+                            float xo = (1.0f - ray.pos[0]) * grad_fake_dist;
+
+                            grad_ns[0] = ay * az * xo;
+                            grad_ns[1] = ay * ray.pos[2] * xo;
+                            grad_ns[2] = ray.pos[1] * az * xo;
+                            grad_ns[3] = ray.pos[1] * ray.pos[2] * xo;
+
+                            xo = ray.pos[0] * grad_fake_dist;
+                            grad_ns[4] = ay * az * xo;
+                            grad_ns[5] = ay * ray.pos[2] * xo;
+                            grad_ns[6] = ray.pos[1] * az * xo;
+                            grad_ns[7] = ray.pos[1] * ray.pos[2] * xo;
+
+
+                            float grad_surface[8];
+#pragma unroll 8
+                            for (int ks = 0; ks < 8; ++ks){
+#pragma unroll 8
+                                for (int kn = 0; kn < 8; ++kn){
+                                    if (ks == kn){
+                                        grad_surface[ks] = grad_ns[kn] * (-_SQR(surface[ks]) / _CUBIC(surf_norm) + 1.f/surf_norm);
+                                    } else {
+                                        grad_surface[ks] =  grad_ns[kn] * (-surface[ks]*surface[kn] / _CUBIC(surf_norm));
+                                    }
+                                }
+                            }
+
+                            assign_surface_grad(
+                                grid.links,
+                                grads.grad_surface_out,
+                                grads.mask_out,
+                                grid.stride_x,
+                                grid.size[2],
+                                ray.l,
+                                grad_surface
+                            );
+
+
+                        }
+                    }
+                }
+            }
+            
         }
 
         if (_EXP(log_transmit) < opt.stop_thresh) {

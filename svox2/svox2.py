@@ -55,6 +55,9 @@ class RenderOptions:
     random_sigma_std_background: float = 1.0        # Noise to add to sigma
                                                     # (for the BG model; only if randomize=True)
 
+    surf_fake_sample: bool = False
+    surf_fake_sample_min_vox_len: float = 0.1
+
     def _to_cpp(self, randomize: bool = False):
         """
         Generate object to pass to C++
@@ -68,6 +71,8 @@ class RenderOptions:
         opt.use_spheric_clip = self.use_spheric_clip
 
         opt.last_sample_opaque = self.last_sample_opaque
+        opt.surf_fake_sample = self.surf_fake_sample
+        opt.surf_fake_sample_min_vox_len = self.surf_fake_sample_min_vox_len
         #  opt.randomize = randomize
         #  opt.random_sigma_std = self.random_sigma_std
         #  opt.random_sigma_std_background = self.random_sigma_std_background
@@ -895,7 +900,7 @@ class SparseGrid(nn.Module):
                 )
             
             if surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
-                self.fake_sample_std = torch.tensor(1., device=device)
+                self.fake_sample_std = 1.
 
         elif surface_type == SURFACE_TYPE_VOXEL_FACE:
             surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
@@ -4889,6 +4894,9 @@ class SparseGrid(nn.Module):
         if self.use_background:
             gspec.background_links = self.background_links
             gspec.background_data = self.background_data
+
+        if self.fake_sample_std is not None:
+            gspec.fake_sample_std = self.fake_sample_std
         return gspec
 
     def _grid_size(self):
