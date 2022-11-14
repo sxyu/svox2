@@ -1548,6 +1548,7 @@ class SparseGrid(nn.Module):
         allow_outside: bool = False, 
         intersect_th: float = 0.1,
         no_surface: bool = False,
+        run_backward: bool = False,
     ):
         """
         gradcheck version for surface rendering
@@ -2090,37 +2091,37 @@ class SparseGrid(nn.Module):
             f0 = c0*(1-ox+lx) + c1*(ox-lx)
             # f3 * t^3 + f2 * t^2 + f1 * t + f0 = level_set gives the surface
 
-            if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
-                # find the list of possible level sets
-                lv_set_mask = (self.level_set_data >= surface_values.min(axis=-1).values) & \
-                    (self.level_set_data <= surface_values.max(axis=-1).values) # [VEV, N_level_sets]
+            # if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+            # find the list of possible level sets
+            lv_set_mask = (self.level_set_data >= surface_values.min(axis=-1).values) & \
+                (self.level_set_data <= surface_values.max(axis=-1).values) # [VEV, N_level_sets]
 
-                if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
-                    # if no valid lv set in range, use closest one
-                    no_lv_mask = ~lv_set_mask.any(axis=-1)
-                    if torch.count_nonzero(no_lv_mask) > 0:
-                        udf_avgs = torch.mean(surface_values[no_lv_mask], axis=-1)
-                        dists = torch.abs(self.level_set_data[None, :] - udf_avgs)
-                        lv_set_mask[no_lv_mask, dists.argmin(axis=-1)] = True # TODO check if this is ok!
+            if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+                # if no valid lv set in range, use closest one
+                no_lv_mask = ~lv_set_mask.any(axis=-1)
+                if torch.count_nonzero(no_lv_mask) > 0:
+                    udf_avgs = torch.mean(surface_values[no_lv_mask], axis=-1)
+                    dists = torch.abs(self.level_set_data[None, :] - udf_avgs)
+                    lv_set_mask[no_lv_mask, dists.argmin(axis=-1)] = True # TODO check if this is ok!
 
-                lv_sets = self.level_set_data[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
-                lv_set_ids = torch.arange(self.level_set_data.shape[0], device=surface_values.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
-                N_EQ = lv_sets.shape[0] # total number of equations to solve
-                if lv_set_mask.numel() == 0:
-                    M_LV = 0
-                else:
-                    M_LV = torch.count_nonzero(lv_set_mask, dim=-1).max() # maximum number of level sets in one voxel
-                lv_set_bincount = torch.count_nonzero(lv_set_mask,axis=-1)
+            lv_sets = self.level_set_data[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
+            lv_set_ids = torch.arange(self.level_set_data.shape[0], device=surface_values.device)[None, :].repeat(lv_set_mask.shape[0], 1)[lv_set_mask]
+            N_EQ = lv_sets.shape[0] # total number of equations to solve
+            if lv_set_mask.numel() == 0:
+                M_LV = 0
+            else:
+                M_LV = torch.count_nonzero(lv_set_mask, dim=-1).max() # maximum number of level sets in one voxel
+            lv_set_bincount = torch.count_nonzero(lv_set_mask,axis=-1)
 
-                ray_ids = torch.repeat_interleave(ray_ids, lv_set_bincount)
-                l_ids = torch.repeat_interleave(l_ids, lv_set_bincount)
+            ray_ids = torch.repeat_interleave(ray_ids, lv_set_bincount)
+            l_ids = torch.repeat_interleave(l_ids, lv_set_bincount)
 
-                f3 = torch.repeat_interleave(f3, lv_set_bincount)
-                f2 = torch.repeat_interleave(f2, lv_set_bincount)
-                f1 = torch.repeat_interleave(f1, lv_set_bincount)
-                f0 = torch.repeat_interleave(f0, lv_set_bincount)
+            f3 = torch.repeat_interleave(f3, lv_set_bincount)
+            f2 = torch.repeat_interleave(f2, lv_set_bincount)
+            f1 = torch.repeat_interleave(f1, lv_set_bincount)
+            f0 = torch.repeat_interleave(f0, lv_set_bincount)
 
-                f0 = f0 - lv_sets
+            f0 = f0 - lv_sets
 
 
             # negative roots are considered no roots and are filtered out later
@@ -2262,7 +2263,7 @@ class SparseGrid(nn.Module):
             samples = origins[ray_ids, None, :] + ts[..., None] * dirs[ray_ids, None, :] # [VEV, N_INTERSECT, 3]
             ray_ids = ray_ids[:, None].repeat(1, N_INTERSECT)
             l_ids = l_ids[:, None].repeat(1, N_INTERSECT)
-            # lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
+            lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
 
             def check_solution(ts=ts):
                 return ts**3 * f3[:, None].repeat(1, N_INTERSECT) + ts**2 * f2[:, None].repeat(1, N_INTERSECT) + \
@@ -2283,7 +2284,8 @@ class SparseGrid(nn.Module):
             valid_sample_mask = (~neg_roots_mask) & (~invalid_sample_mask)
 
 
-            if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+            # if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+            if self.opt.surf_fake_sample:
                 # mask of ray-voxel pair where no valid intersection exists
                 # where we take one fake sample at the mid of the ray passing through the voxel
                 fake_sample_mask = ~(valid_sample_mask.any(axis=-1, keepdim=True)).repeat(1,N_INTERSECT)
@@ -2316,7 +2318,7 @@ class SparseGrid(nn.Module):
             ts = ts[valid_sample_mask] # [VEV * N_INTERSECT]
             ray_ids = ray_ids[valid_sample_mask] # [VEV * N_INTERSECT]
             l_ids = l_ids[valid_sample_mask] # [VEV * N_INTERSECT]
-            # lv_set_ids = lv_set_ids[valid_sample_mask] # [VEV * N_INTERSECT]
+            lv_set_ids = lv_set_ids[valid_sample_mask] # [VEV * N_INTERSECT]
             samples = samples[valid_sample_mask, :] # [VEV * N_INTERSECT, 3]
             l = l[l_ids, :]
 
@@ -2400,29 +2402,39 @@ class SparseGrid(nn.Module):
         # alpha.requires_grad = True
 
 
-        if self.surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
+        # if self.surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
+        if self.opt.surf_fake_sample:
             # use naive biased formula to get alpha for fake samples
             lv_sets = self.level_set_data[lv_set_ids[fake_sample_ids]]
+
+            surface_norm = torch.norm(surface_values[l_ids[fake_sample_ids]], dim=-1)
+
+            n_surfaces = torch.permute(surface_values[l_ids[fake_sample_ids]], [0,2,1]) / surface_norm[:,None,:]
             
             # find the UDF value at the fake sample
-            c00 = surface000[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface001[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
-            c01 = surface010[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface011[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
-            c10 = surface100[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface101[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
-            c11 = surface110[l_ids[fake_sample_ids]] * wa[fake_sample_ids, 2:] + surface111[l_ids[fake_sample_ids]] * wb[fake_sample_ids, 2:]
+            c00 = n_surfaces[:,0] * wa[fake_sample_ids, 2:] + n_surfaces[:,1] * wb[fake_sample_ids, 2:]
+            c01 = n_surfaces[:,2] * wa[fake_sample_ids, 2:] + n_surfaces[:,3] * wb[fake_sample_ids, 2:]
+            c10 = n_surfaces[:,4] * wa[fake_sample_ids, 2:] + n_surfaces[:,5] * wb[fake_sample_ids, 2:]
+            c11 = n_surfaces[:,6] * wa[fake_sample_ids, 2:] + n_surfaces[:,7] * wb[fake_sample_ids, 2:]
+            
+            # c00 = surface000[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface001[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
+            # c01 = surface010[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface011[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
+            # c10 = surface100[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface101[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
+            # c11 = surface110[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface111[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
+            
+            
             c0 = c00 * wa[fake_sample_ids, 1:2] + c01 * wb[fake_sample_ids, 1:2]
             c1 = c10 * wa[fake_sample_ids, 1:2] + c11 * wb[fake_sample_ids, 1:2]
             surface_scalar = c0 * wa[fake_sample_ids, :1] + c1 * wb[fake_sample_ids, :1]
 
             surface_scalar = surface_scalar[:,0] - lv_sets # SDF-like values
 
+            alpha_before_rw = alpha
+
             fake_sample_reweight = torch.exp(-.5 * (surface_scalar/self.fake_sample_std)**2)
             _alpha = alpha.clone()
             _alpha[fake_sample_ids] = alpha[fake_sample_ids] * fake_sample_reweight[:, None]
             alpha = _alpha
-
-        # force alpha
-        if self.force_alpha:
-            alpha = torch.clamp_min(alpha, 0.005)
 
         # interpolate rgb
         wa, wb = grid_rescale - (samples - l), (samples - l)
@@ -2444,6 +2456,8 @@ class SparseGrid(nn.Module):
         rgb = rgb_raw
 
         ########### Volume Rendering ###########
+
+        # alpha = torch.concat([alpha[:2].detach().clone(), alpha[2:3], alpha[3:].detach().clone()])
 
         # split and pad samples into 2d arrays
         # where first dim is B
@@ -2741,47 +2755,58 @@ class SparseGrid(nn.Module):
             intersects = intersects[sample_mask.any(axis=-1)]
             out['intersections'] = self.grid2world(intersects)
 
+        if run_backward:
+            alpha.retain_grad()
+            alpha_raw.retain_grad()
+            alpha000.retain_grad()
+            B_T.retain_grad()
+            B_weights.retain_grad()
+            samples.retain_grad()
+            B_rgb.retain_grad()
+            rgb.retain_grad()
+            rgb_raw.retain_grad()
+            ts.retain_grad()
+            ts_raw.retain_grad()
+            out['rgb'].retain_grad()
+            _R.retain_grad() 
+            # _S.retain_grad()
+            _T.retain_grad()
+            _U.retain_grad()
+            _g.retain_grad()
+            _h.retain_grad()
+            g.retain_grad()
+            h.retain_grad()
+            f3.retain_grad()
+            f2.retain_grad()
+            f1.retain_grad()
+            f0.retain_grad()
+            a.retain_grad()
+            b.retain_grad()
+            c.retain_grad()
+            d.retain_grad()
 
-        # alpha.retain_grad()
-        # alpha_raw.retain_grad()
-        # alpha000.retain_grad()
-        # B_T.retain_grad()
-        # B_weights.retain_grad()
-        # samples.retain_grad()
-        # B_rgb.retain_grad()
-        # rgb.retain_grad()
-        # rgb_raw.retain_grad()
-        # ts.retain_grad()
-        # ts_raw.retain_grad()
-        # out['rgb'].retain_grad()
-        # _R.retain_grad() 
-        # # _S.retain_grad()
-        # _T.retain_grad()
-        # _U.retain_grad()
-        # _g.retain_grad()
-        # _h.retain_grad()
-        # g.retain_grad()
-        # h.retain_grad()
-        # f3.retain_grad()
-        # f2.retain_grad()
-        # f1.retain_grad()
-        # f0.retain_grad()
-        # a.retain_grad()
-        # b.retain_grad()
-        # c.retain_grad()
-        # d.retain_grad()
+            surface000.retain_grad()
+            surface001.retain_grad()
+            surface010.retain_grad()
+            surface011.retain_grad()
+            surface100.retain_grad()
+            surface101.retain_grad()
+            surface110.retain_grad()
+            surface111.retain_grad()
+            surface_scalar.retain_grad()
 
-        # surface000.retain_grad()
-        # surface001.retain_grad()
-        # surface010.retain_grad()
-        # surface011.retain_grad()
-        # surface100.retain_grad()
-        # surface101.retain_grad()
-        # surface110.retain_grad()
-        # surface111.retain_grad()
+            alpha_before_rw.retain_grad()
+            n_surfaces.retain_grad()
+            surface_values.retain_grad()
 
-        # s = torch.nn.functional.mse_loss(out['rgb'], torch.zeros_like(out['rgb']))
-        # s.backward()
+            s = torch.nn.functional.mse_loss(out['rgb'], torch.zeros_like(out['rgb']))
+            s.backward()
+
+            accum = torch.sum(out['rgb'] * out['rgb'].grad)
+            for i in range(alpha.shape[0]):
+                total_color = torch.sum(out['rgb'].grad * B_rgb[0, i])
+                accum = accum - B_weights[0, i] * total_color
+                grad_alpha = accum / (alpha[i]-1) + total_color * B_T[0,i]
 
         # [3,9,7]
 
