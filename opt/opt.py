@@ -436,10 +436,10 @@ while True:
                     )
                 eval_step(step_id=gstep_id)
                 # also save a ckpt
-                ckpt_path = path.join(args.train_dir, f'ckpt_surface_init.npz')
-                print('Saving after surface init', ckpt_path)
+                # ckpt_path = path.join(args.train_dir, f'ckpt_surface_init.npz')
+                # print('Saving after surface init', ckpt_path)
                 gc.collect()
-                grid.save(ckpt_path, step_id=gstep_id)
+                # grid.save(ckpt_path, step_id=gstep_id)
 
                 # reset opt for surface rendering
                 grid.opt.sigma_thresh = args.sigma_thresh
