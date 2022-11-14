@@ -412,7 +412,7 @@ while True:
                 lr_basis = args.lr_basis * lr_basis_factor
 
             # update fake_sample_std if needed
-            if grid.fake_sample_std is not None:
+            if grid.opt.surf_fake_sample:
                 # grid.fake_sample_std = torch.tensor(fake_sample_std, 
                 # device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
                 grid.fake_sample_std = fake_sample_std_func(gstep_id)
@@ -476,6 +476,8 @@ while True:
 
             # with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, out['rgb'])
+
+            # eval_step(step_id=gstep_id)
 
             if not USE_KERNEL:
                 # with Timing("Backward pass"):

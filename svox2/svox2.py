@@ -3863,7 +3863,7 @@ class SparseGrid(nn.Module):
             data['surface_data'] = self.surface_data.data.cpu().numpy()
         if self.level_set_data is not None:
             data['level_set_data'] = self.level_set_data.cpu().numpy()
-        if self.fake_sample_std is not None:
+        if torch.is_tensor(self.fake_sample_std):
             data['fake_sample_std'] = self.fake_sample_std.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
