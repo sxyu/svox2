@@ -14,6 +14,7 @@ kaolin/
 slurm-*.out
 
 opt/configs/hpc_confs/
+opt/configs/auto_tune/
 
 imgs/
 
