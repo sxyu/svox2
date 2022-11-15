@@ -333,6 +333,7 @@ class _SurfTravRenderFunction(autograd.Function):
         data_sh: torch.Tensor,
         data_basis: torch.Tensor,
         data_background: torch.Tensor,
+        data_fake_sample_std: torch.Tensor,
         grid,
         rays,
         opt,
@@ -358,6 +359,7 @@ class _SurfTravRenderFunction(autograd.Function):
         grad_density_grid = torch.zeros_like(ctx.grid.density_data.data)
         grad_surface_grid = torch.zeros_like(ctx.grid.surface_data.data)
         grad_sh_grid = torch.zeros_like(ctx.grid.sh_data.data)
+        grad_fs_std_grid = torch.zeros_like(ctx.grid.density_data.data[:1])
         if ctx.grid.basis_type == BASIS_TYPE_MLP:
             grad_basis = torch.zeros_like(ctx.basis_data)
         elif ctx.grid.basis_type == BASIS_TYPE_3D_TEXTURE:
@@ -368,6 +370,13 @@ class _SurfTravRenderFunction(autograd.Function):
         grad_holder.grad_density_out = grad_density_grid
         grad_holder.grad_surface_out = grad_surface_grid
         grad_holder.grad_sh_out = grad_sh_grid
+        grad_holder.grad_fake_sample_std_out = grad_fs_std_grid
+
+        # if torch.is_tensor(ctx.grid.fake_sample_std):
+        #     ctx.grid.fake_sample_std.grad = torch.zeros_like(ctx.grid.fake_sample_std.data)
+        #     grad_holder.grad_fake_sample_std_out = ctx.grid.fake_sample_std.grad
+
+
         if ctx.needs_input_grad[3]:
             grad_holder.grad_basis_out = grad_basis # for SH type, basis needs no grad
         if ctx.grid.background_data is not None and ctx.needs_input_grad[4]:
@@ -391,10 +400,12 @@ class _SurfTravRenderFunction(autograd.Function):
             grad_basis = None
         if not ctx.needs_input_grad[4]:
             grad_background = None
+        if not ctx.needs_input_grad[5]:
+            grad_background = None
         ctx.basis_data = None
 
         return grad_density_grid, grad_surface_grid, grad_sh_grid, grad_basis, grad_background, \
-               None, None, None, None
+               grad_fs_std_grid, None, None, None, None
 
 class _SurfaceRenderFunction(autograd.Function):
     @staticmethod
@@ -562,6 +573,7 @@ class SparseGrid(nn.Module):
         surface_type: int = SURFACE_TYPE_NONE,
         surface_init: str = None, # methods used to init sdf data
         use_octree: bool = True,
+        trainable_fake_sample_std: bool = False,
         force_alpha: bool = False, # clamp alpha to be non-trivial to force surface learning
     ):
         super().__init__()
@@ -727,6 +739,11 @@ class SparseGrid(nn.Module):
 
         self.surface_data = None
         self.fake_sample_std = None # variance parameter for fake samples
+        if trainable_fake_sample_std:
+            self.fake_sample_std = nn.Parameter(
+                    torch.tensor([[1.]], dtype=torch.float32, device=device)
+                )
+            self.trainable_data.append("fake_sample_std")
         surface_data = None
         self.level_set_data = None
         if surface_type == SURFACE_TYPE_SDF:
@@ -899,8 +916,6 @@ class SparseGrid(nn.Module):
                     torch.zeros(level_sets.numel(), 1, dtype=torch.float32, device=device)
                 )
             
-            if surface_type == SURFACE_TYPE_UDF_FAKE_SAMPLE:
-                self.fake_sample_std = 1.
 
         elif surface_type == SURFACE_TYPE_VOXEL_FACE:
             surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
@@ -917,6 +932,7 @@ class SparseGrid(nn.Module):
         self.sparse_background_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
         self.surface_rms: Optional[torch.Tensor] = None
+        self.fake_sample_std_rms: Optional[torch.Tensor] = None
         self.sh_rms: Optional[torch.Tensor] = None
         self.background_rms: Optional[torch.Tensor] = None
         self.basis_rms: Optional[torch.Tensor] = None
@@ -2431,7 +2447,7 @@ class SparseGrid(nn.Module):
 
             alpha_before_rw = alpha
 
-            fake_sample_reweight = torch.exp(-.5 * (surface_scalar/self.fake_sample_std)**2)
+            fake_sample_reweight = torch.exp(-.5 * (surface_scalar/self.fake_sample_std)**2).view(-1)
             _alpha = alpha.clone()
             _alpha[fake_sample_ids] = alpha[fake_sample_ids] * fake_sample_reweight[:, None]
             alpha = _alpha
@@ -3067,6 +3083,7 @@ class SparseGrid(nn.Module):
                     self.sh_data,
                     basis_data,
                     self.background_data if self.use_background else None,
+                    self.fake_sample_std,
                     self._to_cpp(replace_basis_data=basis_data),
                     rays._to_cpp(),
                     self.opt._to_cpp(randomize=randomize),
@@ -3149,8 +3166,8 @@ class SparseGrid(nn.Module):
             self.sparse_background_indexer = torch.zeros(list(self.background_data.shape[:-1]),
                     dtype=torch.bool, device=self.background_data.device)
             grad_holder.mask_background_out = self.sparse_background_indexer
-        if 'surface_data' in grad:
-            grad_holder.grad_surface_out = grad['surface_data']
+        if 'fake_sample_std' in grad:
+            grad_holder.grad_fake_sample_std_out = grad['fake_sample_std']
 
         backend = self.opt.backend
         if no_surface and self.opt.backend in ['surface', 'surf_trav']:
@@ -3889,7 +3906,7 @@ class SparseGrid(nn.Module):
         if self.level_set_data is not None:
             data['level_set_data'] = self.level_set_data.cpu().numpy()
         if torch.is_tensor(self.fake_sample_std):
-            data['fake_sample_std'] = self.fake_sample_std.cpu().numpy()
+            data['fake_sample_std'] = self.fake_sample_std.data.cpu().numpy()
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             data['basis_data'] = self.basis_data.data.cpu().numpy()
         elif self.basis_type == BASIS_TYPE_MLP:
@@ -4805,6 +4822,59 @@ class SparseGrid(nn.Module):
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
 
+
+    def optim_fake_sample_std_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+                             optim : str='rmsprop', lambda_l2:float = 0., lambda_l1:float = 0.):
+        """
+        Execute RMSprop or sgd step on fake sample std
+        Note that this function also adds L1/L2 reg to std gradient
+        """
+
+        if self.fake_sample_std is None:
+            return
+
+
+        assert (
+            _C is not None and self.fake_sample_std.is_cuda
+        ), "CUDA extension is currently required for optimizers"
+
+        # add L1 and L2 loss on std
+        # l2 = lambda_l2 * (self.fake_sample_std) ** 2
+        self.fake_sample_std.grad += 2 * lambda_l2 * self.fake_sample_std + lambda_l1 * torch.sign(self.fake_sample_std)
+
+
+        indexer = torch.empty((), device=self.density_data.device)
+        if optim == 'rmsprop':
+            if (
+                self.fake_sample_std_rms is None
+                or self.fake_sample_std_rms.shape != self.fake_sample_std.shape
+            ):
+                del self.fake_sample_std_rms
+                self.fake_sample_std_rms = torch.zeros_like(self.fake_sample_std.data) # FIXME init?
+            _C.rmsprop_step(
+                self.fake_sample_std.data,
+                self.surface_rms,
+                self.fake_sample_std.grad,
+                indexer,
+                beta,
+                lr,
+                epsilon,
+                -1e9,
+                lr
+            )
+        elif optim == 'sgd':
+            _C.sgd_step(
+                self.fake_sample_std.data,
+                self.fake_sample_std.grad,
+                indexer,
+                lr,
+                lr
+            )
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+
+
+
     def optim_sh_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
                       optim: str = 'rmsprop'):
         """
@@ -4961,7 +5031,10 @@ class SparseGrid(nn.Module):
             gspec.background_data = self.background_data
 
         if self.fake_sample_std is not None:
-            gspec.fake_sample_std = self.fake_sample_std
+            if torch.is_tensor(self.fake_sample_std):
+                gspec.fake_sample_std = self.fake_sample_std.item()
+            else:
+                gspec.fake_sample_std = self.fake_sample_std
         return gspec
 
     def _grid_size(self):

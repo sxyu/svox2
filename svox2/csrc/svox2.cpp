@@ -233,6 +233,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("grad_density_out", &GridOutputGrads::grad_density_out)
       .def_readwrite("grad_sh_out", &GridOutputGrads::grad_sh_out)
       .def_readwrite("grad_surface_out", &GridOutputGrads::grad_surface_out)
+      .def_readwrite("grad_fake_sample_std_out", &GridOutputGrads::grad_fake_sample_std_out)
       .def_readwrite("grad_basis_out", &GridOutputGrads::grad_basis_out)
       .def_readwrite("grad_background_out",
                      &GridOutputGrads::grad_background_out)

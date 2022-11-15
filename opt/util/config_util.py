@@ -280,6 +280,16 @@ def setup_train_conf():
     group.add_argument('--lr_surface_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
     group.add_argument('--surf_grad_abs_max', type=float, default=None, help='Apply max gradient clipping on the surface grad')
 
+    group.add_argument('--trainable_fake_sample_std', action='store_true', default=False, help='use trainable fake sample std')
+    group.add_argument('--lr_fake_sample_std', type=float, default=1e-1, help='SGD/rmsprop lr for fake_sample_std')
+    group.add_argument('--lr_fake_sample_std_final', type=float, default=5e-2)
+    group.add_argument('--lr_fake_sample_std_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_fake_sample_std_delay_steps', type=lambda x: int(float(x)), default=15000,
+                    help="Reverse cosine steps (0 means disable)")
+    group.add_argument('--lr_fake_sample_std_delay_mult', type=float, default=1e-2)
+    group.add_argument('--lambda_fake_sample_std_l1', type=float, default=1e-2)
+    group.add_argument('--lambda_fake_sample_std_l2', type=float, default=1e-2)
+
     group.add_argument('--fake_sample_std', type=float, default=1, help='std for fake samples')
     group.add_argument('--fake_sample_std_final', type=float, default=0.05)
     group.add_argument('--fake_sample_std_decay_steps', type=lambda x: int(float(x)), default=50000)

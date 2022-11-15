@@ -126,6 +126,8 @@ else:
                             background_reso=args.background_reso,
                             surface_type=svox2.__dict__['SURFACE_TYPE_' + args.surface_type.upper()],
                             surface_init=args.surface_init,
+                            use_octree=args.renderer_backend != 'surf_trav',
+                            trainable_fake_sample_std=args.trainable_fake_sample_std,
                             force_alpha=args.force_alpha)
 
     # DC -> gray; mind the SH scaling!
@@ -196,6 +198,8 @@ lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_si
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
 lr_surface_func = get_expon_lr_func(args.lr_surface, args.lr_surface_final, args.lr_surface_delay_steps,
                                   args.lr_surface_delay_mult, args.lr_surface_decay_steps)
+lr_fake_sample_std_func = get_expon_lr_func(args.lr_fake_sample_std, args.lr_fake_sample_std_final, args.lr_fake_sample_std_delay_steps,
+                                  args.lr_fake_sample_std_delay_mult, args.lr_fake_sample_std_decay_steps)
 fake_sample_std_func = get_expon_lr_func(args.fake_sample_std, args.fake_sample_std_final, 0,
                                   1., args.fake_sample_std_decay_steps)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
@@ -208,6 +212,7 @@ lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, a
                                args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
 lr_sigma_factor = 1.0
 lr_surface_factor = 1.0
+lr_fake_sample_std_factor = 1.0
 lr_sh_factor = 1.0
 lr_basis_factor = 1.0
 
@@ -401,6 +406,7 @@ while True:
                 grid.density_data.data[:] = args.init_sigma
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_surface = lr_surface_func(gstep_id) * lr_surface_factor
+            lr_fake_sample_std = lr_fake_sample_std_func(gstep_id) * lr_fake_sample_std_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             lr_basis = lr_basis_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             lr_sigma_bg = lr_sigma_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
@@ -412,7 +418,7 @@ while True:
                 lr_basis = args.lr_basis * lr_basis_factor
 
             # update fake_sample_std if needed
-            if grid.opt.surf_fake_sample:
+            if grid.opt.surf_fake_sample and not args.trainable_fake_sample_std:
                 # grid.fake_sample_std = torch.tensor(fake_sample_std, 
                 # device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
                 grid.fake_sample_std = fake_sample_std_func(gstep_id)
@@ -522,6 +528,8 @@ while True:
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
+                if torch.is_tensor(grid.fake_sample_std):
+                    summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std.item(), global_step=gstep_id)
                 if grid.fake_sample_std is not None:
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std, global_step=gstep_id)
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
@@ -626,6 +634,13 @@ while True:
                             thresh = np.abs(args.surf_grad_abs_max)
                             torch.clamp_(grid.surface_data.grad, -thresh, thresh)
                         grid.optim_surface_step(lr_surface, beta=args.rms_beta, optim=args.surface_optim)
+
+                    if args.trainable_fake_sample_std:
+                        grid.optim_fake_sample_std_step(lr_fake_sample_std, beta=args.rms_beta, optim=args.surface_optim, 
+                        lambda_l1=args.lambda_fake_sample_std_l1,
+                        lambda_l2=args.lambda_fake_sample_std_l2,
+                        )
+
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
                 grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)

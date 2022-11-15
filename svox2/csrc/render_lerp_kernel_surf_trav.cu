@@ -1397,6 +1397,15 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             );
 
 
+
+                            // assign grad for fake sample std if enabled
+                            if (grads.grad_fake_sample_std_out != nullptr){
+                                float const grad_std = curr_grad_rwalpha * alpha * _SQR(fake_sample_dist) * reweight / _CUBIC(grid.fake_sample_std);
+
+                                atomicAdd(grads.grad_fake_sample_std_out, grad_std);
+                            }
+
+
                         }
                     }
                 }

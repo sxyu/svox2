@@ -81,6 +81,7 @@ struct GridOutputGrads {
   torch::Tensor grad_sh_out;
   torch::Tensor grad_basis_out;
   torch::Tensor grad_background_out;
+  torch::Tensor grad_fake_sample_std_out;
 
   torch::Tensor mask_out;
   torch::Tensor mask_background_out;
@@ -99,6 +100,9 @@ struct GridOutputGrads {
     }
     if (grad_surface_out.defined()) {
       CHECK_INPUT(grad_surface_out);
+    }
+    if (grad_fake_sample_std_out.defined()) {
+      CHECK_INPUT(grad_fake_sample_std_out);
     }
     if (mask_out.defined() && mask_out.size(0) > 0) {
       CHECK_INPUT(mask_out);
