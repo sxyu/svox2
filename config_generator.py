@@ -32,11 +32,12 @@ if 'source_conf' in tune_conf:
         source_config += "\n########## Tuned Config ##########\n"
 
 configs = []
-config_record = {} # used to check whether lr_start is larger than lr_final
 check_pairs = [
     ['lr_surface = {}\n', 'lr_surface_final = {}\n']
 ]
 for choice in choices:
+    config_record = {} # used to check whether lr_start is larger than lr_final
+    
     config = deepcopy(source_config)
     # config += f"include '{tune_conf['source_conf']}'\n\n"
     for i in range(len(params)):
