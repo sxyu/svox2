@@ -492,7 +492,7 @@ while True:
                     # for k in out['extra_loss'].keys():
                     #     loss += out['extra_loss'][k]
                     loss += args.lambda_udf_var_loss * out['extra_loss'].get('udf_var_loss', 0.)
-                    loss += args.lambda_density_lap_loss * out['extra_loss'].get('density_lap_loss', 0.)
+                    # loss += args.lambda_alpha_lap_loss * out['extra_loss'].get('density_lap_loss', 0.)
                     loss += args.lambda_no_surf_init_density_lap_loss * out['extra_loss'].get('no_surf_init_density_lap_loss', 0.)
                     loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
                 
@@ -553,6 +553,15 @@ while True:
                         sparse_frac=args.tv_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
+
+            if args.lambda_alpha_lap_loss > 0.0 and not no_surface:
+                grid.inplace_alpha_lap_grad(grid.density_data.grad,
+                        scaling=args.lambda_alpha_lap_loss,
+                        sparse_frac=args.alpha_lap_sparsity,
+                        ndc_coeffs=dset.ndc_coeffs,
+                        contiguous=args.tv_contiguous,
+                        use_kernel=USE_KERNEL
+                        )
             if args.lambda_tv_surface > 0.0 and not no_surface:
                 #  with Timing("tv_inpl"):
                 grid.inplace_tv_surface_grad(grid.surface_data.grad,
@@ -571,6 +580,9 @@ while True:
                         use_kernel=USE_KERNEL,
                         # connectivity_check=False,
                         )
+
+
+
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):
                 grid.inplace_tv_color_grad(grid.sh_data.grad,

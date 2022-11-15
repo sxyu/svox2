@@ -389,7 +389,7 @@ def setup_train_conf():
     group = parser.add_argument_group("losses")
     group.add_argument('--lambda_outside_loss', type=float, default=1e-3)
     group.add_argument('--lambda_udf_var_loss', type=float, default=0)
-    group.add_argument('--lambda_density_lap_loss', type=float, default=0)
+    group.add_argument('--lambda_alpha_lap_loss', type=float, default=0)
     group.add_argument('--lambda_no_surf_init_density_lap_loss', type=float, default=0)
     group.add_argument('--lambda_normal_loss', type=float, default=0)
     group.add_argument('--lambda_surface_eikonal', type=float, default=0)
@@ -399,6 +399,7 @@ def setup_train_conf():
     group.add_argument('--lambda_tv', type=float, default=1e-5)
     group.add_argument('--lambda_tv_surface', type=float, default=0)
     group.add_argument('--tv_sparsity', type=float, default=0.01)
+    group.add_argument('--alpha_lap_sparsity', type=float, default=0.01)
     group.add_argument('--tv_surface_sparsity', type=float, default=0.01)
     group.add_argument('--norm_surface_sparsity', type=float, default=0.01)
     group.add_argument('--tv_logalpha', action='store_true', default=False,

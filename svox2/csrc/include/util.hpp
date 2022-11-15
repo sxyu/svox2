@@ -26,7 +26,7 @@
 #endif
 
 #define _NORM3(n3) sqrtf(1e-9f + _SQR(n3[0]) + _SQR(n3[1]) + _SQR(n3[2])) // TODO: use normf?
-#define _D_SIGMOID(x) (_SIGMOID(x) * (1-_SIGMOID(x)))
+#define _D_SIGMOID(x) (_SIGMOID(x) * (1-_SIGMOID(x))) // x is the raw value (before sigmoid)
 #define _SQR(x) ((x) * (x))
 #define _CUBIC(x) ((x) * (x) * (x))
 #define _CLOSE_TO_ZERO(x, eps) (std::abs(x) < eps)

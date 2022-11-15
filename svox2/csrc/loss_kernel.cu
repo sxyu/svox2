@@ -569,6 +569,48 @@ __global__ void surface_normal_grad_sparse_kernel(
 }
 
 
+
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void alpha_lap_grad_sparse_kernel(
+        const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        const int32_t* __restrict__ rand_cells,
+        int start_dim, int end_dim,
+        float scale,
+        size_t Q,
+        // bool ignore_edge, // always false
+        float ndc_coeffx, float ndc_coeffy,
+        // Output
+        bool* __restrict__ mask_out,
+        float* __restrict__ grad_data) {
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int idx = tid % (end_dim - start_dim) + start_dim;
+    const int xyz = rand_cells[tid / (end_dim - start_dim)];
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
+
+
+    const auto lnk000 = links[x][y][z];
+
+    if (lnk000 < 0) return;
+
+    // const float v000 = data[lnk000][idx];
+    const float alpha = _SIGMOID(data[lnk000][idx]);
+
+    const float grad_alpha = -_EXP(alpha-1.f) + _EXP(-alpha);
+
+    atomicAdd(&grad_data[lnk000 * data.size(1) + idx], grad_alpha * alpha * (1.f - alpha));
+
+    if (mask_out != nullptr) mask_out[lnk000] = true; 
+    
+}
+
+
+
+
+
 __launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void tv_grad_sparse_kernel(
         const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
@@ -1029,6 +1071,48 @@ void tv_grad_sparse(torch::Tensor links,
             Q,
             ignore_edge,
             ignore_last_z,
+            ndc_coeffx, ndc_coeffy,
+            // Output
+            (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
+            grad_data.data_ptr<float>());
+    CUDA_CHECK_ERRORS;
+}
+
+void alpha_lap_grad_sparse(torch::Tensor links,
+             torch::Tensor data,
+             torch::Tensor rand_cells,
+             torch::Tensor mask_out,
+             int start_dim, int end_dim,
+             float scale,
+             float ndc_coeffx,
+             float ndc_coeffy,
+             torch::Tensor grad_data) {
+    DEVICE_GUARD(data);
+    CHECK_INPUT(data);
+    CHECK_INPUT(links);
+    CHECK_INPUT(grad_data);
+    CHECK_INPUT(rand_cells);
+    CHECK_INPUT(mask_out);
+    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(grad_data.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(grad_data.ndimension() == 2);
+
+    int nl = rand_cells.size(0);
+    size_t Q = rand_cells.size(0) * size_t(end_dim - start_dim);
+
+    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    device::alpha_lap_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            rand_cells.data_ptr<int32_t>(),
+            start_dim,
+            end_dim,
+            scale / nl,
+            Q,
             ndc_coeffx, ndc_coeffy,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,

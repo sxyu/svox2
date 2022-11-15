@@ -99,6 +99,8 @@ void surface_normal_grad(Tensor, Tensor, float, int, int, float, float, float,
              Tensor);
 void surface_normal_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, int, int, float, float, float, float,
              Tensor);
+void alpha_lap_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, float, float,
+             Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, bool, float, float, Tensor);
 void msi_tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, float, Tensor);
@@ -150,6 +152,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(tv_grad);
   _REG_FUNC(surface_normal_grad);
   _REG_FUNC(surface_normal_grad_sparse);
+  _REG_FUNC(alpha_lap_grad_sparse);
   _REG_FUNC(tv_grad_sparse);
   _REG_FUNC(msi_tv_grad_sparse);
   _REG_FUNC(lumisphere_tv_grad_sparse);

@@ -4157,6 +4157,38 @@ class SparseGrid(nn.Module):
                     grad)
             self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
+    def inplace_alpha_lap_grad(self, grad: torch.Tensor,
+                        scaling: float = 1.0,
+                        sparse_frac: float = 0.01,
+                        ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
+                        contiguous: bool = True,
+                        use_kernel: bool = True
+                    ):
+        # if self.surface_type != SURFACE_TYPE_NONE:
+        #     raise NotImplementedError
+
+        if not use_kernel:
+            raise NotImplementedError
+
+        if self.surface_type is None:
+            return
+
+        assert (
+            _C is not None and self.density_data.is_cuda and grad.is_cuda
+        ), "CUDA extension is currently required for alpha lap"
+
+        rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+        if rand_cells is not None:
+            if rand_cells.size(0) > 0:
+                _C.alpha_lap_grad_sparse(self.links, self.density_data,
+                        rand_cells,
+                        self._get_sparse_grad_indexer(),
+                        0, 1, scaling,
+                        ndc_coeffs[0], ndc_coeffs[1],
+                        grad)
+        else:
+            raise NotImplementedError
+
     def inplace_tv_surface_grad(self, grad: torch.Tensor,
                                 scaling: float = 1.0,
                                 sparse_frac: float = 0.01,
