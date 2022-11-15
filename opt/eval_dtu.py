@@ -9,6 +9,7 @@ from scipy.io import loadmat
 import multiprocessing as mp
 import argparse
 import os
+from torch.utils.tensorboard import SummaryWriter
 
 def sample_single_tri(input_):
     n1, n2, v1, v2, tri_vert = input_
@@ -39,6 +40,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_dist', type=float, default=20)
     parser.add_argument('--visualize_threshold', type=float, default=10)
     parser.add_argument('--out_dir', type=str, default=None)
+    # parser.add_argument('--del_ckpt', action='store_true', default=False)
+    parser.add_argument('--no_pts_save', action='store_true', default=False)
     args = parser.parse_args()
 
     thresh = args.downsample_density
@@ -49,6 +52,8 @@ if __name__ == '__main__':
         data_pcd = np.load(f'{args.pts_dir}/pts.npy')
     else:
         data_pcd = np.load(args.pts_dir)
+
+    summary_writer = SummaryWriter(os.path.dirname(args.pts_dir))
 
 
     pbar.update(1)
@@ -131,11 +136,16 @@ if __name__ == '__main__':
     print(mean_d2s, mean_s2d, over_all)
     if args.out_dir is not None:
         os.makedirs(args.out_dir, exist_ok=True)
-        write_vis_pcd(f'{args.out_dir}/vis_{args.scan:03}_d2s.ply', data_down, data_color)
-        write_vis_pcd(f'{args.out_dir}/vis_{args.scan:03}_s2d.ply', stl, stl_color)
+        if not args.no_pts_save:
+            write_vis_pcd(f'{args.out_dir}/vis_{args.scan:03}_d2s.ply', data_down, data_color)
+            write_vis_pcd(f'{args.out_dir}/vis_{args.scan:03}_s2d.ply', stl, stl_color)
 
 
         with open(f'{args.out_dir}/cf.txt', 'w') as f:
             f.write(f'Mean d2s: {mean_d2s}\n')
             f.write(f'Mean s2d: {mean_s2d}\n')
             f.write(f'Over all: {over_all}\n')
+
+        summary_writer.add_scalar('d2s', mean_d2s, global_step=0)
+        summary_writer.add_scalar('s2d', mean_s2d, global_step=0)
+        summary_writer.add_scalar('Mean', over_all, global_step=0)

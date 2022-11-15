@@ -91,6 +91,12 @@ parser.add_argument(
     type=str,
     default='pts.npy'
 )
+parser.add_argument(
+    "--del_ckpt",
+    action='store_true', 
+    default=False,
+    help="Delete ckpt after extraction"
+)
 
 # Camera adjustment
 parser.add_argument('--crop',
@@ -167,13 +173,6 @@ c2ws = torch.from_numpy(c2ws).to(device=device)
 if not path.isfile(args.ckpt):
     args.ckpt = path.join(args.ckpt, 'ckpt.npz')
 
-render_out_path = path.join(path.dirname(args.ckpt), 'circle_depths')
-
-# Handle various image transforms
-if args.crop != 1.0:
-    render_out_path += f'_crop{args.crop}'
-if args.vert_shift != 0.0:
-    render_out_path += f'_vshift{args.vert_shift}'
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
 print(grid.center, grid.radius)
@@ -251,6 +250,9 @@ if args.downsample_density > 0:
 
 
 np.save(args.out_path, all_pts)
+
+if args.del_ckpt:
+    os.remove(args.ckpt)
 
 
 
