@@ -10,6 +10,8 @@ import multiprocessing as mp
 import argparse
 import os
 from torch.utils.tensorboard import SummaryWriter
+import json
+from util import config_util
 
 def sample_single_tri(input_):
     n1, n2, v1, v2, tri_vert = input_
@@ -42,6 +44,8 @@ if __name__ == '__main__':
     parser.add_argument('--out_dir', type=str, default=None)
     # parser.add_argument('--del_ckpt', action='store_true', default=False)
     parser.add_argument('--no_pts_save', action='store_true', default=False)
+    parser.add_argument('--log_tune_hparam_config_path', type=str, default=None,
+                       help='Log hyperparamters being tuned to tensorboard based on givn config.json path')
     args = parser.parse_args()
 
     thresh = args.downsample_density
@@ -53,7 +57,7 @@ if __name__ == '__main__':
     else:
         data_pcd = np.load(args.pts_dir)
 
-    summary_writer = SummaryWriter(os.path.dirname(args.pts_dir))
+    summary_writer = SummaryWriter(f'{os.path.dirname(args.pts_dir)}/../')
 
 
     pbar.update(1)
@@ -146,6 +150,32 @@ if __name__ == '__main__':
             f.write(f'Mean s2d: {mean_s2d}\n')
             f.write(f'Over all: {over_all}\n')
 
-        summary_writer.add_scalar('d2s', mean_d2s, global_step=0)
-        summary_writer.add_scalar('s2d', mean_s2d, global_step=0)
-        summary_writer.add_scalar('Mean', over_all, global_step=0)
+
+    # log hparams for tuning tasks
+    if args.log_tune_hparam_config_path is not None:
+        train_args = config_util.setup_train_conf(return_parpser=True).parse_known_args(
+            args=['-c', f'{os.path.dirname(args.pts_dir)}/../config.yaml',
+            '--data_dir', 'foo']
+            )[0]
+        with open(args.log_tune_hparam_config_path, 'r') as f:
+            tune_conf = json.load(f)
+        hparams = {}
+        for hp in tune_conf['params']:
+            arg = hp['text'].split('=')[0].strip()
+            value = getattr(train_args, arg)
+            hparams[arg] = value
+        
+        metrics = {
+            'Chamfer/d2s': mean_d2s,
+            'Chamfer/s2d': mean_s2d,
+            'Chamfer/mean': over_all,
+        }
+        summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.pts_dir)}/../'))
+        summary_writer.flush()
+    else:
+
+        summary_writer.add_scalar('Chamfer/d2s', mean_d2s, global_step=0)
+        summary_writer.add_scalar('Chamfer/s2d', mean_s2d, global_step=0)
+        summary_writer.add_scalar('Chamfer/mean', over_all, global_step=0)
+        summary_writer.flush()
+    summary_writer.close()

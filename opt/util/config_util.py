@@ -187,7 +187,7 @@ def setup_render_opts(opt, args):
     opt.surf_fake_sample_min_vox_len = args.surf_fake_sample_min_vox_len
 
 
-def setup_train_conf():
+def setup_train_conf(return_parpser=False):
     # gin_configs = FLAGS.gin_configs
 
     # print('*** Loading Gin configs from: %s', str(gin_configs))
@@ -469,6 +469,13 @@ def setup_train_conf():
                         help='resume training from ckpt in the given path if exists')
 
     group.add_argument('--surface_init', type=str, default=None)
+
+
+    # group.add_argument('--log_tune_hparam_config_path', type=str, default=None,
+    #                    help='Log hyperparamters being tuned to tensorboard based on givn config.json path')
+
+    if return_parpser:
+        return parser
 
     args = parser.parse_args()
     # maybe_merge_config_file(args)
