@@ -586,9 +586,8 @@ while True:
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous,
                         use_kernel=USE_KERNEL,
-                        # connectivity_check=False,
+                        connectivity_check=not args.no_surf_norm_con_check,
                         )
-
 
 
             if args.lambda_tv_sh > 0.0:

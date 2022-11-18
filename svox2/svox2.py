@@ -4498,6 +4498,7 @@ class SparseGrid(nn.Module):
                                 ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
                                 contiguous: bool = True,
                                 use_kernel: bool = True,
+                                connectivity_check: bool = True,
                                 **kwargs
                             ):
         """
@@ -4509,7 +4510,7 @@ class SparseGrid(nn.Module):
         if not use_kernel:
             # pytorch version
             rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
-            return self._surface_normal_loss_grad_check(rand_cells, scaling / rand_cells.shape[0], **kwargs)
+            return self._surface_normal_loss_grad_check(rand_cells, scaling / rand_cells.shape[0], connectivity_check=connectivity_check, **kwargs)
 
         else:
             assert (
@@ -4525,6 +4526,7 @@ class SparseGrid(nn.Module):
                             self.level_set_data[0],
                             0, 1, scaling, eikonal_scale,
                             ndc_coeffs[0], ndc_coeffs[1],
+                            connectivity_check,
                             grad)
             else:
                 _C.surface_normal_grad(self.links, self.surface_data, self.level_set_data[0],
