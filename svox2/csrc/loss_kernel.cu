@@ -334,16 +334,16 @@ __global__ void surface_normal_grad_kernel(
 
         // dE/d0x, dE/d0y, dE/d0z
         float const d0[] = {
-                (_norm000[0]/N0 - _n1[0]/N1) * \ 
-                (-2.f*_SQR(_norm000[0])/_CUBIC(N0) + 2.f/N0) \ 
+                (_norm000[0]/N0 - _n1[0]/N1) * \
+                (-2.f*_SQR(_norm000[0])/_CUBIC(N0) + 2.f/N0) \
                 + -2.f*_norm000[0]*_norm000[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0) \
                 + -2.f*_norm000[0]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
-                (_norm000[1]/N0 - _n1[1]/N1) * \ 
-                (-2.f*_SQR(_norm000[1])/_CUBIC(N0) + 2.f/N0) \ 
+                (_norm000[1]/N0 - _n1[1]/N1) * \
+                (-2.f*_SQR(_norm000[1])/_CUBIC(N0) + 2.f/N0) \
                 + -2.f*_norm000[0]*_norm000[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
                 + -2.f*_norm000[1]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
-                (_norm000[2]/N0 - _n1[2]/N1) * \ 
-                (-2.f*_SQR(_norm000[2])/_CUBIC(N0) + 2.f/N0) \ 
+                (_norm000[2]/N0 - _n1[2]/N1) * \
+                (-2.f*_SQR(_norm000[2])/_CUBIC(N0) + 2.f/N0) \
                 + -2.f*_norm000[0]*_norm000[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
                 + -2.f*_norm000[1]*_norm000[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0)
         };
@@ -357,16 +357,16 @@ __global__ void surface_normal_grad_kernel(
         
 
         float const d1[] = {
-                (_norm000[0]/N0 - _n1[0]/N1) * \ 
+                (_norm000[0]/N0 - _n1[0]/N1) * \
                 (2.f*_SQR(_n1[0])/_CUBIC(N1) - 2.f/N1) \
                 + 2.f*_n1[0]*_n1[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1) \
                 + 2.f*_n1[0]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
-                (_norm000[1]/N0 - _n1[1]/N1) * \ 
-                (2.f*_SQR(_n1[1])/_CUBIC(N1) - 2.f/N1) \ 
+                (_norm000[1]/N0 - _n1[1]/N1) * \
+                (2.f*_SQR(_n1[1])/_CUBIC(N1) - 2.f/N1) \
                 + 2.f*_n1[0]*_n1[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
                 + 2.f*_n1[1]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
-                (_norm000[2]/N0 - _n1[2]/N1) * \ 
-                (2.f*_SQR(_n1[2])/_CUBIC(N1) - 2.f/N1) \ 
+                (_norm000[2]/N0 - _n1[2]/N1) * \
+                (2.f*_SQR(_n1[2])/_CUBIC(N1) - 2.f/N1) \
                 + 2.f*_n1[0]*_n1[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
                 + 2.f*_n1[1]*_n1[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1)
         };
@@ -502,7 +502,7 @@ __global__ void surface_normal_grad_sparse_kernel(
 
         // dE/d0x, dE/d0y, dE/d0z
         float const d0[] = {
-                (_norm000[0]/N0 - _n1[0]/N1) * \ 
+                (_norm000[0]/N0 - _n1[0]/N1) * \
                 (-2.f*_SQR(_norm000[0])/_CUBIC(N0) + 2.f/N0) \ 
                 + -2.f*_norm000[0]*_norm000[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0) \
                 + -2.f*_norm000[0]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
@@ -581,6 +581,7 @@ __global__ void alpha_lap_grad_sparse_kernel(
         size_t Q,
         // bool ignore_edge, // always false
         float ndc_coeffx, float ndc_coeffy,
+        float sigma2alpha_step, // world step size used to convert sigma to alpha. set to <=0 to disable
         // Output
         bool* __restrict__ mask_out,
         float* __restrict__ grad_data) {
@@ -597,12 +598,22 @@ __global__ void alpha_lap_grad_sparse_kernel(
 
     if (lnk000 < 0) return;
 
-    // const float v000 = data[lnk000][idx];
-    const float alpha = _SIGMOID(data[lnk000][idx]);
+    if (sigma2alpha_step <= 0.f){
+        // data stored is alpha
+        const float alpha = _SIGMOID(data[lnk000][idx]);
 
-    const float grad_alpha = -_EXP(alpha-1.f) + _EXP(-alpha);
+        const float grad_alpha = -_EXP(alpha-1.f) + _EXP(-alpha);
 
-    atomicAdd(&grad_data[lnk000 * data.size(1) + idx], grad_alpha * alpha * (1.f - alpha));
+        atomicAdd(&grad_data[lnk000 * data.size(1) + idx], scale * grad_alpha * alpha * (1.f - alpha));
+    } else {
+        // data stored is sigma, convert to alpha first
+
+        const float alpha = 1.f -_EXP(-data[lnk000][idx] * sigma2alpha_step);
+
+        const float grad_sigma = (-_EXP(alpha - 1.f) + _EXP(-alpha)) * sigma2alpha_step * _EXP(-sigma2alpha_step*alpha);
+
+        atomicAdd(&grad_data[lnk000 * data.size(1) + idx], scale * grad_sigma);
+    }
 
     if (mask_out != nullptr) mask_out[lnk000] = true; 
     
@@ -1087,6 +1098,7 @@ void alpha_lap_grad_sparse(torch::Tensor links,
              float scale,
              float ndc_coeffx,
              float ndc_coeffy,
+             float sigma2alpha_step, // world step size used to convert sigma to alpha. set to <=0 to disable
              torch::Tensor grad_data) {
     DEVICE_GUARD(data);
     CHECK_INPUT(data);
@@ -1115,6 +1127,7 @@ void alpha_lap_grad_sparse(torch::Tensor links,
             scale / nl,
             Q,
             ndc_coeffx, ndc_coeffy,
+            sigma2alpha_step,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
             grad_data.data_ptr<float>());

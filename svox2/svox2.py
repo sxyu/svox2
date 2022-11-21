@@ -4178,6 +4178,7 @@ class SparseGrid(nn.Module):
                         scaling: float = 1.0,
                         sparse_frac: float = 0.01,
                         ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
+                        density_is_sigma: bool = False,
                         contiguous: bool = True,
                         use_kernel: bool = True
                     ):
@@ -4187,9 +4188,6 @@ class SparseGrid(nn.Module):
         if not use_kernel:
             raise NotImplementedError
 
-        if self.surface_type is None:
-            return
-
         assert (
             _C is not None and self.density_data.is_cuda and grad.is_cuda
         ), "CUDA extension is currently required for alpha lap"
@@ -4197,11 +4195,23 @@ class SparseGrid(nn.Module):
         rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
         if rand_cells is not None:
             if rand_cells.size(0) > 0:
+                world_step = 0
+                if density_is_sigma:
+                    # density data stores sigma, need to give world step
+
+                    # note the world step would be incorrect if 3 dims of grid are not equal
+
+                    d = torch.tensor([1.,1.,1.])
+                    d = d / torch.norm(d)
+                    delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
+                    world_step = delta_scale * self.opt.step_size
+
                 _C.alpha_lap_grad_sparse(self.links, self.density_data,
                         rand_cells,
                         self._get_sparse_grad_indexer(),
                         0, 1, scaling,
                         ndc_coeffs[0], ndc_coeffs[1],
+                        world_step,
                         grad)
         else:
             raise NotImplementedError

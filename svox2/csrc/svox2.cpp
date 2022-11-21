@@ -99,7 +99,7 @@ void surface_normal_grad(Tensor, Tensor, float, int, int, float, float, float,
              Tensor);
 void surface_normal_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, int, int, float, float, float, float, bool,
              Tensor);
-void alpha_lap_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, float, float,
+void alpha_lap_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, float, float, float,
              Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, bool, float, float, Tensor);

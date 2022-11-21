@@ -562,13 +562,14 @@ while True:
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
 
-            if args.lambda_alpha_lap_loss > 0.0 and not no_surface:
+            if args.lambda_alpha_lap_loss > 0.0:
                 grid.inplace_alpha_lap_grad(grid.density_data.grad,
                         scaling=args.lambda_alpha_lap_loss,
                         sparse_frac=args.alpha_lap_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous,
-                        use_kernel=USE_KERNEL
+                        use_kernel=USE_KERNEL,
+                        density_is_sigma = grid.surface_data is None or no_surface 
                         )
             if args.lambda_tv_surface > 0.0 and not no_surface:
                 #  with Timing("tv_inpl"):
