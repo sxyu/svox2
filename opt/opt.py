@@ -590,6 +590,15 @@ while True:
                         connectivity_check=not args.no_surf_norm_con_check,
                         )
 
+            if args.lambda_surf_sign_loss > 0.0 and not no_surface:
+                # with Timing("normal_loss"):
+                grid.inplace_surface_sign_change_grad(grid.surface_data.grad,
+                        scaling=args.lambda_surf_sign_loss,
+                        sparse_frac=args.norm_surface_sparsity,
+                        contiguous=args.tv_contiguous,
+                        use_kernel=USE_KERNEL,
+                        )
+
 
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):

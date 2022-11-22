@@ -2766,10 +2766,13 @@ class SparseGrid(nn.Module):
             B_samples[B_to_sample_mask] = (samples / grid_rescale).to(B_samples.dtype)
             sample_mask = B_alpha > intersect_th
             B_samples[~sample_mask, :] = -1.
-            ids = torch.argmax(sample_mask.long(), dim=-1)
-            intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
-            intersects = intersects[sample_mask.any(axis=-1)]
+            # ids = torch.argmax(sample_mask.long(), dim=-1)
+            # intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
+            # intersects = intersects[sample_mask.any(axis=-1)]
+            intersects = B_samples[sample_mask, :]
+            intersect_alphas = B_weights[sample_mask]
             out['intersections'] = self.grid2world(intersects)
+            out['intersect_alphas'] = intersect_alphas
 
         if run_backward:
             alpha.retain_grad()
@@ -3378,6 +3381,33 @@ class SparseGrid(nn.Module):
             all_pts = torch.cat(all_pts, dim=0)
             
         return all_pts
+
+    def volume_render_extract_pts_with_alpha(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
+        """
+        Volume render and caculate depth for each camera ray, then store a 3D point for each ray
+
+        :param camera: Camera, a single camera
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: [N, 3] points array
+        """
+        rays = camera.gen_rays()
+        if self.surface_type == SURFACE_TYPE_NONE or self.opt.backend in ['surf_trav']:
+            raise NotImplementedError
+        else:
+            # extract from intersections
+            all_pts = []
+            all_alpha = []
+            for batch_start in range(0, camera.height * camera.width, batch_size):
+                out = self._surface_render_gradcheck_lerp(rays[batch_start: batch_start + batch_size], **kwargs)
+                all_pts.append(out['intersections'])
+                all_alpha.append(out['intersect_alphas'])
+            all_pts = torch.cat(all_pts, dim=0)
+            all_alpha = torch.cat(all_alpha, dim=0)
+            
+        return all_pts, all_alpha
 
     def resample(
         self,
@@ -4501,6 +4531,88 @@ class SparseGrid(nn.Module):
 
 
 
+    def _surface_sign_change_grad_check(self, rand_cells, scaling, device='cuda'):
+        xyz = rand_cells
+        z = (xyz % self.links.shape[2]).long()
+        xy = xyz / self.links.shape[2]
+        y = (xy % self.links.shape[1]).long()
+        x = (xy / self.links.shape[1]).long()
+
+        v0 = self.surface_data[self.links[x,y,z].long()]
+
+        valid_count = torch.zeros_like(v0)
+        L = torch.zeros_like(v0)
+
+        invalid_mask = (torch.stack([x+1,y,z], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
+        vx = v0.clone().detach()
+        vx[~invalid_mask] = self.surface_data[self.links[x[~invalid_mask]+1, y[~invalid_mask], z[~invalid_mask]].long()]
+        ss_mask = v0 * vx < 0.
+        L[ss_mask] += torch.abs(v0[ss_mask] - vx[ss_mask]) * self.links.shape[0] / 256.
+        valid_count[ss_mask] += 1.
+        
+        invalid_mask = (torch.stack([x,y+1,z], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
+        vy = v0.clone().detach()
+        vy[~invalid_mask] = self.surface_data[self.links[x[~invalid_mask], y[~invalid_mask]+1, z[~invalid_mask]].long()]
+        ss_mask = v0 * vy < 0.
+        L[ss_mask] += torch.abs(v0[ss_mask] - vy[ss_mask]) * self.links.shape[1] / 256.
+        valid_count[ss_mask] += 1.
+
+        invalid_mask = (torch.stack([x,y,z+1], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
+        vz = v0.clone().detach()
+        vz[~invalid_mask] = self.surface_data[self.links[x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]+1].long()]
+        ss_mask = v0 * vz < 0.
+        L[ss_mask] += torch.abs(v0[ss_mask] - vz[ss_mask]) * self.links.shape[2] / 256.
+        valid_count[ss_mask] += 1.
+
+        
+        mask = valid_count != 0.
+        L[mask] = L[mask] / valid_count[mask]
+
+        sign_change_loss = scaling * torch.mean(L)
+
+        sign_change_loss.backward()
+
+        return sign_change_loss
+
+
+
+
+    def inplace_surface_sign_change_grad(self, grad: torch.Tensor,
+                                scaling: float = 1.0,
+                                sparse_frac: float = 0.01,
+                                contiguous: bool = True,
+                                use_kernel: bool = True,
+                            ):
+        '''
+        Penalize surface sign change
+        '''
+
+        if self.surface_data is None:
+            return
+        
+        if not use_kernel:
+            # pytorch version
+            rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+            return self._surface_sign_change_grad_check(rand_cells, scaling / rand_cells.shape[0])
+
+        else:
+            assert (
+                _C is not None and self.surface_data.is_cuda and grad.is_cuda
+            ), "CUDA extension is currently required for total variation"
+
+            rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+            if rand_cells is not None:
+                if rand_cells.size(0) > 0:
+                    _C.surf_sign_change_grad_sparse(self.links, self.surface_data,
+                            rand_cells,
+                            self._get_sparse_grad_indexer(),
+                            0, 1, scaling,
+                            grad)
+            else:
+                raise NotImplementedError
+                self.sparse_grad_indexer : Optional[torch.Tensor] = None
+
+
     def inplace_surface_normal_grad(self, grad: torch.Tensor,
                                 scaling: float = 1.0,
                                 eikonal_scale: float = 0.,
@@ -4511,11 +4623,8 @@ class SparseGrid(nn.Module):
                                 connectivity_check: bool = True,
                                 **kwargs
                             ):
-        """
-        Add gradient of total variation for sigma as in Neural Volumes
-        [Lombardi et al., ToG 2019]
-        directly into the gradient tensor, multiplied by 'scaling'
-        """
+        if self.surface_data is None:
+            return
         
         if not use_kernel:
             # pytorch version

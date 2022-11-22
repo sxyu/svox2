@@ -1101,7 +1101,7 @@ __device__ __inline__ void calc_cubic_root_grad(
             double const  _k = acos(-(g / (2. * _i)));
             double const  _M = cos(_k/3.);
             double const  _N = sqrt(3.) * sin(_k / 3.);
-            double const  _P = (b / (3. * a)) * -1.;   
+            // double const  _P = (b / (3. * a)) * -1.;   
 
             #define __Dj_Dg (g/(12.* pow(_SQR(g)/4. - h, 5./6.)))
             #define __Dj_Dh (-1./(6.* pow(_SQR(g)/4. - h, 5./6.)))
@@ -1169,10 +1169,10 @@ __device__ __inline__ void calc_cubic_root_grad(
         }else{
             // CUBIC_TYPE_CUBIC_ONE_R_: cubic with a single real root
             double const  _R = -(g / 2.) + sqrt(h);
-            double const  _S = _COND_CBRT(_R);
+            // double const  _S = _COND_CBRT(_R);
 
             double const  _T = -(g / 2.) - sqrt(h);
-            double const  _U = _COND_CBRT(_T);
+            // double const  _U = _COND_CBRT(_T);
 
             // #define Dst_DS (1)
             // #define Dst_DU (1)
