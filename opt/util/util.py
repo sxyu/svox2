@@ -110,6 +110,24 @@ def get_expon_lr_func(
 
     return helper
 
+def get_linear_lr_func(
+    lr_init, lr_final, lr_delay_steps=0, max_steps=1000000
+):
+
+    def helper(step):
+        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
+            # Disable this parameter
+            return 0.0
+        if step <= lr_delay_steps:
+            return lr_init
+        if step >= max_steps:
+            return lr_final
+
+        rate = (lr_final - lr_init) / max_steps
+        return lr_init + rate * step
+
+    return helper
+
 
 def viridis_cmap(gray: np.ndarray):
     """

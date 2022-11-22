@@ -24,7 +24,7 @@ import numpy as np
 import math
 import cv2
 from util.dataset import datasets
-from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
+from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap, get_linear_lr_func
 from util import config_util
 import ast
 
@@ -210,6 +210,12 @@ lr_sigma_bg_func = get_expon_lr_func(args.lr_sigma_bg, args.lr_sigma_bg_final, a
                                args.lr_sigma_bg_delay_mult, args.lr_sigma_bg_decay_steps)
 lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, args.lr_color_bg_delay_steps,
                                args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
+
+
+if args.surf_normal_loss_lambda_type == 'linear':
+    lambda_surf_normal_loss_func = get_linear_lr_func(args.lambda_normal_loss, args.lambda_normal_loss_final, 
+                                    args.lambda_normal_loss_delay_steps, args.lambda_normal_loss_decay_steps)
+
 lr_sigma_factor = 1.0
 lr_surface_factor = 1.0
 lr_fake_sample_std_factor = 1.0
@@ -417,6 +423,11 @@ while True:
                 lr_sh = args.lr_sh * lr_sh_factor
                 lr_basis = args.lr_basis * lr_basis_factor
 
+            if args.surf_normal_loss_lambda_type == 'linear':
+                lambda_surf_normal_loss = lambda_surf_normal_loss_func(gstep_id)
+            else:
+                lambda_surf_normal_loss = args.lambda_normal_loss
+
             # update fake_sample_std if needed
             if grid.opt.surf_fake_sample and not args.trainable_fake_sample_std:
                 # grid.fake_sample_std = torch.tensor(fake_sample_std, 
@@ -528,6 +539,7 @@ while True:
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
+                summary_writer.add_scalar("lambda_surf_normal_loss", lambda_surf_normal_loss, global_step=gstep_id)
                 if torch.is_tensor(grid.fake_sample_std):
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std.item(), global_step=gstep_id)
                 if grid.fake_sample_std is not None:
@@ -578,10 +590,10 @@ while True:
                         sparse_frac=args.tv_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
-            if args.lambda_normal_loss > 0.0 and not no_surface and USE_KERNEL:
+            if lambda_surf_normal_loss > 0.0 and not no_surface and USE_KERNEL:
                 # with Timing("normal_loss"):
                 grid.inplace_surface_normal_grad(grid.surface_data.grad,
-                        scaling=args.lambda_normal_loss,
+                        scaling=lambda_surf_normal_loss,
                         eikonal_scale=args.lambda_surface_eikonal,
                         sparse_frac=args.norm_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
