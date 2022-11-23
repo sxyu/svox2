@@ -421,6 +421,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--norm_surface_sparsity', type=float, default=0.01)
     group.add_argument('--no_surf_norm_con_check', action='store_true', default=False,
                     help='Do not check surface connectivity when computing surface norm regularization')
+    group.add_argument('--surf_norm_reg_ignore_empty', action='store_true', default=False,
+                    help='Do not apply surface normal reg if two voxels are both empty')
     group.add_argument('--tv_logalpha', action='store_true', default=False,
                     help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 

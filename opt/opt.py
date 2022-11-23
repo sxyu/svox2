@@ -600,6 +600,7 @@ while True:
                         contiguous=args.tv_contiguous,
                         use_kernel=USE_KERNEL,
                         connectivity_check=not args.no_surf_norm_con_check,
+                        ignore_empty=args.surf_norm_reg_ignore_empty,
                         )
 
             if args.lambda_surf_sign_loss > 0.0 and not no_surface:

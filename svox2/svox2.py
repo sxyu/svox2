@@ -3312,7 +3312,7 @@ class SparseGrid(nn.Module):
                         self.opt._to_cpp(),
                         sigma_thresh)
 
-        if self.surface_type != SURFACE_TYPE_NONE and not kwargs.get('no_surface', False):
+        if self.surface_type != SURFACE_TYPE_NONE and not kwargs.get('no_surface', False) and self.surface_data is not None:
             out = self._surface_render_gradcheck_lerp(rays, return_depth=True, **kwargs)
             return out['depth']
 
@@ -3360,7 +3360,7 @@ class SparseGrid(nn.Module):
         :return: [N, 3] points array
         """
         rays = camera.gen_rays()
-        if self.surface_type == SURFACE_TYPE_NONE or self.opt.backend in ['surf_trav']:
+        if self.surface_type == SURFACE_TYPE_NONE or self.opt.backend in ['surf_trav'] or self.surface_data is None:
             # TODO: check whether extracting from depth gives inaccuracy
             # extrac points from depth
             all_depths = []
@@ -4290,7 +4290,8 @@ class SparseGrid(nn.Module):
         scaling, 
         device='cuda', 
         connectivity_check=True, 
-        alpha_weighted_norm_loss=False
+        alpha_weighted_norm_loss=False,
+        ignore_empty=False,
         ):
         xyz = rand_cells
         z = (xyz % self.links.shape[2]).long()
@@ -4369,17 +4370,21 @@ class SparseGrid(nn.Module):
             for i in range(ver_xyzs.shape[0]):
                 valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
 
+            empty_mask = ((surfaces[x,y,z] <= 0.) & (surfaces[x,y,z+1] <= 0.) & (surfaces[x,y+1,z] <= 0.) & (surfaces[x,y+1,z+1] <= 0.) & (surfaces[x+1,y,z] <= 0.) & (surfaces[x+1,y,z+1] <= 0.) & (surfaces[x+1,y+1,z] <= 0.) & (surfaces[x+1,y+1,z+1] <= 0.)) | \
+                        ((surfaces[x,y,z] >= 0.) & (surfaces[x,y,z+1] >= 0.) & (surfaces[x,y+1,z] >= 0.) & (surfaces[x,y+1,z+1] >= 0.) & (surfaces[x+1,y,z] >= 0.) & (surfaces[x+1,y,z+1] >= 0.) & (surfaces[x+1,y+1,z] >= 0.) & (surfaces[x+1,y+1,z+1] >= 0.))
+
+
             alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
             alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
 
-            return normals, valid_mask, torch.sigmoid(alpha_v.detach().clone())
+            return normals, valid_mask, empty_mask[:,0], torch.sigmoid(alpha_v.detach().clone())
 
         # find normals
         norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=device)
-        norm000, mask000, alpha_v000 = find_normal(norm_xyzs[0])
-        norm001, mask001, alpha_v001 = find_normal(norm_xyzs[1])
-        norm010, mask010, alpha_v010 = find_normal(norm_xyzs[2])
-        norm100, mask100, alpha_v100 = find_normal(norm_xyzs[3])
+        norm000, mask000, empty000, alpha_v000 = find_normal(norm_xyzs[0])
+        norm001, mask001, empty001, alpha_v001 = find_normal(norm_xyzs[1])
+        norm010, mask010, empty010, alpha_v010 = find_normal(norm_xyzs[2])
+        norm100, mask100, empty100, alpha_v100 = find_normal(norm_xyzs[3])
 
         Norm000 = norm000 / torch.clamp(torch.norm(norm000, dim=-1, keepdim=True), 1e-10)
         Norm001 = norm001 / torch.clamp(torch.norm(norm001, dim=-1, keepdim=True), 1e-10)
@@ -4412,15 +4417,28 @@ class SparseGrid(nn.Module):
                 (self.level_set_data[None, :] <= face100.max(axis=-1, keepdim=True).values),
                 axis=-1
                 ) > 0
+        else:
+            con001 = torch.ones_like(mask000).bool()
+            con010 = torch.ones_like(mask000).bool()
+            con100 = torch.ones_like(mask000).bool()
 
-            norm_count[(~mask001)|(~mask000)|(~con001)] -= 1
-            norm_count[(~mask010)|(~mask000)|(~con010)] -= 1
-            norm_count[(~mask100)|(~mask000)|(~con100)] -= 1
+        if not ignore_empty:
+            empty000 = torch.zeros_like(mask000).bool()
+            empty001 = torch.zeros_like(mask000).bool()
+            empty010 = torch.zeros_like(mask000).bool()
+            empty100 = torch.zeros_like(mask000).bool()
+            
 
-            # filter out gradients on non-exist voxel or non-connected surfaces
-            norm_dz[(~mask001)|(~mask000)|(~con001)] = 0.
-            norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
-            norm_dx[(~mask100)|(~mask000)|(~con100)] = 0.
+        norm_count[(~mask001)|(~mask000)|(~con001) | (empty000 & empty001) ] -= 1
+        norm_count[(~mask010)|(~mask000)|(~con010) | (empty000 & empty010) ] -= 1
+        norm_count[(~mask100)|(~mask000)|(~con100) | (empty000 & empty100) ] -= 1
+
+        # filter out gradients on non-exist voxel or non-connected surfaces
+        norm_dz[(~mask001)|(~mask000)|(~con001) | (empty000 & empty001) ] = 0.
+        norm_dy[(~mask010)|(~mask000)|(~con010) | (empty000 & empty010) ] = 0.
+        norm_dx[(~mask100)|(~mask000)|(~con100) | (empty000 & empty100) ] = 0.
+
+
 
         if alpha_weighted_norm_loss:
             # use alpha value to re-weight the normal loss
@@ -4428,17 +4446,17 @@ class SparseGrid(nn.Module):
             norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
             norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
 
-        normal_loss = scaling * torch.sum((norm_dx+norm_dy+norm_dz) / norm_count)
+        normal_loss = scaling * torch.mean((norm_dx+norm_dy+norm_dz) / norm_count)
 
-        # surfaces.retain_grad()
-        # norm000.retain_grad()
-        # norm001.retain_grad()
-        # norm010.retain_grad()
-        # norm100.retain_grad()
-        # Norm000.retain_grad()
-        # Norm001.retain_grad()
-        # Norm010.retain_grad()
-        # Norm100.retain_grad()
+        surfaces.retain_grad()
+        norm000.retain_grad()
+        norm001.retain_grad()
+        norm010.retain_grad()
+        norm100.retain_grad()
+        Norm000.retain_grad()
+        Norm001.retain_grad()
+        Norm010.retain_grad()
+        Norm100.retain_grad()
 
         normal_loss.backward()
 
@@ -4621,6 +4639,7 @@ class SparseGrid(nn.Module):
                                 contiguous: bool = True,
                                 use_kernel: bool = True,
                                 connectivity_check: bool = True,
+                                ignore_empty: bool = False,
                                 **kwargs
                             ):
         if self.surface_data is None:
@@ -4629,7 +4648,7 @@ class SparseGrid(nn.Module):
         if not use_kernel:
             # pytorch version
             rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
-            return self._surface_normal_loss_grad_check(rand_cells, scaling / rand_cells.shape[0], connectivity_check=connectivity_check, **kwargs)
+            return self._surface_normal_loss_grad_check(rand_cells, scaling, connectivity_check=connectivity_check, ignore_empty=ignore_empty, **kwargs)
 
         else:
             assert (
@@ -4646,6 +4665,7 @@ class SparseGrid(nn.Module):
                             0, 1, scaling, eikonal_scale,
                             ndc_coeffs[0], ndc_coeffs[1],
                             connectivity_check,
+                            ignore_empty,
                             grad)
             else:
                 _C.surface_normal_grad(self.links, self.surface_data, self.level_set_data[0],

@@ -407,6 +407,7 @@ __global__ void surface_normal_grad_sparse_kernel(
         // bool ignore_edge, // always false
         float ndc_coeffx, float ndc_coeffy,
         bool con_check,
+        bool ignore_empty,
         // Output
         bool* __restrict__ mask_out,
         float* __restrict__ grad_data) {
@@ -431,9 +432,18 @@ __global__ void surface_normal_grad_sparse_kernel(
     const size_t ddim = data.size(1);
 
     #define __FETCH_DATA(x,y,z) (dptr[links[x][y][z] * ddim + idx])
-    
 
-    __FETCH_DATA(x+1,y,z);
+    #define __CHECK_EMPTY(x,y,z) (((__FETCH_DATA(x,y,z) <= lv_set) && (__FETCH_DATA(x,y,z+1) <= lv_set) && (__FETCH_DATA(x,y+1,z) <= lv_set) && (__FETCH_DATA(x,y+1,z+1) <= lv_set) && \ 
+                                   (__FETCH_DATA(x+1,y,z) <= lv_set) && (__FETCH_DATA(x+1,y,z+1) <= lv_set) && (__FETCH_DATA(x+1,y+1,z) <= lv_set) && (__FETCH_DATA(x+1,y+1,z+1) <= lv_set)) || \
+                                  ((__FETCH_DATA(x,y,z) >= lv_set) && (__FETCH_DATA(x,y,z+1) >= lv_set) && (__FETCH_DATA(x,y+1,z) >= lv_set) && (__FETCH_DATA(x,y+1,z+1) >= lv_set) && \ 
+                                   (__FETCH_DATA(x+1,y,z) >= lv_set) && (__FETCH_DATA(x+1,y,z+1) >= lv_set) && (__FETCH_DATA(x+1,y+1,z) >= lv_set) && (__FETCH_DATA(x+1,y+1,z+1) >= lv_set)))
+
+    bool const empty000 = ignore_empty ? __CHECK_EMPTY(x,y,z) : false;
+    // bool const empty001 = ignore_empty ? __CHECK_EMPTY(x,y,z+1) : false;
+    // bool const empty010 = ignore_empty ? __CHECK_EMPTY(x,y+1,z) : false;
+    // bool const empty100 = ignore_empty ? __CHECK_EMPTY(x+1,y,z) : false;
+
+    // __FETCH_DATA(x+1,y,z);
     #define __CALC_DX(x,y,z) (((__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y,z+1)+__FETCH_DATA(x+1,y+1,z)+__FETCH_DATA(x+1,y+1,z+1)) - \
          (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x,y+1,z+1))) /4)
     #define __CALC_DY(x,y,z) (((__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x,y+1,z+1)+__FETCH_DATA(x+1,y+1,z)+__FETCH_DATA(x+1,y+1,z+1)) - \
@@ -463,7 +473,9 @@ __global__ void surface_normal_grad_sparse_kernel(
     // bool volatile con1 = (__GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1))); 
 
     if ((__GRID_EXIST(x,y,z+1)) && \
-        (!con_check || __GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1)))){
+        ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1))) && \
+        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x,y,z+1))))
+        ){
         _norm001[0] = __CALC_DX(x,y,z+1);
         _norm001[1] = __CALC_DY(x,y,z+1);
         _norm001[2] = __CALC_DZ(x,y,z+1);
@@ -473,7 +485,9 @@ __global__ void surface_normal_grad_sparse_kernel(
     }
 
     if ((__GRID_EXIST(x,y+1,z)) && \
-        (!con_check || __GRID_CONNECTED(__FETCH_DATA(x,y+1,z), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1)))){
+        ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x,y+1,z), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1))) && \
+        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x,y+1,z))))
+        ){
         _norm010[0] = __CALC_DX(x,y+1,z);
         _norm010[1] = __CALC_DY(x,y+1,z);
         _norm010[2] = __CALC_DZ(x,y+1,z);
@@ -482,7 +496,9 @@ __global__ void surface_normal_grad_sparse_kernel(
         skips[1] = true;
     }
     if ((__GRID_EXIST(x+1,y,z)) && \
-        (!con_check || __GRID_CONNECTED(__FETCH_DATA(x+1,y,z), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1)))){
+        ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x+1,y,z), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1))) && \
+        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x+1,y,z))))
+        ){
         _norm100[0] = __CALC_DX(x+1,y,z);
         _norm100[1] = __CALC_DY(x+1,y,z);
         _norm100[2] = __CALC_DZ(x+1,y,z);
@@ -1276,6 +1292,7 @@ void surface_normal_grad_sparse(torch::Tensor links,
              float ndc_coeffx,
              float ndc_coeffy,
              bool con_check, // check surface connectivity
+             bool ignore_empty, // ignore empty voxels
              torch::Tensor grad_data) {
     DEVICE_GUARD(data);
     CHECK_INPUT(data);
@@ -1307,6 +1324,7 @@ void surface_normal_grad_sparse(torch::Tensor links,
             Q,
             ndc_coeffx, ndc_coeffy,
             con_check,
+            ignore_empty,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
             grad_data.data_ptr<float>());
