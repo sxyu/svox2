@@ -4446,17 +4446,19 @@ class SparseGrid(nn.Module):
             norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
             norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
 
-        normal_loss = scaling * torch.mean((norm_dx+norm_dy+norm_dz) / norm_count)
+        normal_loss = torch.where(norm_count!=0, (norm_dx+norm_dy+norm_dz) / norm_count, torch.zeros_like(norm_count))
 
-        surfaces.retain_grad()
-        norm000.retain_grad()
-        norm001.retain_grad()
-        norm010.retain_grad()
-        norm100.retain_grad()
-        Norm000.retain_grad()
-        Norm001.retain_grad()
-        Norm010.retain_grad()
-        Norm100.retain_grad()
+        normal_loss = scaling * torch.mean(normal_loss)
+
+        # surfaces.retain_grad()
+        # norm000.retain_grad()
+        # norm001.retain_grad()
+        # norm010.retain_grad()
+        # norm100.retain_grad()
+        # Norm000.retain_grad()
+        # Norm001.retain_grad()
+        # Norm010.retain_grad()
+        # Norm100.retain_grad()
 
         normal_loss.backward()
 

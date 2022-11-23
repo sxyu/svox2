@@ -592,16 +592,19 @@ while True:
                         contiguous=args.tv_contiguous)
             if lambda_surf_normal_loss > 0.0 and not no_surface and USE_KERNEL:
                 # with Timing("normal_loss"):
-                grid.inplace_surface_normal_grad(grid.surface_data.grad,
+                norm_loss = grid.inplace_surface_normal_grad(grid.surface_data.grad,
                         scaling=lambda_surf_normal_loss,
                         eikonal_scale=args.lambda_surface_eikonal,
                         sparse_frac=args.norm_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous,
-                        use_kernel=USE_KERNEL,
+                        use_kernel=not args.py_surf_norm_reg,
                         connectivity_check=not args.no_surf_norm_con_check,
                         ignore_empty=args.surf_norm_reg_ignore_empty,
                         )
+
+                if (gstep_id + 1) % args.print_every == 0 and norm_loss is not None:
+                    summary_writer.add_scalar("surf_norm_loss", norm_loss, global_step=gstep_id)
 
             if args.lambda_surf_sign_loss > 0.0 and not no_surface:
                 # with Timing("normal_loss"):
