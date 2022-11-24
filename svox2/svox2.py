@@ -3120,6 +3120,9 @@ class SparseGrid(nn.Module):
         randomize: bool = False,
         beta_loss: float = 0.0,
         sparsity_loss: float = 0.0,
+        fused_surf_norm_reg_scale: float = 0.0,
+        fused_surf_norm_reg_con_check: bool = True,
+        fused_surf_norm_reg_ignore_empty: bool = False,
         no_surface: bool = False,
     ):
         """
@@ -3208,6 +3211,20 @@ class SparseGrid(nn.Module):
                 rgb_gt,
                 beta_loss,
                 sparsity_loss,
+                rgb_out,
+                grad_holder
+            )
+        elif backend == 'surf_trav':
+            cu_fn(
+                self._to_cpp(replace_basis_data=basis_data),
+                rays._to_cpp(),
+                self.opt._to_cpp(randomize=randomize),
+                rgb_gt,
+                beta_loss,
+                sparsity_loss,
+                fused_surf_norm_reg_scale,
+                fused_surf_norm_reg_con_check,
+                fused_surf_norm_reg_ignore_empty,
                 rgb_out,
                 grad_holder
             )

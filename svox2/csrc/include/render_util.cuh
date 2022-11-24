@@ -1351,5 +1351,266 @@ __device__ __inline__ void assign_surface_grad(
     #undef MAYBE_ADD_LINK
 }
 
+
+__device__ __inline__ void _split_add_surface_norm_grad(
+    const int x, const int y, const int z,
+    const float* __restrict__ grad_n,
+    const float scale,
+    const int32_t* __restrict__ links,
+    int const offx, int const offy,
+    const size_t ddim,
+    const int idx,
+    bool* __restrict__ mask_out,
+    float* __restrict__ grad_data
+){
+    /**
+     * Note that this is a helper function only used when caluclating surface normal grad
+     * 
+    */
+    const int32_t* __restrict__ link_ptr = links + (offx * x + offy * y + z);
+
+    #define MAYBE_ADD_LINK(u, val) if (val != 0.f) { \
+                atomicAdd(&grad_data[link_ptr[u]], val); \
+                if (mask_out != nullptr) \
+                    mask_out[link_ptr[u]] = true; \
+            }
+
+
+    float const grad000 = -0.25f * grad_n[0] + -0.25f * grad_n[1] + -0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(0, scale*grad000);
+    float const grad001 = -0.25f * grad_n[0] + -0.25f * grad_n[1] + 0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(1, scale*grad001);
+    float const grad010 = -0.25f * grad_n[0] + 0.25f * grad_n[1] + -0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(offy, scale*grad010);
+    float const grad011 = -0.25f * grad_n[0] + 0.25f * grad_n[1] + 0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(offy + 1, scale*grad011);
+    float const grad100 = 0.25f * grad_n[0] + -0.25f * grad_n[1] + -0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(offx + 0, scale*grad100);
+    float const grad101 = 0.25f * grad_n[0] + -0.25f * grad_n[1] + 0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(offx + 1, scale*grad101);
+    float const grad110 = 0.25f * grad_n[0] + 0.25f * grad_n[1] + -0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(offx + offy, scale*grad110);
+    float const grad111 = 0.25f * grad_n[0] + 0.25f * grad_n[1] + 0.25f * grad_n[2]; 
+    MAYBE_ADD_LINK(offx + offy + 1, scale*grad111);
+
+
+    #undef MAYBE_ADD_LINK
+
+}
+
+__device__ __inline__ void add_surface_normal_grad(
+        // const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        // const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        const int32_t* __restrict__ links,
+        const float* __restrict__ surface_data,
+        const int* __restrict__ size,
+        const int x, const int y, const int z,
+        int const offx, int const offy,
+        float const lv_set,
+        float scale,
+        bool con_check,
+        bool ignore_empty,
+        // Output
+        bool* __restrict__ mask_out,
+        float* __restrict__ grad_data) {
+
+    #define __FETCH_LINK(_x,_y,_z) (links[(_x)*offx + (_y)*offy + (_z)])
+    // always put brackets around input macro parameters!
+
+    #define __GRID_EXIST(x,y,z) (\
+    (x < size[0] - 1) && (y < size[1] - 1) && (z < size[2] - 1) && \
+    (__FETCH_LINK(x,y,z) >= 0) && (__FETCH_LINK(x,y,z+1) >= 0) && (__FETCH_LINK(x,y+1,z) >= 0) && (__FETCH_LINK(x,y+1,z+1) >= 0) && (__FETCH_LINK(x+1,y,z) >= 0) && (__FETCH_LINK(x+1,y,z+1) >= 0) && (__FETCH_LINK(x+1,y+1,z) >= 0) && (__FETCH_LINK(x+1,y+1,z+1) >= 0))
+
+    if (!__GRID_EXIST(x,y,z)) return;
+
+    // float scaling[3];
+    // CALCULATE_RAY_SCALE(scaling, size[0], size[1], size[2]); // scale = links.size / 256.f
+
+    // const float* dptr = data.data();
+    // const size_t ddim = data.size(1);
+    const int idx = 0;
+    const size_t ddim = 1;
+
+    #define __FETCH_DATA(x,y,z) (surface_data[__FETCH_LINK(x,y,z) * ddim + idx])
+
+    #define __CHECK_EMPTY(x,y,z) (((__FETCH_DATA(x,y,z) <= lv_set) && (__FETCH_DATA(x,y,z+1) <= lv_set) && (__FETCH_DATA(x,y+1,z) <= lv_set) && (__FETCH_DATA(x,y+1,z+1) <= lv_set) && \ 
+                                   (__FETCH_DATA(x+1,y,z) <= lv_set) && (__FETCH_DATA(x+1,y,z+1) <= lv_set) && (__FETCH_DATA(x+1,y+1,z) <= lv_set) && (__FETCH_DATA(x+1,y+1,z+1) <= lv_set)) || \
+                                  ((__FETCH_DATA(x,y,z) >= lv_set) && (__FETCH_DATA(x,y,z+1) >= lv_set) && (__FETCH_DATA(x,y+1,z) >= lv_set) && (__FETCH_DATA(x,y+1,z+1) >= lv_set) && \ 
+                                   (__FETCH_DATA(x+1,y,z) >= lv_set) && (__FETCH_DATA(x+1,y,z+1) >= lv_set) && (__FETCH_DATA(x+1,y+1,z) >= lv_set) && (__FETCH_DATA(x+1,y+1,z+1) >= lv_set)))
+
+    bool const empty000 = ignore_empty ? __CHECK_EMPTY(x,y,z) : false;
+
+    // __FETCH_DATA(x+1,y,z);
+    #define __CALC_DX(x,y,z) (((__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y,z+1)+__FETCH_DATA(x+1,y+1,z)+__FETCH_DATA(x+1,y+1,z+1)) - \
+         (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x,y+1,z+1))) /4)
+    #define __CALC_DY(x,y,z) (((__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x,y+1,z+1)+__FETCH_DATA(x+1,y+1,z)+__FETCH_DATA(x+1,y+1,z+1)) - \
+         (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y,z+1)))/4)
+    #define __CALC_DZ(x,y,z) (((__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x,y+1,z+1)+__FETCH_DATA(x+1,y,z+1)+__FETCH_DATA(x+1,y+1,z+1)) - \
+         (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y+1,z)))/4)
+
+    // printf("__FETCH_DATA(x+1,y,z): %f\n", __FETCH_DATA(x+1,y,z));
+    // printf("__FETCH_DATA(x+1,y,z+1): %f\n", __FETCH_DATA(x+1,y,z+1));
+    // printf("__FETCH_DATA(x+1,y+1,z): %f\n", __FETCH_DATA(x+1,y+1,z));
+    // printf("__FETCH_DATA(x+1,y+1,z+1): %f\n", __FETCH_DATA(x+1,y+1,z+1));
+    // printf("__FETCH_DATA(x,y,z): %f\n", __FETCH_DATA(x,y,z));
+    // printf("__FETCH_DATA(x,y,z+1): %f\n", __FETCH_DATA(x,y,z+1));
+    // printf("__FETCH_DATA(x,y+1,z): %f\n", __FETCH_DATA(x,y+1,z));
+    // printf("__FETCH_DATA(x,y+1,z+1): %f\n\n", __FETCH_DATA(x,y+1,z+1));
+
+    // printf("__FETCH_LINK(x+1,y,z): %d\n", __FETCH_LINK(x+1,y,z));
+    // printf("__FETCH_LINK(x+1,y,z+1): %d\n", __FETCH_LINK(x+1,y,z+1));
+    // printf("__FETCH_LINK(x+1,y+1,z): %d\n", __FETCH_LINK(x+1,y+1,z));
+    // printf("__FETCH_LINK(x+1,y+1,z+1): %d\n", __FETCH_LINK(x+1,y+1,z+1));
+    // printf("__FETCH_LINK(x,y,z): %d\n", __FETCH_LINK(x,y,z));
+    // printf("__FETCH_LINK(x,y,z+1): %d\n", __FETCH_LINK(x,y,z+1));
+    // printf("__FETCH_LINK(x,y+1,z): %d\n", __FETCH_LINK(x,y+1,z));
+    // printf("__FETCH_LINK(x,y+1,z+1): %d\n\n", __FETCH_LINK(x,y+1,z+1));
+
+    // printf("(links[x*offx + (y+1)*offy + z]): %d\n", links[x*offx + (y+1)*offy + z]);
+
+    float _norm000[3] = {
+        __CALC_DX(x,y,z),
+        __CALC_DY(x,y,z),
+        __CALC_DZ(x,y,z)
+    }; // unnormalized normal
+
+    float _norm001[3];
+    float _norm010[3];
+    float _norm100[3];
+
+    bool skips[] = {false, false, false};
+    int norm_count = 0;
+
+
+    #define __GRID_CONNECTED(s0, s1, s2, s3) (!(((s0 <= lv_set) && (s1 <= lv_set) && (s2 <= lv_set) && (s3 <= lv_set)) || \
+                                                ((s0 >= lv_set) && (s1 >= lv_set) && (s2 >= lv_set) && (s3 >= lv_set))))
+
+                                            
+    // bool volatile ex1 = (__GRID_EXIST(x,y,z+1)); 
+    // bool volatile con1 = (__GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1))); 
+
+    if ((__GRID_EXIST(x,y,z+1)) && \
+        ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1))) && \
+        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x,y,z+1))))
+        ){
+        _norm001[0] = __CALC_DX(x,y,z+1);
+        _norm001[1] = __CALC_DY(x,y,z+1);
+        _norm001[2] = __CALC_DZ(x,y,z+1);
+        norm_count += 1;
+    }else{
+        skips[2] = true;
+    }
+
+    if ((__GRID_EXIST(x,y+1,z)) && \
+        ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x,y+1,z), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1))) && \
+        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x,y+1,z))))
+        ){
+        _norm010[0] = __CALC_DX(x,y+1,z);
+        _norm010[1] = __CALC_DY(x,y+1,z);
+        _norm010[2] = __CALC_DZ(x,y+1,z);
+        norm_count += 1;
+    }else{
+        skips[1] = true;
+    }
+    if ((__GRID_EXIST(x+1,y,z)) && \
+        ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x+1,y,z), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1))) && \
+        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x+1,y,z))))
+        ){
+        _norm100[0] = __CALC_DX(x+1,y,z);
+        _norm100[1] = __CALC_DY(x+1,y,z);
+        _norm100[2] = __CALC_DZ(x+1,y,z);
+        norm_count += 1;
+    }else{
+        skips[0] = true;
+    }
+
+    float const N0 = _NORM3(_norm000);
+    // if ((isnan(N0) || (isinf(N0)))){
+    //     printf("N0: %f\n", N0);
+    //     printf("_norm000[0]: %f\n", _norm000[0]);
+    //     printf("_norm000[1]: %f\n", _norm000[1]);
+    //     printf("_norm000[2]: %f\n", _norm000[2]);
+    // }
+    ASSERT_NUM(N0);
+    // apply normal difference loss gradient
+    for (int i=0; i<3; ++i){
+        if (skips[i]){
+            continue;
+        }
+        float const *_n1 = (i==0) ? _norm100 : ((i==1) ? _norm010 : _norm001);
+        float const N1 = _NORM3(_n1);
+        ASSERT_NUM(N1);
+
+        // dE/d0x, dE/d0y, dE/d0z
+        float const d0[] = {
+                (_norm000[0]/N0 - _n1[0]/N1) * \
+                (-2.f*_SQR(_norm000[0])/_CUBIC(N0) + 2.f/N0) \ 
+                + -2.f*_norm000[0]*_norm000[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0) \
+                + -2.f*_norm000[0]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
+                (_norm000[1]/N0 - _n1[1]/N1) * \ 
+                (-2.f*_SQR(_norm000[1])/_CUBIC(N0) + 2.f/N0) \ 
+                + -2.f*_norm000[0]*_norm000[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
+                + -2.f*_norm000[1]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
+                (_norm000[2]/N0 - _n1[2]/N1) * \ 
+                (-2.f*_SQR(_norm000[2])/_CUBIC(N0) + 2.f/N0) \ 
+                + -2.f*_norm000[0]*_norm000[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
+                + -2.f*_norm000[1]*_norm000[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0)
+        };
+
+        ASSERT_NUM(d0[0]);
+        ASSERT_NUM(d0[1]);
+        ASSERT_NUM(d0[2]);
+
+        _split_add_surface_norm_grad(x, y, z, d0, 
+                          scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
+        
+
+        float const d1[] = {
+                (_norm000[0]/N0 - _n1[0]/N1) * \ 
+                (2.f*_SQR(_n1[0])/_CUBIC(N1) - 2.f/N1) \
+                + 2.f*_n1[0]*_n1[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1) \
+                + 2.f*_n1[0]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
+                (_norm000[1]/N0 - _n1[1]/N1) * \ 
+                (2.f*_SQR(_n1[1])/_CUBIC(N1) - 2.f/N1) \ 
+                + 2.f*_n1[0]*_n1[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
+                + 2.f*_n1[1]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
+                (_norm000[2]/N0 - _n1[2]/N1) * \ 
+                (2.f*_SQR(_n1[2])/_CUBIC(N1) - 2.f/N1) \ 
+                + 2.f*_n1[0]*_n1[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
+                + 2.f*_n1[1]*_n1[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1)
+        };
+
+        ASSERT_NUM(d1[0]);
+        ASSERT_NUM(d1[1]);
+        ASSERT_NUM(d1[2]);
+
+        float const ux = (i==0) ? x+1:x,
+                    uy = (i==1) ? y+1:y,
+                    uz = (i==2) ? z+1:z;
+
+        _split_add_surface_norm_grad(ux, uy, uz, d1,
+                          scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
+
+    }
+
+    // // apply eikonal constraint gradient
+    // if (eikonal_scale > 0.f){
+    //     float const d_eki[] = {
+    //         -2*_norm000[0]*(1 - N0)/N0,
+    //         -2*_norm000[1]*(1 - N0)/N0,
+    //         -2*_norm000[2]*(1 - N0)/N0
+    //     };
+
+    //     ASSERT_NUM(d_eki[0]);
+    //     ASSERT_NUM(d_eki[1]);
+    //     ASSERT_NUM(d_eki[2]);
+
+    //     _add_surface_grad(x, y, z, d_eki, 
+    //                       eikonal_scale, links, ddim, idx, nullptr, grad_data);
+    // }
+}
+
+
+
 } // namespace device
 } // namespace

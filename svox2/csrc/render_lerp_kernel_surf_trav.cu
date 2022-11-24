@@ -814,6 +814,9 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         float log_transmit_in,
         float beta_loss,
         float sparsity_loss,
+        float fused_surf_norm_reg_scale,
+        bool fused_surf_norm_reg_con_check,
+        bool fused_surf_norm_reg_ignore_empty,
         PackedGridOutputGrads& __restrict__ grads,
         float* __restrict__ accum_out,
         float* __restrict__ log_transmit_out
@@ -1139,6 +1142,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
             }
         
+            ///////////// FAKE SAMPLE GRADIENT ///////////////
+
             if ((!has_sample) && (opt.surf_fake_sample)){
                 // there is no intersection between ray and surface
                 // take fake sample if allowed            
@@ -1409,8 +1414,32 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         }
                     }
                 }
+            } else {
+                continue;
             }
             
+
+            ///////////// SURFACE NORMAL REGULARIZATION //////////////
+
+            if (fused_surf_norm_reg_scale > 0.f){
+                add_surface_normal_grad(
+                    grid.links,
+                    grid.surface_data,
+                    grid.size,
+                    voxel_l[0], voxel_l[1], voxel_l[2],
+                    grid.stride_x, grid.size[2],
+                    grid.level_set_data[i],
+                    fused_surf_norm_reg_scale,
+                    fused_surf_norm_reg_con_check,
+                    fused_surf_norm_reg_ignore_empty,
+                    // Output
+                    grads.mask_out,
+                    grads.grad_surface_out
+                );
+
+               
+            }
+
         }
 
         if (_EXP(log_transmit) < opt.stop_thresh) {
@@ -1756,6 +1785,9 @@ __global__ void render_ray_backward_kernel(
     const float* __restrict__ log_transmit_in,
     float beta_loss,
     float sparsity_loss,
+    float fused_surf_norm_reg_scale,
+    bool fused_surf_norm_reg_con_check,
+    bool fused_surf_norm_reg_ignore_empty,
     PackedGridOutputGrads grads,
     float* __restrict__ accum_out = nullptr, // left-over gradient for background?
     float* __restrict__ log_transmit_out = nullptr) {
@@ -1817,6 +1849,9 @@ __global__ void render_ray_backward_kernel(
         log_transmit_in == nullptr ? 0.f : log_transmit_in[ray_id],
         beta_loss,
         sparsity_loss,
+        fused_surf_norm_reg_scale,
+        fused_surf_norm_reg_con_check,
+        fused_surf_norm_reg_ignore_empty,
         grads,
         accum_out == nullptr ? nullptr : accum_out + ray_id,
         log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
@@ -2119,6 +2154,12 @@ void volume_render_surf_trav_backward(
                     nullptr,
                     0.f,
                     0.f,
+                    // fused_surf_norm_reg_scale,
+                    // fused_surf_norm_reg_con_check,
+                    // fused_surf_norm_reg_ignore_empty,
+                    0.f,
+                    true,
+                    false,
                     // Output
                     grads,
                     use_background ? accum.data_ptr<float>() : nullptr,
@@ -2151,6 +2192,9 @@ void volume_render_surf_trav_fused(
         torch::Tensor rgb_gt,
         float beta_loss, // beta loss and sparsity loss are just weights for those loss
         float sparsity_loss,
+        float fused_surf_norm_reg_scale,
+        bool fused_surf_norm_reg_con_check,
+        bool fused_surf_norm_reg_ignore_empty,
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
 
@@ -2203,6 +2247,9 @@ void volume_render_surf_trav_fused(
                 beta_loss > 0.f ? log_transmit.data_ptr<float>() : nullptr,
                 beta_loss / Q,
                 sparsity_loss,
+                fused_surf_norm_reg_scale / Q, // note that we normalize by #rays rather than #voxels 
+                fused_surf_norm_reg_con_check,
+                fused_surf_norm_reg_ignore_empty,
                 // Output
                 grads,
                 use_background ? accum.data_ptr<float>() : nullptr,

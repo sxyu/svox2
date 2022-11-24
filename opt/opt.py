@@ -488,9 +488,11 @@ while True:
                 out = grid.volume_render_fused(rays, rgb_gt,
                         beta_loss=args.lambda_beta,
                         sparsity_loss=args.lambda_sparsity,
+                        fused_surf_norm_reg_scale = lambda_surf_normal_loss if args.fused_surf_norm_reg else 0.0,
+                        fused_surf_norm_reg_con_check = not args.no_surf_norm_con_check,
+                        fused_surf_norm_reg_ignore_empty = args.surf_norm_reg_ignore_empty,
                         randomize=args.enable_random,
                         no_surface=no_surface)
-
             # with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, out['rgb'])
 
@@ -590,7 +592,7 @@ while True:
                         sparse_frac=args.tv_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
-            if lambda_surf_normal_loss > 0.0 and not no_surface and USE_KERNEL:
+            if lambda_surf_normal_loss > 0.0 and not no_surface and USE_KERNEL and not args.fused_surf_norm_reg:
                 # with Timing("normal_loss"):
                 norm_loss = grid.inplace_surface_normal_grad(grid.surface_data.grad,
                         scaling=lambda_surf_normal_loss,
