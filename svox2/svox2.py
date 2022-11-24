@@ -2112,6 +2112,10 @@ class SparseGrid(nn.Module):
             lv_set_mask = (self.level_set_data >= surface_values.min(axis=-1).values) & \
                 (self.level_set_data <= surface_values.max(axis=-1).values) # [VEV, N_level_sets]
 
+            if self.opt.surf_fake_sample:
+                # do not filter out voxels by surface scalars if we render fake samples
+                lv_set_mask = torch.ones_like(lv_set_mask).bool()
+
             if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
                 # if no valid lv set in range, use closest one
                 no_lv_mask = ~lv_set_mask.any(axis=-1)
@@ -2826,6 +2830,19 @@ class SparseGrid(nn.Module):
                 total_color = torch.sum(out['rgb'].grad * B_rgb[0, i])
                 accum = accum - B_weights[0, i] * total_color
                 grad_alpha = accum / (alpha[i]-1) + total_color * B_T[0,i]
+
+
+            # add fused surface normal loss
+
+            # ex_l = torch.tensor([
+            #     [6,1,14],
+            #     [5,1,14],
+            # ], dtype=l.dtype, device=l.device)
+
+            # l = torch.concat([ex_l, l], axis=0)
+
+            # cells = l[:, 0] * self.links.shape[2] * self.links.shape[1] + l[:, 1] * self.links.shape[1] + l[:, 2]
+            # self._surface_normal_loss_grad_check(cells, 0.1, connectivity_check=False, ignore_empty=True)
 
         # [3,9,7]
 

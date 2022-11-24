@@ -143,9 +143,9 @@ __device__ __inline__ void trace_ray_surf_trav(
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8);
         for (int i=0; i < level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
-            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
-                continue;
-            }
+            // if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+            //     continue;
+            // }
             // float const f0_lv = f0 - lv_set;
 
             // probably better ways to find roots
@@ -159,12 +159,16 @@ __device__ __inline__ void trace_ray_surf_trav(
             // float const eps_double = 1e-10;
             double st[3] = {-1, -1, -1}; // sample t
 
-            cubic_equation_solver(
-                fs[0] - lv_set, fs[1], fs[2], fs[3],
-                1e-8, // float eps
-                1e-10, // double eps
-                st
-                );
+            if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
+                // only solve for cubic if we know there is a root
+                cubic_equation_solver(
+                    fs[0] - lv_set, fs[1], fs[2], fs[3],
+                    1e-8, // float eps
+                    1e-10, // double eps
+                    st
+                    );
+            }
+
 
             bool has_sample = false;
             
@@ -891,6 +895,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         last_voxel[1] = voxel_l[1];
         last_voxel[2] = voxel_l[2];
 
+
         // check minimal of alpha raw
         if ((grid.density_data[link_ptr[0]] < opt.sigma_thresh) && \
             (grid.density_data[link_ptr[1]] < opt.sigma_thresh) && \
@@ -907,6 +912,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                 t += opt.step_size;
                 continue;
             }
+        // if (lane_id == 0) printf("voxel_l: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
 
         // find intersections
         double const surface[8] = {
@@ -931,27 +937,27 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); 
         for (int i=0; i < level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
-            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
-                continue;
-            }
+            // if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+            //     continue;
+            // }
 
             fs[0] -= lv_set;
 
             ////////////// CUBIC ROOT SOLVING //////////////
             double st[3] = {-1, -1, -1}; // sample t
 
-            enum BasisType const cubic_root_type = cubic_equation_solver(
-                fs[0], fs[1], fs[2], fs[3],
-                1e-8, // float eps
-                1e-10, // double eps
-                st
-                );
+            enum BasisType cubic_root_type;
+
+            if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
+                // only solve for cubic if we know there is a root
+                cubic_root_type = cubic_equation_solver(
+                    fs[0], fs[1], fs[2], fs[3],
+                    1e-8, // float eps
+                    1e-10, // double eps
+                    st
+                    );
+            }
             
-            // sort intersections by depth
-            // int st_ids[3] = {0,1,2};
-            // sort index instead to keep track of root computation
-            // thrust::sort(thrust::device, st, st + 3);
-            // thrust::sort(thrust::device, st_ids, st_ids + 3, [&st](int i,int j){return st[i]<st[j];} );
 
             bool has_sample = false;
 
@@ -1414,14 +1420,20 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         }
                     }
                 }
-            } else {
+            } 
+
+            if ((!has_sample) && (!opt.surf_fake_sample)){
+                // if don't apply fake sample
+                // then don't include this voxel for fused surface norm reg
                 continue;
             }
             
 
             ///////////// SURFACE NORMAL REGULARIZATION //////////////
 
-            if (fused_surf_norm_reg_scale > 0.f){
+            if ((fused_surf_norm_reg_scale > 0.f) && (lane_id == 0)){
+                // printf("voxel_l for fused surf reg: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+
                 add_surface_normal_grad(
                     grid.links,
                     grid.surface_data,
@@ -1436,8 +1448,6 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     grads.mask_out,
                     grads.grad_surface_out
                 );
-
-               
             }
 
         }
@@ -2158,8 +2168,8 @@ void volume_render_surf_trav_backward(
                     // fused_surf_norm_reg_con_check,
                     // fused_surf_norm_reg_ignore_empty,
                     0.f,
-                    true,
                     false,
+                    true,
                     // Output
                     grads,
                     use_background ? accum.data_ptr<float>() : nullptr,
