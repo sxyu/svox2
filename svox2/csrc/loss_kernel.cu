@@ -421,6 +421,7 @@ __global__ void surface_normal_grad_sparse_kernel(
 
     const int size[3] = {links.size(0), links.size(1), links.size(2)};
 
+
     add_surface_normal_grad(
         links.data(),
         data.data(),

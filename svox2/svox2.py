@@ -762,7 +762,7 @@ class SparseGrid(nn.Module):
                 grid_center = (torch.tensor(reso)) / 2
                 rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
 
-                sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 2) + 0.5
+                sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 6) + 0.5
                 sphere_rs = sphere_rs.to(device)
                 dists = rs[:, None] - sphere_rs[None, :]
 
@@ -2834,15 +2834,15 @@ class SparseGrid(nn.Module):
 
             # add fused surface normal loss
 
-            # ex_l = torch.tensor([
-            #     [6,1,14],
-            #     [5,1,14],
-            # ], dtype=l.dtype, device=l.device)
+            ex_l = torch.tensor([
+                [6,1,14],
+                [5,1,14],
+            ], dtype=l.dtype, device=l.device)
 
-            # l = torch.concat([ex_l, l], axis=0)
+            l = torch.concat([ex_l, l], axis=0)
 
-            # cells = l[:, 0] * self.links.shape[2] * self.links.shape[1] + l[:, 1] * self.links.shape[1] + l[:, 2]
-            # self._surface_normal_loss_grad_check(cells, 0.1, connectivity_check=False, ignore_empty=True)
+            cells = l[:, 0] * self.links.shape[2] * self.links.shape[1] + l[:, 1] * self.links.shape[1] + l[:, 2]
+            self._surface_normal_loss_grad_check(cells, 0.1, connectivity_check=False, ignore_empty=True)
 
         # [3,9,7]
 

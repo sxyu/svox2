@@ -1491,7 +1491,7 @@ __device__ __inline__ void add_surface_normal_grad(
 
     if ((__GRID_EXIST(x,y,z+1)) && \
         ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x,y,z+1), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z+1))) && \
-        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x,y,z+1))))
+        ((!ignore_empty) || ((!empty000) || (!__CHECK_EMPTY(x,y,z+1))))
         ){
         _norm001[0] = __CALC_DX(x,y,z+1);
         _norm001[1] = __CALC_DY(x,y,z+1);
@@ -1503,7 +1503,7 @@ __device__ __inline__ void add_surface_normal_grad(
 
     if ((__GRID_EXIST(x,y+1,z)) && \
         ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x,y+1,z), __FETCH_DATA(x,y+1,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1))) && \
-        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x,y+1,z))))
+        ((!ignore_empty) || ((!empty000) || (!__CHECK_EMPTY(x,y+1,z))))
         ){
         _norm010[0] = __CALC_DX(x,y+1,z);
         _norm010[1] = __CALC_DY(x,y+1,z);
@@ -1514,7 +1514,7 @@ __device__ __inline__ void add_surface_normal_grad(
     }
     if ((__GRID_EXIST(x+1,y,z)) && \
         ((!con_check) || __GRID_CONNECTED(__FETCH_DATA(x+1,y,z), __FETCH_DATA(x+1,y,z+1), __FETCH_DATA(x+1,y+1,z), __FETCH_DATA(x+1,y+1,z+1))) && \
-        ((!ignore_empty) || ((!empty000) && (!__CHECK_EMPTY(x+1,y,z))))
+        ((!ignore_empty) || ((!empty000) || (!__CHECK_EMPTY(x+1,y,z))))
         ){
         _norm100[0] = __CALC_DX(x+1,y,z);
         _norm100[1] = __CALC_DY(x+1,y,z);
@@ -1523,6 +1523,8 @@ __device__ __inline__ void add_surface_normal_grad(
     }else{
         skips[0] = true;
     }
+
+    // printf("norm_count: %d\n", norm_count);
 
     float const N0 = _NORM3(_norm000);
     // if ((isnan(N0) || (isinf(N0)))){
