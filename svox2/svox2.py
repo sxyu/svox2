@@ -2427,7 +2427,8 @@ class SparseGrid(nn.Module):
             # use naive biased formula to get alpha for fake samples
             lv_sets = self.level_set_data[lv_set_ids[fake_sample_ids]]
 
-            surface_norm = torch.norm(surface_values[l_ids[fake_sample_ids]], dim=-1)
+            # surface_norm = torch.norm(surface_values[l_ids[fake_sample_ids]], dim=-1)
+            surface_norm = torch.std(surface_values[l_ids[fake_sample_ids]], dim=-1, unbiased=False)
 
             n_surfaces = torch.permute(surface_values[l_ids[fake_sample_ids]], [0,2,1]) / surface_norm[:,None,:]
             
@@ -2834,15 +2835,15 @@ class SparseGrid(nn.Module):
 
             # add fused surface normal loss
 
-            ex_l = torch.tensor([
-                [6,1,14],
-                [5,1,14],
-            ], dtype=l.dtype, device=l.device)
+            # ex_l = torch.tensor([
+            #     [6,1,14],
+            #     [5,1,14],
+            # ], dtype=l.dtype, device=l.device)
 
-            l = torch.concat([ex_l, l], axis=0)
+            # l = torch.concat([ex_l, l], axis=0)
 
-            cells = l[:, 0] * self.links.shape[2] * self.links.shape[1] + l[:, 1] * self.links.shape[1] + l[:, 2]
-            self._surface_normal_loss_grad_check(cells, 0.1, connectivity_check=False, ignore_empty=True)
+            # cells = l[:, 0] * self.links.shape[2] * self.links.shape[1] + l[:, 1] * self.links.shape[1] + l[:, 2]
+            # self._surface_normal_loss_grad_check(cells, 0.1, connectivity_check=False, ignore_empty=True)
 
         # [3,9,7]
 
@@ -4484,15 +4485,15 @@ class SparseGrid(nn.Module):
 
         normal_loss = scaling * torch.mean(normal_loss)
 
-        # surfaces.retain_grad()
-        # norm000.retain_grad()
-        # norm001.retain_grad()
-        # norm010.retain_grad()
-        # norm100.retain_grad()
-        # Norm000.retain_grad()
-        # Norm001.retain_grad()
-        # Norm010.retain_grad()
-        # Norm100.retain_grad()
+        surfaces.retain_grad()
+        norm000.retain_grad()
+        norm001.retain_grad()
+        norm010.retain_grad()
+        norm100.retain_grad()
+        Norm000.retain_grad()
+        Norm001.retain_grad()
+        Norm010.retain_grad()
+        Norm100.retain_grad()
 
         normal_loss.backward()
 

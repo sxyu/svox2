@@ -299,18 +299,19 @@ __device__ __inline__ void trace_ray_surf_trav(
 
                         // use distance to surface to re-weight alpha
                         // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
-                        // we approximate the distance by normalizing the surface scalar values
-                        // so the distance no longer relates to the scale of surface
+                        // Estimate distance between sample to closest surface
+                        // Currently, it's done by normalizing surface scalars by their std, then trilerping
 
-                        float const surf_norm = sqrtf(
+                        double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
+                        double const surf_std = sqrtf(
                             max(1e-9f, 
-                            _SQR(surface[0]) + _SQR(surface[1]) + _SQR(surface[2]) + _SQR(surface[3]) + _SQR(surface[4]) + _SQR(surface[5]) + _SQR(surface[6]) + _SQR(surface[7])
+                            (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
                             )
                         );
 
                         // tri-lerp to get distance
 
-                        #define _norm_surf(x) (static_cast<float>(surface[x]) / surf_norm)
+                        #define _norm_surf(x) (static_cast<float>(surface[x] / surf_std))
 
                         const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
                         const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
@@ -322,6 +323,13 @@ __device__ __inline__ void trace_ray_surf_trav(
                         const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
 
                         #undef _norm_surf
+
+
+                        // if (lane_id == 0){
+                        //     printf("surf miu: [%f]\n", surf_miu);
+                        //     printf("surf std: [%f]\n", surf_std);
+                        //     printf("fake_sample_dist: [%f]\n", fake_sample_dist);
+                        // }
 
                         
                         // re-weight alpha using a simple gaussian
@@ -1212,18 +1220,18 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                         // use distance to surface to re-weight alpha
                         // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
-                        // we approximate the distance by normalizing the surface scalar values
-                        // so the distance no longer relates to the scale of surface
 
-                        float const surf_norm = sqrtf(
+
+                        double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
+                        double const surf_std = sqrtf(
                             max(1e-9f, 
-                            _SQR(surface[0]) + _SQR(surface[1]) + _SQR(surface[2]) + _SQR(surface[3]) + _SQR(surface[4]) + _SQR(surface[5]) + _SQR(surface[6]) + _SQR(surface[7])
+                            (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
                             )
                         );
 
                         // tri-lerp to get distance
 
-                        #define _norm_surf(x) (static_cast<float>(surface[x]) / surf_norm)
+                        #define _norm_surf(x) (static_cast<float>(surface[x] / surf_std))
 
                         const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
                         const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
@@ -1354,7 +1362,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             ASSERT_NUM(grad_fake_dist);
 
                             
-                            float grad_ns[8]; // grad of normalized surface values
+                            float grad_ns[8]; // grad from trilerp dist to normalized surface values
 
                             const float ay = 1.f - ray.pos[1], az = 1.f - ray.pos[2];
                             float xo = (1.0f - ray.pos[0]) * grad_fake_dist;
@@ -1384,10 +1392,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             for (int ks = 0; ks < 8; ++ks){
 #pragma unroll 8
                                 for (int kn = 0; kn < 8; ++kn){
+                                    // kn: index for normalized surf
+                                    // ks: index for original surf
                                     if (ks == kn){
-                                        grad_surface[ks] += grad_ns[kn] * (-_SQR(surface[ks]) / _CUBIC(surf_norm) + 1.f/surf_norm);
+                                        grad_surface[ks] += grad_ns[kn] * (surface[ks] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std) + 1.f/surf_std);
                                     } else {
-                                        grad_surface[ks] +=  grad_ns[kn] * (-surface[ks]*surface[kn] / _CUBIC(surf_norm));
+                                        grad_surface[ks] +=  grad_ns[kn] * (surface[kn] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std));
                                     }
                                 }
                             }

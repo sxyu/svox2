@@ -1426,8 +1426,6 @@ __device__ __inline__ void add_surface_normal_grad(
     // float scaling[3];
     // CALCULATE_RAY_SCALE(scaling, size[0], size[1], size[2]); // scale = links.size / 256.f
 
-    // const float* dptr = data.data();
-    // const size_t ddim = data.size(1);
     const int idx = 0;
     const size_t ddim = 1;
 
@@ -1447,26 +1445,6 @@ __device__ __inline__ void add_surface_normal_grad(
          (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y,z+1)))/4)
     #define __CALC_DZ(x,y,z) (((__FETCH_DATA(x,y,z+1)+__FETCH_DATA(x,y+1,z+1)+__FETCH_DATA(x+1,y,z+1)+__FETCH_DATA(x+1,y+1,z+1)) - \
          (__FETCH_DATA(x,y,z)+__FETCH_DATA(x,y+1,z)+__FETCH_DATA(x+1,y,z)+__FETCH_DATA(x+1,y+1,z)))/4)
-
-    // printf("__FETCH_DATA(x+1,y,z): %f\n", __FETCH_DATA(x+1,y,z));
-    // printf("__FETCH_DATA(x+1,y,z+1): %f\n", __FETCH_DATA(x+1,y,z+1));
-    // printf("__FETCH_DATA(x+1,y+1,z): %f\n", __FETCH_DATA(x+1,y+1,z));
-    // printf("__FETCH_DATA(x+1,y+1,z+1): %f\n", __FETCH_DATA(x+1,y+1,z+1));
-    // printf("__FETCH_DATA(x,y,z): %f\n", __FETCH_DATA(x,y,z));
-    // printf("__FETCH_DATA(x,y,z+1): %f\n", __FETCH_DATA(x,y,z+1));
-    // printf("__FETCH_DATA(x,y+1,z): %f\n", __FETCH_DATA(x,y+1,z));
-    // printf("__FETCH_DATA(x,y+1,z+1): %f\n\n", __FETCH_DATA(x,y+1,z+1));
-
-    // printf("__FETCH_LINK(x+1,y,z): %d\n", __FETCH_LINK(x+1,y,z));
-    // printf("__FETCH_LINK(x+1,y,z+1): %d\n", __FETCH_LINK(x+1,y,z+1));
-    // printf("__FETCH_LINK(x+1,y+1,z): %d\n", __FETCH_LINK(x+1,y+1,z));
-    // printf("__FETCH_LINK(x+1,y+1,z+1): %d\n", __FETCH_LINK(x+1,y+1,z+1));
-    // printf("__FETCH_LINK(x,y,z): %d\n", __FETCH_LINK(x,y,z));
-    // printf("__FETCH_LINK(x,y,z+1): %d\n", __FETCH_LINK(x,y,z+1));
-    // printf("__FETCH_LINK(x,y+1,z): %d\n", __FETCH_LINK(x,y+1,z));
-    // printf("__FETCH_LINK(x,y+1,z+1): %d\n\n", __FETCH_LINK(x,y+1,z+1));
-
-    // printf("(links[x*offx + (y+1)*offy + z]): %d\n", links[x*offx + (y+1)*offy + z]);
 
     float _norm000[3] = {
         __CALC_DX(x,y,z),
@@ -1594,6 +1572,15 @@ __device__ __inline__ void add_surface_normal_grad(
                           scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
 
     }
+
+    #undef __FETCH_LINK
+    #undef __GRID_EXIST
+    #undef __FETCH_DATA
+    #undef __CHECK_EMPTY
+    #undef __CALC_DX
+    #undef __CALC_DY
+    #undef __CALC_DZ
+    #undef __GRID_CONNECTED
 
     // // apply eikonal constraint gradient
     // if (eikonal_scale > 0.f){
