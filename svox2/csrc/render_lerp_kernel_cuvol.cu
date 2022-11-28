@@ -354,7 +354,7 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                 // Cauchy version (from SNeRG)
                 curr_grad_sigma += sparsity_loss * (4 * sigma / (1 + 2 * (sigma * sigma)));
 
-                // Alphs version (from PlenOctrees)
+                // Alphs version (from PlenOctrees) -- L1 loss on alpha
                 // curr_grad_sigma += sparsity_loss * _EXP(-pcnt) * ray.world_step;
             }
             trilerp_backward_cuvol_one(grid.links, grads.grad_sh_out,

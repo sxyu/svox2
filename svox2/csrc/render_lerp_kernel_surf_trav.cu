@@ -1059,14 +1059,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     // compute d_mse/d_alpha_i
                     float  curr_grad_alpha = accum / min(alpha-1.f, -1e-9f) + total_color * _EXP(log_transmit); 
                     log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
-                    // if (sparsity_loss > 0.f) {
-                    //     // Cauchy version (from SNeRG)
-                    //     // TODO: check if expected!
-                    //     curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
+                    if (sparsity_loss > 0.f) {
+                        // Cauchy version (from SNeRG)
+                        // curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
 
-                    //     // Alphs version (from PlenOctrees)
-                    //     // curr_grad_alpha += sparsity_loss * _EXP(-pcnt) * ray.world_step;
-                    // }
+                        // Log Alpha version
+                        curr_grad_alpha += sparsity_loss / alpha;
+                    }
 
                     // if (lane_id == 0){
                     //     // printf("weight: [%f]\n", weight);
