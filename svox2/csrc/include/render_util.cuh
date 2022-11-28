@@ -734,6 +734,9 @@ __device__ __inline__ void surface_to_cubic_equation(
     const int32_t* __restrict__ l,
     double* __restrict__ outs
 ){
+    /**
+     * Surface vertex scalars to cubic equation coefficients
+    */
 
     double const a00 = surface[0b000] * (1-origin[2]+l[2]) + surface[0b001] * (origin[2]-l[2]);
     double const a01 = surface[0b010] * (1-origin[2]+l[2]) + surface[0b011] * (origin[2]-l[2]);
@@ -759,6 +762,135 @@ __device__ __inline__ void surface_to_cubic_equation(
     outs[1] = -c0*dir[0] + d0*(1-origin[0]+l[0]) + c1*dir[0] + d1*(origin[0]-l[0]);
     outs[0] = c0*(1-origin[0]+l[0]) + c1*(origin[0]-l[0]);
 }
+
+__device__ __inline__ void surface_to_cubic_equation_01(
+    const double* __restrict__ surface,
+    const double* __restrict__ origin,
+    const double* __restrict__ dir,
+    // const int32_t* __restrict__ l,
+    double* __restrict__ outs
+){
+    /**
+     * Surface vertex scalars to cubic equation coefficients
+     * This version assumes the voxel is normalized to [0,1]^3
+     * 
+     * origin: normalized new origin within [0,1]. 
+     *         this is done by doing new_origin - voxel_l
+    */
+
+    double const a00 = surface[0b000] * (1-origin[2]) + surface[0b001] * (origin[2]);
+    double const a01 = surface[0b010] * (1-origin[2]) + surface[0b011] * (origin[2]);
+    double const a10 = surface[0b100] * (1-origin[2]) + surface[0b101] * (origin[2]);
+    double const a11 = surface[0b110] * (1-origin[2]) + surface[0b111] * (origin[2]);
+
+    double const b00 = -surface[0b000] + surface[0b001];
+    double const b01 = -surface[0b010] + surface[0b011];
+    double const b10 = -surface[0b100] + surface[0b101];
+    double const b11 = -surface[0b110] + surface[0b111];
+
+    double const c0 = a00*(1-origin[1]) + a01*(origin[1]);
+    double const c1 = a10*(1-origin[1]) + a11*(origin[1]);
+
+    double const d0 = -(a00*dir[1] - dir[2]*b00*(1-origin[1])) + (a01*dir[1] + dir[2]*b01*(origin[1]));
+    double const d1 = -(a10*dir[1] - dir[2]*b10*(1-origin[1])) + (a11*dir[1] + dir[2]*b11*(origin[1]));
+
+    double const e0 = -dir[1]*dir[2]*b00 + dir[1]*dir[2]*b01;
+    double const e1 = -dir[1]*dir[2]*b10 + dir[1]*dir[2]*b11;
+
+    outs[3] = -e0*dir[0] + e1*dir[0];
+    outs[2] = -d0*dir[0]+e0*(1-origin[0]) + d1*dir[0]+e1*(origin[0]);
+    outs[1] = -c0*dir[0] + d0*(1-origin[0]) + c1*dir[0] + d1*(origin[0]);
+    outs[0] = c0*(1-origin[0]) + c1*(origin[0]);
+}
+
+__device__ __inline__ void calc_surface_grad_01(
+    const float* __restrict__ origin,
+    const float* __restrict__ dir,
+    float* __restrict__ const grad_fs,
+    float* __restrict__ grad_surface
+){
+    grad_surface[0b000] = 
+            grad_fs[0] * ((1-origin[0])*(1-origin[1])*(1-origin[2]))
+        + grad_fs[1] * (dir[0]*(1-origin[1])*(origin[2] - 1) + (-dir[1]*(1-origin[2]) - dir[2]*(1-origin[1]))*(1-origin[0]))
+        + grad_fs[2] * (dir[0]*(dir[1]*(1-origin[2]) + dir[2]*(1-origin[1])) + dir[1]*dir[2]*(1-origin[0]))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b001] = 
+            grad_fs[0] * ((origin[2])*(1-origin[0])*(1-origin[1])) 
+        + grad_fs[1] * (dir[0]*(-origin[2])*(1-origin[1]) + (-dir[1]*(origin[2]) + dir[2]*(1-origin[1]))*(1-origin[0]))
+        + grad_fs[2] * (dir[0]*(dir[1]*(origin[2]) - dir[2]*(1-origin[1])) - dir[1]*dir[2]*(1-origin[0]))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b010] = 
+            grad_fs[0] * ((origin[1])*(1-origin[0])*(1-origin[2])) 
+        + grad_fs[1] * (dir[0]*(-origin[1])*(1-origin[2]) + (dir[1]*(1-origin[2]) - dir[2]*(origin[1]))*(1-origin[0]))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(1-origin[2]) + dir[2]*(origin[1])) - dir[1]*dir[2]*(1-origin[0]))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b011] = 
+            grad_fs[0] * ((origin[1])*(origin[2])*(1-origin[0])) 
+        + grad_fs[1] * (dir[0]*(-origin[1])*(origin[2]) + (dir[1]*(origin[2]) + dir[2]*(origin[1]))*(1-origin[0]))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(origin[2]) - dir[2]*(origin[1])) + dir[1]*dir[2]*(1-origin[0]))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b100] = 
+            grad_fs[0] * ((origin[0])*(1-origin[1])*(1-origin[2])) 
+        + grad_fs[1] * (dir[0]*(1-origin[1])*(1-origin[2]) + (origin[0])*(-dir[1]*(1-origin[2]) - dir[2]*(1-origin[1])))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(1-origin[2]) - dir[2]*(1-origin[1])) + dir[1]*dir[2]*(origin[0]))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b101] = 
+            grad_fs[0] * ((origin[0])*(origin[2])*(1-origin[1])) 
+        + grad_fs[1] * (dir[0]*(origin[2])*(1-origin[1]) + (origin[0])*(-dir[1]*(origin[2]) + dir[2]*(1-origin[1])))
+        + grad_fs[2] * (dir[0]*(-dir[1]*(origin[2]) + dir[2]*(1-origin[1])) - dir[1]*dir[2]*(origin[0]))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b110] = 
+            grad_fs[0] * ((origin[0])*(origin[1])*(1-origin[2])) 
+        + grad_fs[1] * (dir[0]*(origin[1])*(1-origin[2]) + (origin[0])*(dir[1]*(1-origin[2]) - dir[2]*(origin[1])))
+        + grad_fs[2] * (dir[0]*(dir[1]*(1-origin[2]) - dir[2]*(origin[1])) - dir[1]*dir[2]*(origin[0]))
+        + grad_fs[3] * (-dir[0]*dir[1]*dir[2]);
+
+    grad_surface[0b111] = 
+            grad_fs[0] * ((origin[0])*(origin[1])*(origin[2])) 
+        + grad_fs[1] * (dir[0]*(origin[1])*(origin[2]) + (origin[0])*(dir[1]*(origin[2]) + dir[2]*(origin[1])))
+        + grad_fs[2] * (dir[0]*(dir[1]*(origin[2]) + dir[2]*(origin[1])) + dir[1]*dir[2]*(origin[0]))
+        + grad_fs[3] * (dir[0]*dir[1]*dir[2]);
+
+    // if (isnan(grad_surface[0b000])){
+    //     printf("!grad_fs[0]: %f\n", grad_fs[0]);
+    //     printf("grad_fs[1]: %f\n", grad_fs[1]);
+    //     printf("grad_fs[2]: %f\n", grad_fs[2]);
+    //     printf("grad_fs[3]: %f\n", grad_fs[3]);
+
+    //     printf("ray.l[0]: %f\n", ray.l[0]);
+    //     printf("ray.l[1]: %f\n", ray.l[1]);
+    //     printf("ray.l[2]: %f\n", ray.l[2]);
+
+    //     printf("ray.origin[0]: %f\n", ray.origin[0]);
+    //     printf("ray.origin[1]: %f\n", ray.origin[1]);
+    //     printf("ray.origin[2]: %f\n", ray.origin[2]);
+
+    //     printf("ray.dir[0]: %f\n", ray.dir[0]);
+    //     printf("ray.dir[1]: %f\n", ray.dir[1]);
+    //     printf("ray.dir[2]: %f\n", ray.dir[2]);
+
+    //     assert(!isnan(grad_surface[0b000]));
+    // }
+
+    ASSERT_NUM(grad_surface[0b000]);
+    ASSERT_NUM(grad_surface[0b001]);
+    ASSERT_NUM(grad_surface[0b010]);
+    ASSERT_NUM(grad_surface[0b011]);
+    ASSERT_NUM(grad_surface[0b100]);
+    ASSERT_NUM(grad_surface[0b101]);
+    ASSERT_NUM(grad_surface[0b110]);
+    ASSERT_NUM(grad_surface[0b111]);
+
+}
+
+
+
 
 
 __device__ __inline__ enum BasisType cubic_equation_solver(
@@ -1321,6 +1453,8 @@ __device__ __inline__ void calc_surface_grad(
     ASSERT_NUM(grad_surface[0b111]);
 
 }
+
+
 
 template<class data_type_t, class voxel_index_t>
 __device__ __inline__ void assign_surface_grad(

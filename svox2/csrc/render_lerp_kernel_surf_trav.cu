@@ -46,7 +46,6 @@ __device__ __inline__ void trace_ray_surf_trav(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
 
     double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
-    double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
 
     if (ray.tmin > ray.tmax) {
         out[lane_colorgrp] = (grid.background_nlayers == 0) ? opt.background_brightness : 0.f;
@@ -61,29 +60,87 @@ __device__ __inline__ void trace_ray_surf_trav(
 
     float log_transmit = 0.f;
 
-    int32_t last_voxel[] = {-1,-1,-1};
+    // int32_t last_voxel[] = {-1,-1,-1};
+    int32_t voxel_l[] = {-1,-1,-1};
+
+    int32_t next_voxel[3];
+#pragma unroll 3
+    for (int j = 0; j < 3; ++j) {
+        next_voxel[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+        next_voxel[j] = min(max(next_voxel[j], 0), grid.size[j] - 2);
+    }
+
+    // if (lane_id==0){
+    //     printf("next_voxel: [%d, %d, %d]\n", next_voxel[0], next_voxel[1], next_voxel[2]);
+    // }
+
 
     while (t <= ray.tmax) {
-        int32_t voxel_l[3];
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
-            voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
-            voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
+
+        voxel_l[0] = next_voxel[0];
+        voxel_l[1] = next_voxel[1];
+        voxel_l[2] = next_voxel[2];
+
+        // Find close and far intersections between ray and voxel
+        int32_t const close_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+            ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+            ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+        };
+        int32_t const far_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+            ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+            ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+        };
+
+        // threshold t_close by 0.f to prevent cases where camera origin is within the voxel
+        float const t_close = max(max(
+            max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+            (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]), 0.f);
+        
+        float const t_fars [] = {
+            (static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0],
+            (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1],
+            (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]
+            };
+
+        float const t_far = min(min(t_fars[0], t_fars[1]), t_fars[2]);
+
+        t = t_far;
+
+        
+
+        if (t_far == t_fars[0]){
+            next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
+            if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
+        }else if (t_far == t_fars[1]){
+            next_voxel[1] += (ray.dir[1] > 0.f) ?  1 : -1;
+            if ((next_voxel[1] < 0) || (next_voxel[1] >= grid.size[1]-1)) t = ray.tmax + 1.f;
+        }else{
+            next_voxel[2] += (ray.dir[2] > 0.f) ?  1 : -1;
+            if ((next_voxel[2] < 0) || (next_voxel[2] >= grid.size[2]-1)) t = ray.tmax + 1.f;
         }
+
+        // if (lane_id==0){
+        //     printf("t_fars: [%f, %f, %f]\n", t_fars[0], t_fars[1], t_fars[2]);
+        //     printf("t_far: [%f]\n", t_far);
+        //     printf("next_voxel: [%d, %d, %d]\n", next_voxel[0], next_voxel[1], next_voxel[2]);
+        // }
+        
 
         // if ((voxel_l[0] == 27) && (voxel_l[1] == 13) && (voxel_l[2] == 46)){
         //     printf("found! \n");
         // }
         
 
-        if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
-            // const float skip = compute_skip_dist(ray,
-            //             grid.links, grid.stride_x,
-            //             grid.size[2], 0);
+        // if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
+        //     // const float skip = compute_skip_dist(ray,
+        //     //             grid.links, grid.stride_x,
+        //     //             grid.size[2], 0);
 
-            t += opt.step_size;
-            continue;
-        }
+        //     t += opt.step_size;
+        //     continue;
+        // }
 
         int const offx = grid.stride_x, offy = grid.size[2];
         const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
@@ -97,13 +154,13 @@ __device__ __inline__ void trace_ray_surf_trav(
             //             grid.links, grid.stride_x,
             //             grid.size[2], 0);
 
-            t += opt.step_size;
+            // t += opt.step_size;
             continue;
         }
 
-        last_voxel[0] = voxel_l[0];
-        last_voxel[1] = voxel_l[1];
-        last_voxel[2] = voxel_l[2];
+        // last_voxel[0] = voxel_l[0];
+        // last_voxel[1] = voxel_l[1];
+        // last_voxel[2] = voxel_l[2];
 
 
         // check minimal of alpha raw
@@ -119,9 +176,13 @@ __device__ __inline__ void trace_ray_surf_trav(
                 //             grid.links, grid.stride_x,
                 //             grid.size[2], 0);
 
-                t += opt.step_size;
+                // t += opt.step_size;
                 continue;
             }
+
+
+
+        double const new_origin[] = {ray.origin[0] + t_close*ray.dir[0], ray.origin[1] + t_close*ray.dir[1], ray.origin[2] + t_close*ray.dir[2]};
 
         // find intersections
         double const surface[8] = {
@@ -136,7 +197,9 @@ __device__ __inline__ void trace_ray_surf_trav(
         };
 
         double fs[4];
-        surface_to_cubic_equation(surface, ray_origin_d, ray_dir_d, voxel_l, fs);
+        double const new_norm_origin[] = {new_origin[0] - voxel_l[0], new_origin[1] - voxel_l[1], new_origin[2] - voxel_l[2]};
+        // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
+        surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
         // only supports single level set!
         const int level_set_num = 1;
@@ -155,9 +218,8 @@ __device__ __inline__ void trace_ray_surf_trav(
 
 
             ////////////// CUBIC ROOT SOLVING //////////////
-            // float const eps = 1e-8;
-            // float const eps_double = 1e-10;
             double st[3] = {-1, -1, -1}; // sample t
+            // note that it's now distance from new origin to intersections
 
             if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
                 // only solve for cubic if we know there is a root
@@ -182,7 +244,7 @@ __device__ __inline__ void trace_ray_surf_trav(
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
                     // assert(!isnan(st[j]));
-                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], static_cast<float>(new_origin[k])); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                     ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
                 }
@@ -245,25 +307,6 @@ __device__ __inline__ void trace_ray_surf_trav(
 
                 // https://math.stackexchange.com/questions/967268/finding-the-closest-distance-between-a-point-a-curve
                 
-
-                // first find middle point of the ray in the voxel
-                int32_t const close_plane[] = {
-                    ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
-                    ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
-                    ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
-                };
-                int32_t const far_plane[] = {
-                    ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
-                    ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
-                    ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
-                };
-
-                float const t_close = max(
-                    max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
-                    (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]);
-                float const t_far = min(
-                    min((static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1]),
-                    (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]);
 
 
 
@@ -369,7 +412,7 @@ __device__ __inline__ void trace_ray_surf_trav(
             break;
         }
 
-        t += opt.step_size;
+        // t += opt.step_size;
 
     }
 
@@ -837,7 +880,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim; // rgb channel id
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim)); // mask for RGB channels of same basis
     double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
-    double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
+    // double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
 
     float accum = fmaf(color_cache[0], grad_output[0],
                       fmaf(color_cache[1], grad_output[1],
@@ -863,23 +906,60 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     float log_transmit = 0.f;
 
     // remat samples. Needed because individual rgb/sigma are not stored during forward pass
-    int32_t last_voxel[] = {-1,-1,-1};
+    // int32_t last_voxel[] = {-1,-1,-1};
+    int32_t voxel_l[] = {-1,-1,-1};
+
+    int32_t next_voxel[3];
+#pragma unroll 3
+    for (int j = 0; j < 3; ++j) {
+        next_voxel[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+        next_voxel[j] = min(max(next_voxel[j], 0), grid.size[j] - 2);
+    }
 
     while (t <= ray.tmax) {
-        int32_t voxel_l[3];
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
-            voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
-            voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
-        }
 
-        if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
-            // const float skip = compute_skip_dist(ray,
-            //             grid.links, grid.stride_x,
-            //             grid.size[2], 0);
+        voxel_l[0] = next_voxel[0];
+        voxel_l[1] = next_voxel[1];
+        voxel_l[2] = next_voxel[2];
 
-                t += opt.step_size;
-                continue;
+        // Find close and far intersections between ray and voxel
+        int32_t const close_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+            ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+            ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+        };
+        int32_t const far_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+            ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+            ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+        };
+
+        // threshold t_close by 0.f to prevent cases where camera origin is within the voxel
+        float const t_close = max(max(
+            max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+            (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]), 0.f);
+        
+        float const t_fars [] = {
+            (static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0],
+            (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1],
+            (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]
+            };
+
+        float const t_far = min(min(t_fars[0], t_fars[1]), t_fars[2]);
+
+        t = t_far;
+
+        
+
+        if (t_far == t_fars[0]){
+            next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
+            if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
+        }else if (t_far == t_fars[1]){
+            next_voxel[1] += (ray.dir[1] > 0.f) ?  1 : -1;
+            if ((next_voxel[1] < 0) || (next_voxel[1] >= grid.size[1]-1)) t = ray.tmax + 1.f;
+        }else{
+            next_voxel[2] += (ray.dir[2] > 0.f) ?  1 : -1;
+            if ((next_voxel[2] < 0) || (next_voxel[2] >= grid.size[2]-1)) t = ray.tmax + 1.f;
         }
 
         int const offx = grid.stride_x, offy = grid.size[2];
@@ -899,9 +979,9 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
             continue;
         }
         
-        last_voxel[0] = voxel_l[0];
-        last_voxel[1] = voxel_l[1];
-        last_voxel[2] = voxel_l[2];
+        // last_voxel[0] = voxel_l[0];
+        // last_voxel[1] = voxel_l[1];
+        // last_voxel[2] = voxel_l[2];
 
 
         // check minimal of alpha raw
@@ -917,10 +997,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                 //             grid.links, grid.stride_x,
                 //             grid.size[2], 0);
 
-                t += opt.step_size;
                 continue;
             }
         // if (lane_id == 0) printf("voxel_l: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+
+
+        double const new_origin[] = {ray.origin[0] + t_close*ray.dir[0], ray.origin[1] + t_close*ray.dir[1], ray.origin[2] + t_close*ray.dir[2]};
 
         // find intersections
         double const surface[8] = {
@@ -936,7 +1018,9 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
 
         double fs[4];
-        surface_to_cubic_equation(surface, ray_origin_d, ray_dir_d, voxel_l, fs);
+        double const new_norm_origin[] = {new_origin[0] - voxel_l[0], new_origin[1] - voxel_l[1], new_origin[2] - voxel_l[2]};
+        // surface_to_cubic_equation_01(surface, new_origin, ray_dir_d, voxel_l, fs);
+        surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
         // only supports single level set!
         const int level_set_num = 1;
@@ -980,8 +1064,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
                     // assert(!isnan(st[st_id]));
-                    ray.pos[k] = fmaf(st[st_id], ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
-                    ray.l[k] = voxel_l[k]; // get l
+                    ray.pos[k] = fmaf(static_cast<float>(st[st_id]), ray.dir[k], static_cast<float>(new_origin[k])); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                     ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
                 }
@@ -1136,7 +1219,10 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // grad_fs is now d_mse/d_f0123
 
                         float grad_surface[8];
-                        calc_surface_grad(ray.origin, ray.dir, ray.l, grad_fs, grad_surface);
+                        float const new_origin_f [] = {static_cast<float>(new_origin[0]), static_cast<float>(new_origin[1]), static_cast<float>(new_origin[2])}; 
+                        float const new_norm_origin_f [] = {static_cast<float>(new_norm_origin[0]), static_cast<float>(new_norm_origin[1]), static_cast<float>(new_norm_origin[2])}; 
+                        // calc_surface_grad(new_origin_f, ray.dir, ray.l, grad_fs, grad_surface);
+                        calc_surface_grad_01(new_norm_origin_f, ray.dir, grad_fs, grad_surface);
 
                         assign_surface_grad(
                             grid.links,
@@ -1165,26 +1251,6 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                 //     printf("==========\n");
                 //     printf("taking fake sample for: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
                 // }    
-
-                // first find middle point of the ray in the voxel
-                int32_t const close_plane[] = {
-                    ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
-                    ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
-                    ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
-                };
-                int32_t const far_plane[] = {
-                    ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
-                    ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
-                    ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
-                };
-
-                float const t_close = max(
-                    max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
-                    (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]);
-                float const t_far = min(
-                    min((static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1]),
-                    (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]);
-
 
 
                 if ((t_far - t_close) > opt.surf_fake_sample_min_vox_len){
@@ -1464,7 +1530,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         if (_EXP(log_transmit) < opt.stop_thresh) {
             break;
         }
-        t += opt.step_size;
+        // t += opt.step_size;
     }
 
 
