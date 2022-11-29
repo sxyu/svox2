@@ -270,6 +270,14 @@ def setup_train_conf(return_parpser=False):
                     help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 
+    group.add_argument('--alpha_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
+    group.add_argument('--lr_alpha', type=float, default=3e1, help='SGD/rmsprop lr for alpha (surface optimization)')
+    group.add_argument('--lr_alpha_final', type=float, default=5e-2)
+    group.add_argument('--lr_alpha_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_alpha_delay_steps', type=lambda x: int(float(x)), default=15000,
+                    help="Reverse cosine steps (0 means disable)")
+    group.add_argument('--lr_alpha_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+
 
     group.add_argument('--surface_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Surface optimizer")
     group.add_argument('--lr_surface', type=float, default=3e1, help='SGD/rmsprop lr for surface')
@@ -416,6 +424,7 @@ def setup_train_conf(return_parpser=False):
                         help='Use Pytorch version of surface normal regularization')
     # Foreground TV
     group.add_argument('--lambda_tv', type=float, default=1e-5)
+    group.add_argument('--lambda_tv_alpha', type=float, default=1e-5)
     group.add_argument('--lambda_tv_surface', type=float, default=0)
     group.add_argument('--tv_sparsity', type=float, default=0.01)
     group.add_argument('--alpha_lap_sparsity', type=float, default=0.01)
@@ -450,6 +459,9 @@ def setup_train_conf(return_parpser=False):
                         0.0,
                         help="Weight for sparsity loss as in SNeRG/PlenOctrees " +
                             "(but applied on the ray)")
+    group.add_argument('--lambda_sparsity_alpha', type=float, default=
+                        0.0,
+                        help="Weight for sparsity loss on log alpha. Used for surface optimization")
     group.add_argument('--lambda_beta', type=float, default=
                         0.0,
                         help="Weight for beta distribution sparsity loss as in neural volumes")

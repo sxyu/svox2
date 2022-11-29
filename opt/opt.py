@@ -196,6 +196,8 @@ ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
+lr_alpha_func = get_expon_lr_func(args.lr_alpha, args.lr_alpha_final, args.lr_alpha_delay_steps,
+                                  args.lr_alpha_delay_mult, args.lr_alpha_decay_steps)
 lr_surface_func = get_expon_lr_func(args.lr_surface, args.lr_surface_final, args.lr_surface_delay_steps,
                                   args.lr_surface_delay_mult, args.lr_surface_decay_steps)
 lr_fake_sample_std_func = get_expon_lr_func(args.lr_fake_sample_std, args.lr_fake_sample_std_final, args.lr_fake_sample_std_delay_steps,
@@ -411,6 +413,7 @@ while True:
             if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
                 grid.density_data.data[:] = args.init_sigma
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
+            lr_alpha = lr_alpha_func(gstep_id)
             lr_surface = lr_surface_func(gstep_id) * lr_surface_factor
             lr_fake_sample_std = lr_fake_sample_std_func(gstep_id) * lr_fake_sample_std_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
@@ -419,6 +422,7 @@ while True:
             lr_color_bg = lr_color_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             if not args.lr_decay:
                 lr_sigma = args.lr_sigma * lr_sigma_factor
+                lr_alpha = args.lr_alpha
                 lr_surface = args.lr_surface * lr_surface_factor
                 lr_sh = args.lr_sh * lr_sh_factor
                 lr_basis = args.lr_basis * lr_basis_factor
@@ -487,7 +491,7 @@ while True:
             else:
                 out = grid.volume_render_fused(rays, rgb_gt,
                         beta_loss=args.lambda_beta,
-                        sparsity_loss=args.lambda_sparsity,
+                        sparsity_loss=args.lambda_sparsity if (grid.surface_data is None or no_surface) else args.lambda_sparsity_alpha,
                         fused_surf_norm_reg_scale = lambda_surf_normal_loss if args.fused_surf_norm_reg else 0.0,
                         fused_surf_norm_reg_con_check = not args.no_surf_norm_con_check,
                         fused_surf_norm_reg_ignore_empty = args.surf_norm_reg_ignore_empty,
@@ -540,6 +544,7 @@ while True:
                     stats[stat_name] = 0.0
                 summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
                 summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
+                summary_writer.add_scalar("lr_alpha", lr_alpha, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
                 summary_writer.add_scalar("lambda_surf_normal_loss", lambda_surf_normal_loss, global_step=gstep_id)
                 if torch.is_tensor(grid.fake_sample_std):
@@ -568,13 +573,22 @@ while True:
             #          sparsity_file.write(f"{gstep_id} {nz}\n")
 
             # Apply TV/Sparsity regularizers
-            if args.lambda_tv > 0.0:
-                #  with Timing("tv_inpl"):
-                grid.inplace_tv_grad(grid.density_data.grad,
-                        scaling=args.lambda_tv,
-                        sparse_frac=args.tv_sparsity,
-                        ndc_coeffs=dset.ndc_coeffs,
-                        contiguous=args.tv_contiguous)
+            if (grid.surface_data is None or no_surface):
+                # TV on sigma
+                if args.lambda_tv > 0.0:
+                    grid.inplace_tv_grad(grid.density_data.grad,
+                            scaling=args.lambda_tv,
+                            sparse_frac=args.tv_sparsity,
+                            ndc_coeffs=dset.ndc_coeffs,
+                            contiguous=args.tv_contiguous)
+            else:
+                # TV on alpha
+                if args.lambda_tv_alpha > 0.0:
+                    grid.inplace_tv_grad(grid.density_data.grad,
+                            scaling=args.lambda_tv_alpha,
+                            sparse_frac=args.tv_sparsity,
+                            ndc_coeffs=dset.ndc_coeffs,
+                            contiguous=args.tv_contiguous)
 
             if args.lambda_alpha_lap_loss > 0.0:
                 grid.inplace_alpha_lap_grad(grid.density_data.grad,
@@ -651,7 +665,13 @@ while True:
             # Manual SGD/rmsprop step
             # with Timing('Optimize step'):
             if gstep_id >= args.lr_fg_begin_step:
-                grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
+                if grid.surface_data is None or no_surface:
+                    # optimizing sigma
+                    grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
+                else:
+                    # optimizing alpha
+                    grid.optim_density_step(lr_alpha, beta=args.rms_beta, optim=args.alpha_optim)
+                    
                 if not no_surface:
                     if gstep_id < args.surface_init_freeze + args.no_surface_init_iters:
                         grid.surface_data.grad[:] = 0.
@@ -710,9 +730,11 @@ while True:
                     if args.tv_early_only > 0:
                         print('turning off TV regularization')
                         args.lambda_tv = 0.0
+                        args.lambda_tv_alpha = 0.0
                         args.lambda_tv_sh = 0.0
                     elif args.tv_decay != 1.0:
                         args.lambda_tv *= args.tv_decay
+                        args.lambda_tv_alpha *= args.tv_decay
                         args.lambda_tv_sh *= args.tv_decay
 
                     reso_id += 1
