@@ -3656,7 +3656,7 @@ class SparseGrid(nn.Module):
     def resample_surface(
         self,
         reso: Union[int, List[int]],
-        alpha_thresh: float = 5.0,
+        alpha_thresh: float = 1e-6,
         weight_thresh: float = 0.01,
         dilate: int = 2,
         cameras: Optional[List[Camera]] = None,
@@ -3664,7 +3664,8 @@ class SparseGrid(nn.Module):
         accelerate: bool=True,
         weight_render_stop_thresh: float = 0.2, # SHOOT, forgot to turn this off for main exps..
         max_elements:int=0,
-        batch_size:int=720720
+        batch_size:int=720720,
+        alpha_empty_val:float = -20. 
     ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -3733,10 +3734,10 @@ class SparseGrid(nn.Module):
             all_sample_vals_density = []
             print('Pass 1/2 (density)')
             for i in tqdm(range(0, len(points), batch_size)):
-                sample_vals_density, _ = self.sample(
+                sample_vals_density = _C.sample_grid_raw_alpha(
+                    self._to_cpp(grid_coords=True),
                     points[i : i + batch_size],
-                    grid_coords=True,
-                    want_colors=False
+                    alpha_empty_val
                 )
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
@@ -3800,6 +3801,8 @@ class SparseGrid(nn.Module):
             sample_vals_density = sample_vals_density[sample_vals_mask]
             cnz = torch.count_nonzero(sample_vals_mask).item()
 
+            print(f'{cnz / sample_vals_mask.numel()} of the grids are kept!')
+
             # Now we can get the colors for the sparse points
             points = points[sample_vals_mask]
             print('Pass 2/2 (color), eval', cnz, 'sparse pts')
@@ -3815,7 +3818,7 @@ class SparseGrid(nn.Module):
                 all_sample_vals_surf.append(sample_vals_surf)
 
             sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
-            sample_vals_surf = torch.cat(all_sample_vals_surf, dim=0) if len(all_sample_vals_surf) else torch.empty_like(self.surf_data[:0])
+            sample_vals_surf = torch.cat(all_sample_vals_surf, dim=0) if len(all_sample_vals_surf) else torch.empty_like(self.surface_data[:0])
             del self.density_data
             del self.surface_data
             del self.sh_data
