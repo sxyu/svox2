@@ -57,6 +57,7 @@ if args.surface_type is None:
     args.surface_type = 'none'
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
+assert args.lr_alpha_final <= args.lr_alpha, "lr_alpha must be >= lr_alpha_final"
 assert args.lr_sh_final <= args.lr_sh, "lr_sh must be >= lr_sh_final"
 assert args.lr_basis_final <= args.lr_basis, "lr_basis must be >= lr_basis_final"
 
