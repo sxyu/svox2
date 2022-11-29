@@ -108,8 +108,6 @@ __device__ __inline__ void trace_ray_surf_trav(
 
         t = t_far;
 
-        
-
         if (t_far == t_fars[0]){
             next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
             if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
@@ -223,7 +221,7 @@ __device__ __inline__ void trace_ray_surf_trav(
 
             if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
                 // only solve for cubic if we know there is a root
-                cubic_equation_solver(
+                cubic_equation_solver_vieta(
                     fs[0] - lv_set, fs[1], fs[2], fs[3],
                     1e-8, // float eps
                     1e-10, // double eps
@@ -294,7 +292,7 @@ __device__ __inline__ void trace_ray_surf_trav(
             }
 
 
-
+            ////// FAKE SAMPLEING //////
             if ((!has_sample) && (opt.surf_fake_sample)){
                 // there is no intersection between ray and surface
                 // take fake sample if allowed
@@ -402,7 +400,6 @@ __device__ __inline__ void trace_ray_surf_trav(
                 }
 
                 
-
             }
 
         }
@@ -446,23 +443,63 @@ __device__ __inline__ void trace_ray_expected_term(
     float log_transmit = 0.f;
     // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
 
-    int32_t last_voxel[] = {-1,-1,-1};
+    // int32_t last_voxel[] = {-1,-1,-1};
+    int32_t voxel_l[] = {-1,-1,-1};
+
+    int32_t next_voxel[3];
+#pragma unroll 3
+    for (int j = 0; j < 3; ++j) {
+        next_voxel[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+        next_voxel[j] = min(max(next_voxel[j], 0), grid.size[j] - 2);
+    }
+
+    // if (lane_id==0){
+    //     printf("next_voxel: [%d, %d, %d]\n", next_voxel[0], next_voxel[1], next_voxel[2]);
+    // }
+
 
     while (t <= ray.tmax) {
-        int32_t voxel_l[3];
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
-            voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
-            voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
-        }
 
-        if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
-            // const float skip = compute_skip_dist(ray,
-            //             grid.links, grid.stride_x,
-            //             grid.size[2], 0);
+        voxel_l[0] = next_voxel[0];
+        voxel_l[1] = next_voxel[1];
+        voxel_l[2] = next_voxel[2];
 
-            t += opt.step_size;
-            continue;
+        // Find close and far intersections between ray and voxel
+        int32_t const close_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+            ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+            ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+        };
+        int32_t const far_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+            ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+            ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+        };
+
+        // threshold t_close by 0.f to prevent cases where camera origin is within the voxel
+        float const t_close = max(max(
+            max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+            (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]), 0.f);
+        
+        float const t_fars [] = {
+            (static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0],
+            (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1],
+            (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]
+            };
+
+        float const t_far = min(min(t_fars[0], t_fars[1]), t_fars[2]);
+
+        t = t_far;
+
+        if (t_far == t_fars[0]){
+            next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
+            if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
+        }else if (t_far == t_fars[1]){
+            next_voxel[1] += (ray.dir[1] > 0.f) ?  1 : -1;
+            if ((next_voxel[1] < 0) || (next_voxel[1] >= grid.size[1]-1)) t = ray.tmax + 1.f;
+        }else{
+            next_voxel[2] += (ray.dir[2] > 0.f) ?  1 : -1;
+            if ((next_voxel[2] < 0) || (next_voxel[2] >= grid.size[2]-1)) t = ray.tmax + 1.f;
         }
 
         int const offx = grid.stride_x, offy = grid.size[2];
@@ -477,13 +514,10 @@ __device__ __inline__ void trace_ray_expected_term(
             //             grid.links, grid.stride_x,
             //             grid.size[2], 0);
 
-            t += opt.step_size;
             continue;
         }
 
-        last_voxel[0] = voxel_l[0];
-        last_voxel[1] = voxel_l[1];
-        last_voxel[2] = voxel_l[2];
+        double const new_origin[] = {ray.origin[0] + t_close*ray.dir[0], ray.origin[1] + t_close*ray.dir[1], ray.origin[2] + t_close*ray.dir[2]};
 
         // find intersections
         double const surface[8] = {
@@ -498,12 +532,12 @@ __device__ __inline__ void trace_ray_expected_term(
         };
 
         double fs[4];
-        surface_to_cubic_equation(surface, ray_origin_d, ray_dir_d, voxel_l, fs);
+        double const new_norm_origin[] = {new_origin[0] - voxel_l[0], new_origin[1] - voxel_l[1], new_origin[2] - voxel_l[2]};
+        // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
+        surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
         // only supports single level set!
         const int level_set_num = 1;
-        
-
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
         for (int i=0; i < level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
@@ -521,7 +555,7 @@ __device__ __inline__ void trace_ray_expected_term(
             ////////////// CUBIC ROOT SOLVING //////////////
             double st[3] = {-1, -1, -1}; // sample t
 
-            cubic_equation_solver(
+            cubic_equation_solver_vieta(
                 fs[0] - lv_set, fs[1], fs[2], fs[3],
                 1e-8, // float eps
                 1e-10, // double eps
@@ -539,7 +573,7 @@ __device__ __inline__ void trace_ray_expected_term(
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
                     // assert(!isnan(st[j]));
-                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], static_cast<float>(new_origin[k])); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = voxel_l[k]; // get l
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                     ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
@@ -566,7 +600,7 @@ __device__ __inline__ void trace_ray_expected_term(
                     const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
                     log_transmit -= pcnt; // log_trans = sum(log(1-alpha)) = log(prod(1-alpha))
                     // log_transmit is now T_{i+1}
-                    outv += weight * st[j] / opt.step_size * ray.world_step;  
+                    outv += weight * (st[j] + t_close) / opt.step_size * ray.world_step;  
                 }
             }
 
@@ -576,8 +610,6 @@ __device__ __inline__ void trace_ray_expected_term(
             log_transmit = -1e3f;
             break;
         }
-
-        t += opt.step_size;
 
     }
 
@@ -601,23 +633,63 @@ __device__ __inline__ void trace_ray_sigma_thresh(
 
     float t = ray.tmin;
 
-    int32_t last_voxel[] = {-1,-1,-1};
+    // int32_t last_voxel[] = {-1,-1,-1};
+    int32_t voxel_l[] = {-1,-1,-1};
+
+    int32_t next_voxel[3];
+#pragma unroll 3
+    for (int j = 0; j < 3; ++j) {
+        next_voxel[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+        next_voxel[j] = min(max(next_voxel[j], 0), grid.size[j] - 2);
+    }
+
+    // if (lane_id==0){
+    //     printf("next_voxel: [%d, %d, %d]\n", next_voxel[0], next_voxel[1], next_voxel[2]);
+    // }
+
 
     while (t <= ray.tmax) {
-        int32_t voxel_l[3];
-#pragma unroll 3
-        for (int j = 0; j < 3; ++j) {
-            voxel_l[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
-            voxel_l[j] = min(max(voxel_l[j], 0), grid.size[j] - 2);
-        }
 
-        if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
-            // const float skip = compute_skip_dist(ray,
-            //             grid.links, grid.stride_x,
-            //             grid.size[2], 0);
+        voxel_l[0] = next_voxel[0];
+        voxel_l[1] = next_voxel[1];
+        voxel_l[2] = next_voxel[2];
 
-            t += opt.step_size;
-            continue;
+        // Find close and far intersections between ray and voxel
+        int32_t const close_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+            ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+            ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+        };
+        int32_t const far_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+            ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+            ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+        };
+
+        // threshold t_close by 0.f to prevent cases where camera origin is within the voxel
+        float const t_close = max(max(
+            max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+            (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]), 0.f);
+        
+        float const t_fars [] = {
+            (static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0],
+            (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1],
+            (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]
+            };
+
+        float const t_far = min(min(t_fars[0], t_fars[1]), t_fars[2]);
+
+        t = t_far;
+
+        if (t_far == t_fars[0]){
+            next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
+            if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
+        }else if (t_far == t_fars[1]){
+            next_voxel[1] += (ray.dir[1] > 0.f) ?  1 : -1;
+            if ((next_voxel[1] < 0) || (next_voxel[1] >= grid.size[1]-1)) t = ray.tmax + 1.f;
+        }else{
+            next_voxel[2] += (ray.dir[2] > 0.f) ?  1 : -1;
+            if ((next_voxel[2] < 0) || (next_voxel[2] >= grid.size[2]-1)) t = ray.tmax + 1.f;
         }
 
         int const offx = grid.stride_x, offy = grid.size[2];
@@ -632,13 +704,10 @@ __device__ __inline__ void trace_ray_sigma_thresh(
             //             grid.links, grid.stride_x,
             //             grid.size[2], 0);
 
-            t += opt.step_size;
             continue;
         }
 
-        last_voxel[0] = voxel_l[0];
-        last_voxel[1] = voxel_l[1];
-        last_voxel[2] = voxel_l[2];
+        double const new_origin[] = {ray.origin[0] + t_close*ray.dir[0], ray.origin[1] + t_close*ray.dir[1], ray.origin[2] + t_close*ray.dir[2]};
 
         // find intersections
         double const surface[8] = {
@@ -653,11 +722,12 @@ __device__ __inline__ void trace_ray_sigma_thresh(
         };
 
         double fs[4];
-        surface_to_cubic_equation(surface, ray_origin_d, ray_dir_d, voxel_l, fs);
+        double const new_norm_origin[] = {new_origin[0] - voxel_l[0], new_origin[1] - voxel_l[1], new_origin[2] - voxel_l[2]};
+        // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
+        surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
         // only supports single level set!
         const int level_set_num = 1;
-        
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
         for (int i=0; i < level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
@@ -667,7 +737,7 @@ __device__ __inline__ void trace_ray_sigma_thresh(
             ////////////// CUBIC ROOT SOLVING //////////////
             double st[3] = {-1, -1, -1}; // sample t
 
-            cubic_equation_solver(
+            cubic_equation_solver_vieta(
                 fs[0] - lv_set, fs[1], fs[2], fs[3],
                 1e-8, // float eps
                 1e-10, // double eps
@@ -685,7 +755,7 @@ __device__ __inline__ void trace_ray_sigma_thresh(
 #pragma unroll 3
                 for (int k=0; k < 3; ++k){
                     // assert(!isnan(st[j]));
-                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], static_cast<float>(new_origin[k])); // fmaf(x,y,z) = (x*y)+z
                     ray.l[k] = voxel_l[k]; // get l
                     ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                     ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
@@ -706,13 +776,12 @@ __device__ __inline__ void trace_ray_sigma_thresh(
                         0));
 
                 if (alpha > sigma_thresh) {
-                    *out = (st[j] / opt.step_size) * ray.world_step;
+                    *out = ((st[j]+t_close) / opt.step_size) * ray.world_step;
                     return;
                 }
             }
 
         }
-        t += opt.step_size;
     }
     *out = 0.f;
 }
@@ -803,7 +872,7 @@ __device__ __inline__ void trace_ray_extract_pt(
             ////////////// CUBIC ROOT SOLVING //////////////
             double st[3] = {-1, -1, -1}; // sample t
 
-            cubic_equation_solver(
+            cubic_equation_solver_vieta(
                 fs[0] - lv_set, fs[1], fs[2], fs[3],
                 1e-8, // float eps
                 1e-10, // double eps
@@ -1042,7 +1111,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
             if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
                 // only solve for cubic if we know there is a root
-                cubic_root_type = cubic_equation_solver(
+                cubic_root_type = cubic_equation_solver_vieta(
                     fs[0], fs[1], fs[2], fs[3],
                     1e-8, // float eps
                     1e-10, // double eps
@@ -1217,6 +1286,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         float grad_fs[4] = {grad_st, grad_st, grad_st, grad_st};
                         calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
                         // grad_fs is now d_mse/d_f0123
+
 
                         float grad_surface[8];
                         float const new_origin_f [] = {static_cast<float>(new_origin[0]), static_cast<float>(new_origin[1]), static_cast<float>(new_origin[2])}; 

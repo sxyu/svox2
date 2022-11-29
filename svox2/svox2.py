@@ -782,6 +782,17 @@ class SparseGrid(nn.Module):
                 #     # surface_data[links[neg_ids].long(), 0] = rs[neg_ids] * -1.
                 #     surface_data[links[pos_ids].long(), 0] = rs[pos_ids] - (floors[pos_ids] + 0.5)
                 #     surface_data[links[neg_ids].long(), 0] = rs[neg_ids] - (floors[neg_ids] + 1.5)
+            elif surface_init == 'single_sphere':
+                surface_data = torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+                coords = torch.meshgrid(torch.arange(reso[0]), torch.arange(reso[1]), torch.arange(reso[2]))
+                coords = torch.stack(coords).view(3, -1).T
+                grid_center = (torch.tensor(reso)) / 2
+                rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
+
+                links = self.links[coords[:, 0], coords[:, 1], coords[:, 2]]
+                surface_data[links.long(), 0] = rs[torch.arange(rs.shape[0])] - (torch.norm(grid_center, keepdim=True).to(device) / 2.)
+
+                surface_data = surface_data * 10. / rs.max()
 
 
             elif surface_init == 'outwards':
@@ -2226,52 +2237,83 @@ class SparseGrid(nn.Module):
                     ret[x < 0] = torch.pow(torch.clamp_min_(-x[x < 0], eps), 1/3.) * -1
                     return ret
 
-                f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
-                g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
-                h = ((g**2.) / 4. + (f**3.) / 27.) 
+                # f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
+                # g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
+                # h = ((g**2.) / 4. + (f**3.) / 27.) 
 
-                # all three roots are real and equal
-                _mask = ((f == 0) & (g == 0) & (h == 0))
-                ts[cubic_ids[_mask], 0] = cond_cbrt(d[_mask]/a[_mask])
+                # # all three roots are real and equal
+                # _mask = ((f == 0) & (g == 0) & (h == 0))
+                # ts[cubic_ids[_mask], 0] = cond_cbrt(d[_mask]/a[_mask])
+
+                # # all three roots are real 
+                # _mask = (h <= 0) & (~((f == 0) & (g == 0) & (h == 0)))
+                # _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+                
+                # _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
+                # _j = _i ** (1 / 3.)
+                # eps = 1e-10
+                # _k = torch.acos(torch.clamp(-(_g / (2 * _i)), -1+eps, 1-eps))              
+                # # _k = torch.acos(-(_g / (2 * _i)))        
+                # _L = _j * -1                              
+                # _M = torch.cos(_k / 3.)       
+                # _N = np.sqrt(3) * torch.sin(_k / 3.)    
+                # _P = (_b / (3. * _a)) * -1
+
+                # ts[cubic_ids[_mask], 0] = _L * (_M + _N) + _P
+                # ts[cubic_ids[_mask], 1] = _L * (_M - _N) + _P
+                # ts[cubic_ids[_mask], 2] = -2 *_L * _M + _P # 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
+
+                # # only one root is real
+                # _mask = (h > 0)
+                # _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+
+                # # _R = -(_g.detach().clone() / 2.) + torch.sqrt(_h)    
+                # # _S = cond_cbrt(_R)
+
+                # # _T = -(_g.detach().clone() / 2.) - torch.sqrt(_h)
+                # # _U = cond_cbrt(_T).detach().clone()
+
+                # _R = -(_g / 2.) + torch.sqrt(_h)    
+                # _S = cond_cbrt(_R)#.detach().clone()
+
+                # _T = -(_g / 2.) - torch.sqrt(_h)
+                # _U = cond_cbrt(_T)
+
+                # ts[cubic_ids[_mask], 0] = (_S + _U) - (_b / (3. * _a))
+                # # # the rest two are complex roots:
+                # # ts[cubic_ids[_mask], 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
+                # # ts[cubic_ids[_mask], 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
+
+                Q = ((b**2) - 3.*c) / 9.
+                R = (2.*(b**3) - 9.*b*c + 27.*d) /54.
+
+                # # all three roots are real and equal
+                # _mask1 = ((f == 0) & (g == 0) & (h == 0))
+                # ts[cubic_ids[_mask1], 0] = cond_cbrt(d[_mask1]/a[_mask1])
 
                 # all three roots are real 
-                _mask = (h <= 0) & (~((f == 0) & (g == 0) & (h == 0)))
-                _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
-                
-                _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
-                _j = _i ** (1 / 3.)
-                eps = 1e-10
-                _k = torch.acos(torch.clamp(-(_g / (2 * _i)), -1+eps, 1-eps))              
-                # _k = torch.acos(-(_g / (2 * _i)))        
-                _L = _j * -1                              
-                _M = torch.cos(_k / 3.)       
-                _N = np.sqrt(3) * torch.sin(_k / 3.)    
-                _P = (_b / (3. * _a)) * -1
+                _mask2 = (R)**2 < (Q)**3
+                _b, _Q, _R = b[_mask2], Q[_mask2], R[_mask2]
 
-                ts[cubic_ids[_mask], 0] = _L * (_M + _N) + _P
-                ts[cubic_ids[_mask], 1] = _L * (_M - _N) + _P
-                ts[cubic_ids[_mask], 2] = -2 *_L * _M + _P # 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
+
+                eps = 1e-10
+                # theta = torch.acos(torch.clamp(_R / torch.sqrt((_Q)**3), -1+eps, 1-eps))
+                theta = torch.acos((_R / torch.sqrt((_Q)**3)))
+                
+                ts[cubic_ids[_mask2], 0] = -2. * torch.sqrt(_Q) * torch.cos(theta/3.) - _b/3.
+                ts[cubic_ids[_mask2], 1] = -2. * torch.sqrt(_Q) * torch.cos((theta - 2.*torch.pi)/3.) - _b/3.
+                ts[cubic_ids[_mask2], 2] = -2. * torch.sqrt(_Q) * torch.cos((theta + 2.*torch.pi)/3.) - _b/3.
 
                 # only one root is real
-                _mask = (h > 0)
-                _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
+                _mask3 = ~_mask2
+                __b, __Q, __R = b[_mask3], Q[_mask3], R[_mask3]
 
-                # _R = -(_g.detach().clone() / 2.) + torch.sqrt(_h)    
-                # _S = cond_cbrt(_R)
+                # A = -torch.sign(__R) * (torch.abs(__R) + torch.sqrt(torch.clamp_min((__R)**2 - (__Q)**3, 1e-8))) ** (1./3.)
+                A = -torch.sign(__R) * (torch.abs(__R) + torch.sqrt(((__R)**2 - (__Q)**3))) ** (1./3.)
+                _B = __Q/A
+                _B[A== 0.] = 0.
 
-                # _T = -(_g.detach().clone() / 2.) - torch.sqrt(_h)
-                # _U = cond_cbrt(_T).detach().clone()
-
-                _R = -(_g / 2.) + torch.sqrt(_h)    
-                _S = cond_cbrt(_R)#.detach().clone()
-
-                _T = -(_g / 2.) - torch.sqrt(_h)
-                _U = cond_cbrt(_T)
-
-                ts[cubic_ids[_mask], 0] = (_S + _U) - (_b / (3. * _a))
-                # # the rest two are complex roots:
-                # ts[cubic_ids[_mask], 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
-                # ts[cubic_ids[_mask], 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
+                ts[cubic_ids[_mask3], 0] = (A+_B) - __b/3.
 
                 assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots'
                 assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
@@ -2344,7 +2386,7 @@ class SparseGrid(nn.Module):
 
 
             ts_raw = ts
-            # ts = torch.concat([ts_raw[:1].detach().clone(), ts_raw[1:2], ts_raw[2:].detach().clone()], dim=-1)
+            ts = torch.concat([ts_raw[:0].detach().clone(), ts_raw[0:1], ts_raw[1:].detach().clone()], dim=-1)
             ts = ts_raw
             samples = origins[ray_ids, :] + ts[..., None] * dirs[ray_ids, :] # [VEV * N_INTERSECT, 3]
         
@@ -2794,12 +2836,12 @@ class SparseGrid(nn.Module):
             out['rgb'].retain_grad()
             _R.retain_grad() 
             # _S.retain_grad()
-            _T.retain_grad()
-            _U.retain_grad()
-            _g.retain_grad()
-            _h.retain_grad()
-            g.retain_grad()
-            h.retain_grad()
+            # _T.retain_grad()
+            # _U.retain_grad()
+            # _g.retain_grad()
+            # _h.retain_grad()
+            # g.retain_grad()
+            # h.retain_grad()
             f3.retain_grad()
             f2.retain_grad()
             f1.retain_grad()
@@ -2826,11 +2868,11 @@ class SparseGrid(nn.Module):
             s = torch.nn.functional.mse_loss(out['rgb'], torch.zeros_like(out['rgb']))
             s.backward()
 
-            accum = torch.sum(out['rgb'] * out['rgb'].grad)
-            for i in range(alpha.shape[0]):
-                total_color = torch.sum(out['rgb'].grad * B_rgb[0, i])
-                accum = accum - B_weights[0, i] * total_color
-                grad_alpha = accum / (alpha[i]-1) + total_color * B_T[0,i]
+            # accum = torch.sum(out['rgb'] * out['rgb'].grad)
+            # for i in range(alpha.shape[0]):
+            #     total_color = torch.sum(out['rgb'].grad * B_rgb[0, i])
+            #     accum = accum - B_weights[0, i] * total_color
+            #     grad_alpha = accum / (alpha[i]-1) + total_color * B_T[0,i]
 
 
             # add fused surface normal loss

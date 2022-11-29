@@ -142,3 +142,5 @@ __host__ __inline__ cudaError_t cuda_assert(
 
 #define ASSERT_NUM(num) assert(!isnan(num) && isfinite(num))
 
+#define sign(x) ((x>0.) ? 1. : -1.)
+

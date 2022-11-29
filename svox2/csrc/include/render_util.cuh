@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "data_spec_packed.cuh"
 #include "random_util.cuh"
+#define CUDART_PI               3.1415926535897931e+0
 
 namespace {
 namespace device {
@@ -1077,7 +1078,283 @@ __device__ __inline__ enum BasisType cubic_equation_solver(
 // #undef _R
 // #undef _S
 // #undef _T
-#undef _U
+// #undef _U
+
+__device__ __inline__ enum BasisType cubic_equation_solver_vieta(
+    double const f0,
+    double const f1,
+    double const f2,
+    double const f3,
+    float const eps,
+    double const eps_double,
+    double* __restrict__ outs
+){
+    if (_CLOSE_TO_ZERO(f3, eps_double)){
+        if (_CLOSE_TO_ZERO(f2, eps_double)){
+            if (_CLOSE_TO_ZERO(f1, eps_double)){
+                // no solution
+                return CUBIC_TYPE_NO_ROOT; 
+            } else {
+                // linear case
+                outs[0] = -f0 / f1;
+                // ASSERT_NUM(outs[0]);
+                return CUBIC_TYPE_LINEAR;
+            }
+        } else {
+            // polynomial case
+            // _b, _c, _d = f2[quad_mask], f1[quad_mask], f0[quad_mask]
+            double const D = _SQR(f1) - 4.0 * f2 * f0;
+            double const sqrt_D = sqrt(D);
+            if (D > 0){
+                if (f2 > 0){
+                    outs[0] = (-f1 - sqrt_D) / (2 * f2);
+                    outs[1] = (-f1 + sqrt_D) / (2 * f2);
+                }else{
+                    outs[0] = (-f1 + sqrt_D) / (2 * f2);
+                    outs[1] = (-f1 - sqrt_D) / (2 * f2);
+                }
+
+                // assert(!isnan(outs[0]));
+                // assert(!isnan(outs[1]));
+                if (_CLOSE_TO_ZERO(outs[0] - outs[1], eps_double)){
+                    // if two roots are too similiar (D==0), then just take one
+                    outs[1] = -1;
+                    return CUBIC_TYPE_POLY_ONE_R;
+                }
+                return CUBIC_TYPE_POLY;
+            }
+            return CUBIC_TYPE_NO_ROOT;
+        }
+    } else {
+        // cubic case
+        double const norm_term = f3;
+        // double const a = f3 / norm_term;
+        double const b = f2 / norm_term;
+        double const c = f1 / norm_term;
+        double const d = f0 / norm_term;
+
+        double const Q = (_SQR(b) - 3.*c) / 9.;
+        double const R = (2.*_CUBIC(b) - 9.*b*c + 27.*d) /54.;
+
+
+        if (_SQR(R) < _CUBIC(Q)){
+            // three real roots
+            double const theta = acos(R / sqrt(_CUBIC(Q)));
+
+            outs[0] = -2. * sqrt(Q) * cos(theta/3.) - b/3.;
+            outs[1] = -2. * sqrt(Q) * cos((theta - 2.*CUDART_PI)/3.) - b/3.;
+            outs[2] = -2. * sqrt(Q) * cos((theta + 2.*CUDART_PI)/3.) - b/3.;
+
+            return CUBIC_TYPE_CUBIC_THREE_R;
+        } else {
+            // only one real root
+            double const A = -sign(R) * cbrt(abs(R) + sqrt(_SQR(R) - _CUBIC(Q)));
+            double const B = (A==0.) ? 0. : Q/A;
+
+            outs[0] = (A+B) - b/3.;
+
+            return CUBIC_TYPE_CUBIC_ONE_R_;
+        }
+
+    }
+}
+
+
+__device__ __inline__ void calc_cubic_root_grad_vieta(
+    enum BasisType cubic_root_type,
+    int st_id,
+    double* __restrict__ const fs,
+    float* __restrict__ grad_fs // storing grad_st
+){
+    //////////////////////// Find Gradient of Cubic Root //////////////////////
+    if (cubic_root_type == CUBIC_TYPE_LINEAR){
+        // linear case
+        grad_fs[0] *= static_cast<float>(-1. / fs[1]);
+        grad_fs[1] *= static_cast<float>(fs[0] / _SQR(fs[1]));
+        grad_fs[2] = 0.f;
+        grad_fs[3] = 0.f;
+
+    }else if (cubic_root_type == CUBIC_TYPE_POLY_ONE_R){
+        double const D = _SQR(fs[1]) - 4. * fs[2] * fs[0];
+        double const sqrt_D = sqrt(D);
+        double const dt0_dD = 1 / (4.*fs[2]*sqrt_D);
+        grad_fs[0] *= static_cast<float>(-1/sqrt_D);
+        grad_fs[1] *= static_cast<float>(((-1) / (2*fs[2]) + (dt0_dD * 2 * fs[1])));
+        grad_fs[2] *= static_cast<float>(((fs[1] - sqrt_D) / (4*_SQR(fs[2])) + (dt0_dD * (-4) * fs[0])));
+        grad_fs[3] = 0.f;
+
+    }else if (cubic_root_type == CUBIC_TYPE_POLY){
+        double const  D = _SQR(fs[1]) - 4.0 * fs[2] * fs[0];
+        double const  sqrt_D = sqrt(D);
+        double const  sqr_f2 = _SQR(fs[2]);
+
+        #define __POLY_ROOT_GRAD_S \
+                double const dt_dD = -1 / (4*fs[2]*sqrt_D); \
+                grad_fs[0] *= static_cast<float>(1/sqrt_D); \
+                grad_fs[1] *= static_cast<float>(((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]))); \
+                grad_fs[2] *= static_cast<float>(((fs[1] + sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0])));
+
+        #define __POLY_ROOT_GRAD_L \
+                double const dt_dD = 1 / (4*fs[2]*sqrt_D); \
+                grad_fs[0] *= static_cast<float>(-1/sqrt_D); \
+                grad_fs[1] *= static_cast<float>(((-1) / (2*fs[2]) + (dt_dD * 2 * fs[1]))); \
+                grad_fs[2] *= static_cast<float>(((fs[1] - sqrt_D) / (2*sqr_f2) + (dt_dD * (-4) * fs[0]))); \
+
+        if (fs[2] > 0){
+            if (st_id == 0){
+                // st[0] = (-f1 - sqrt_D) / (2 * f2);
+                __POLY_ROOT_GRAD_S
+            }else{
+                // st[1] = (-f1 + sqrt_D) / (2 * f2);
+                __POLY_ROOT_GRAD_L
+            }
+        }else{
+            if (st_id == 0){
+                // st[0] = (-f1 + sqrt_D) / (2 * f2);
+                __POLY_ROOT_GRAD_S
+            }else{
+                // st[1] = (-f1 - sqrt_D) / (2 * f2);
+                __POLY_ROOT_GRAD_L
+            }
+        }
+        grad_fs[3] = 0.f;
+
+    }else{
+
+        double const norm_term = fs[3];
+        // double const a = f3 / norm_term;
+        double const b = fs[2] / norm_term;
+        double const c = fs[1] / norm_term;
+        double const d = fs[0] / norm_term;
+
+        double const Q = (_SQR(b) - 3.*c) / 9.;
+        double const R = (2.*_CUBIC(b) - 9.*b*c + 27.*d) /54.;
+
+        double const _DQ_Df3 = fs[1]/(3.*_SQR(fs[3])) - 2.*_SQR(fs[2])/(9*_CUBIC(fs[3]));
+        double const _DQ_Df2 = 2.*fs[2]/(9.*_SQR(fs[3]));
+        double const _DQ_Df1 = -1./(3.*fs[3]);
+        double const _DQ_Df0 = 0.;
+
+        double const _DR_Df3 = -fs[0]/(2.*_SQR(fs[3])) + fs[1]*fs[2]/(3.*_CUBIC(fs[3])) - _CUBIC(fs[2])/(9*(fs[3]*fs[3]*fs[3]*fs[3]));
+        double const _DR_Df2 = -fs[1]/(6.*_SQR(fs[3])) + _SQR(fs[2])/(9*_CUBIC(fs[3]));
+        double const _DR_Df1 = -fs[2]/(6.*_SQR(fs[3]));
+        double const _DR_Df0 = 1./(2.*fs[3]);
+
+        double const _Db_Df3 = -fs[2]/_SQR(fs[3]);
+        double const _Db_Df2 = 1./fs[3];
+        double const _Db_Df1 = 0.;
+        double const _Db_Df0 = 0.;
+
+        if (cubic_root_type == CUBIC_TYPE_CUBIC_THREE_R){
+            double const theta = acos(R / sqrt(_CUBIC(Q)));
+
+            double _Dst_DQ_;
+            double _Dst_Dtheta; 
+            double const _Dst_Db_ = -1./3.;
+
+
+            double const _Dtheta_DQ = 3.*R/(2.*Q*sqrt(1. - _SQR(R)/_CUBIC(Q))*sqrt(_CUBIC(Q)));
+            double const _Dtheta_DR = -1/(sqrt(1 - _SQR(R)/_CUBIC(Q))*sqrt(_CUBIC(Q)));
+
+
+            if (st_id == 0){
+                // st[0]
+                _Dst_DQ_ = -cos(theta/3.)/sqrt(Q);
+                _Dst_Dtheta = 2.*sqrt(Q)*sin(theta/3.)/3.; 
+            }else if (st_id == 1){
+                // st[1]
+                _Dst_DQ_ = cos(theta/3. + CUDART_PI/3.)/sqrt(Q);
+                _Dst_Dtheta = 2.*sqrt(Q)*sin(theta/3. + CUDART_PI/3.)/3.;
+            }else{
+                // st[2]
+                _Dst_DQ_ = sin(theta/3. + CUDART_PI/6.)/sqrt(Q);
+                _Dst_Dtheta =  2.*sqrt(Q)*cos(theta/3. + CUDART_PI/6.)/3.;
+            }
+
+
+
+            grad_fs[0] *= static_cast<float>(
+                _Dst_Dtheta * (_Dtheta_DQ * _DQ_Df0 
+                            +_Dtheta_DR * _DR_Df0) 
+                + _Dst_DQ_ *  _DQ_Df0
+                + _Dst_Db_ * _Db_Df0);
+
+            grad_fs[1] *= static_cast<float>(
+                _Dst_Dtheta * (_Dtheta_DQ * _DQ_Df1 
+                            +_Dtheta_DR * _DR_Df1) 
+                + _Dst_DQ_ *  _DQ_Df1
+                + _Dst_Db_ * _Db_Df1);
+
+            grad_fs[2] *= static_cast<float>(
+                _Dst_Dtheta * (_Dtheta_DQ * _DQ_Df2 
+                            +_Dtheta_DR * _DR_Df2) 
+                + _Dst_DQ_ *  _DQ_Df2
+                + _Dst_Db_ * _Db_Df2);
+
+            grad_fs[3] *= static_cast<float>(
+                _Dst_Dtheta * (_Dtheta_DQ * _DQ_Df3 
+                            +_Dtheta_DR * _DR_Df3) 
+                + _Dst_DQ_ *  _DQ_Df3
+                + _Dst_Db_ * _Db_Df3);
+
+
+            ASSERT_NUM(grad_fs[0]);
+            ASSERT_NUM(grad_fs[1]);
+            ASSERT_NUM(grad_fs[2]);
+            ASSERT_NUM(grad_fs[3]);
+
+
+        } else if (cubic_root_type == CUBIC_TYPE_CUBIC_ONE_R_){
+            double const _Dst_Db_ = -1./3.;
+            double const A = -sign(R) * cbrt(abs(R) + sqrt(_SQR(R) - _CUBIC(Q)));
+
+            double const _DA_DR = (R >= 0.) ? 
+                (-(R/(3.*sqrt(-_CUBIC(Q) + _SQR(R))) + 1./3.)/cbrt(_SQR( R + sqrt(-_CUBIC(Q) + _SQR(R)))))
+                :((R/(3.*sqrt(-_CUBIC(Q) + _SQR(R))) - 1./3.)/cbrt(_SQR(-R + sqrt(-_CUBIC(Q) + _SQR(R)))));
+
+            double const _DA_DQ = (R >= 0.) ? 
+                  (_SQR(Q)/(2.*sqrt(-_CUBIC(Q) + _SQR(R))*cbrt(_SQR( R + sqrt(-_CUBIC(Q) + _SQR(R))))))
+                :(-_SQR(Q)/(2.*sqrt(-_CUBIC(Q) + _SQR(R))*cbrt(_SQR(-R + sqrt(-_CUBIC(Q) + _SQR(R))))));
+
+            double const _DB_DA = (A==0.) ? 0. : -Q/_SQR(A);
+            double const _DB_DQ_ = (A==0.) ? 0. : 1./A;
+
+
+            // double const _Dst_DA = 1.;
+            // double const _Dst_DB = 1.;
+
+            
+            grad_fs[0] *= static_cast<float>(
+                (_DB_DA + 1.) * (_DA_DQ * _DQ_Df0 + _DA_DR * _DR_Df0)
+                + _DB_DQ_ * _DQ_Df0
+                + _Dst_Db_ * _Db_Df0);
+
+            grad_fs[1] *= static_cast<float>(
+                (_DB_DA + 1.) * (_DA_DQ * _DQ_Df1 + _DA_DR * _DR_Df1)
+                + _DB_DQ_ * _DQ_Df1
+                + _Dst_Db_ * _Db_Df1);
+
+            grad_fs[2] *= static_cast<float>(
+                (_DB_DA + 1.) * (_DA_DQ * _DQ_Df2 + _DA_DR * _DR_Df2)
+                + _DB_DQ_ * _DQ_Df2
+                + _Dst_Db_ * _Db_Df2);
+
+            grad_fs[3] *= static_cast<float>(
+                (_DB_DA + 1.) * (_DA_DQ * _DQ_Df3 + _DA_DR * _DR_Df3)
+                + _DB_DQ_ * _DQ_Df3
+                + _Dst_Db_ * _Db_Df3);
+
+
+            ASSERT_NUM(grad_fs[0]);
+            ASSERT_NUM(grad_fs[1]);
+            ASSERT_NUM(grad_fs[2]);
+            ASSERT_NUM(grad_fs[3]);
+        }
+
+    }
+
+}
+
 
 __device__ __inline__ void calc_cubic_root_grad(
     enum BasisType cubic_root_type,
@@ -1363,7 +1640,6 @@ __device__ __inline__ void calc_cubic_root_grad(
         }
 
     }
-
 
 }
 

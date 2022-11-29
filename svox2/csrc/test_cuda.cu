@@ -37,8 +37,10 @@ __global__ void test_cubic_root_grad_kernel(
     // float* __restrict__ grad_fs
     torch::PackedTensorAccessor32<double, 2, torch::RestrictPtrTraits> T_fs,
     torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> T_st_id,
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> T_grad_fs
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> T_grad_fs,
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> T_st
 ) {
+
 
     CUDA_GET_THREAD_ID(tid, int(T_fs.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5; // same as / 32, which is the WARP_SIZE
@@ -51,14 +53,24 @@ __global__ void test_cubic_root_grad_kernel(
     double* __restrict__ fs = T_fs[ray_id].data();
     const int st_id = T_st_id[ray_id];
     float* __restrict__ grad_fs = T_grad_fs[ray_id].data();
+    float* __restrict__ out_st = T_st[ray_id].data();
 
     double st[3] = {-1, -1, -1}; // sample t
-    enum BasisType const cubic_root_type = cubic_equation_solver(
+    enum BasisType const cubic_root_type = cubic_equation_solver_vieta(
         fs[0], fs[1], fs[2], fs[3],
         1e-8, // float eps
         1e-10, // double eps
         st
     );
+
+    if (ray_id == 19){
+        printf("found!\n");
+    }
+
+
+    out_st[0] = static_cast<float>(st[0]);
+    out_st[1] = static_cast<float>(st[1]);
+    out_st[2] = static_cast<float>(st[2]);
 
     if (cubic_root_type == CUBIC_TYPE_NO_ROOT){
         grad_fs[0] = 0;
@@ -82,14 +94,14 @@ __global__ void test_cubic_root_grad_kernel(
         return;
     }
 
-    calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
+    calc_cubic_root_grad_vieta(cubic_root_type, st_id, fs, grad_fs);
 }
 
 }
 
 }  // namespace device
 
-torch::Tensor test_cubic_root_grad(Tensor T_fs, Tensor T_st_ids, Tensor T_grad_fs) {
+torch::Tensor test_cubic_root_grad(Tensor T_fs, Tensor T_st_ids, Tensor T_grad_fs, Tensor T_st) {
     const auto Q = T_fs.size(0);
 
         const int cuda_n_threads = TRACE_RAY_CUDA_THREADS;
@@ -98,7 +110,8 @@ torch::Tensor test_cubic_root_grad(Tensor T_fs, Tensor T_st_ids, Tensor T_grad_f
                 T_fs.packed_accessor32<double, 2, torch::RestrictPtrTraits>(),
                 T_st_ids.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
                 // Output
-                T_grad_fs.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+                T_grad_fs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                T_st.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
 
 
     return T_grad_fs;
