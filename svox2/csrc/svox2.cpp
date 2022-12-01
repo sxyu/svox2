@@ -9,7 +9,7 @@
 using torch::Tensor;
 
 // test functions
-Tensor test_cubic_root_grad(Tensor, Tensor, Tensor, Tensor);
+Tensor test_cubic_root_grad(Tensor, Tensor, Tensor, Tensor, bool);
 
 std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor,
                                                      bool);

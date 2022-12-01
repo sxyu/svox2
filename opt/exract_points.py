@@ -97,6 +97,18 @@ parser.add_argument(
     default=False,
     help="Delete ckpt after extraction"
 )
+parser.add_argument(
+    "--debug_alpha",
+    action='store_true', 
+    default=False,
+    help="Delete ckpt after extraction"
+)
+parser.add_argument(
+    "--extract_nerf",
+    action='store_true', 
+    default=False,
+    help="Delete ckpt after extraction"
+)
 
 # Camera adjustment
 parser.add_argument('--crop',
@@ -153,6 +165,8 @@ elif args.traj_type == 'test':
         c2ws = dset.c2w.numpy()[:, :4, :4]
     else:
         test_cam_ids = np.round(np.linspace(0, dset.c2w.shape[0] - 1, args.num_views)).astype(int)
+        # test_cam_ids = np.array([24])
+        print(f'Using test views with ids: {test_cam_ids}')
         c2ws = dset.c2w.numpy()[test_cam_ids, :4, :4]
 else :
     c2ws = [
@@ -182,10 +196,20 @@ config_util.setup_render_opts(grid.opt, args)
 
 # NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
 # other backends will manually generate rays per frame (slow)
+
+if args.extract_nerf:
+    grid.surface_data = None
+    grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
+    grid.opt.backend = 'cuvol'
+
 with torch.no_grad():
     n_images = c2ws.size(0)
     img_eval_interval = max(n_images // args.n_eval, 1)
     all_pts = []
+    if args.debug_alpha:
+        all_alphas = []
+    else:
+        all_alphas = None
     #  if args.near_clip >= 0.0:
     grid.opt.near_clip = 0.0 #args.near_clip
     if args.width is None:
@@ -209,7 +233,11 @@ with torch.no_grad():
         # torch.cuda.synchronize()
         # depth = grid.volume_render_depth_image(cam)
         torch.cuda.synchronize()
-        pts = grid.volume_render_extract_pts(cam, sigma_thresh=args.intersect_th, intersect_th=args.intersect_th)
+        # pts = grid.volume_render_extract_pts(cam, sigma_thresh=args.intersect_th, intersect_th=args.intersect_th)
+        if args.debug_alpha:
+            pts, alphas = grid.volume_render_extract_pts_with_alpha(cam, sigma_thresh=args.intersect_th, intersect_th=args.intersect_th)
+        else:
+            pts = grid.volume_render_extract_pts(cam, sigma_thresh=args.intersect_th, intersect_th=args.intersect_th)
         # depth = grid.volume_render_depth_image(cam, sigma_thresh=args.intersect_th, intersect_th=args.intersect_th) # ,
         torch.cuda.synchronize()
         # imageio.imwrite('d.png', depth.cpu().numpy())
@@ -217,13 +245,14 @@ with torch.no_grad():
         # depth.clamp_(0.0, 1.0)
         # depth = depth /depth.max()
         pts = pts.cpu().numpy()
-
-
+        all_pts.append(pts)
 
         
         # depth = depth.cpu().numpy()
         # depth = (depth * 255).astype(np.uint8)
-        all_pts.append(pts)
+        if args.debug_alpha:
+            alphas = alphas.cpu().numpy()
+            all_alphas.append(alphas)
 
         # # debug purpose, save pts from only one view
         # np.save(path.join(path.dirname(args.ckpt), 'pts.npy'), pts.astype(np.half))
@@ -233,6 +262,8 @@ with torch.no_grad():
 
         
 all_pts = np.concatenate(all_pts, 0)
+if args.debug_alpha:
+    all_alphas = np.concatenate(all_alphas, 0)
 # for dtu dataset, need to rescale the pts
 if hasattr(dset, 'pt_rescale'):
     all_pts = dset.world2rescale(all_pts)
@@ -247,9 +278,13 @@ if args.downsample_density > 0:
             mask[idxs] = 0
             mask[curr] = 1
     all_pts = all_pts[mask]
+    if args.debug_alpha:
+        all_alphas = all_alphas[mask]
 
-
+print(f'Saving pts to {args.out_path}')
 np.save(args.out_path, all_pts)
+if args.debug_alpha:
+    np.save(args.out_path.replace('.npy', '_alpha.npy'), all_alphas)
 
 if args.del_ckpt:
     os.remove(args.ckpt)

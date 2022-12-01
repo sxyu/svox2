@@ -1264,7 +1264,7 @@ __device__ __inline__ void calc_cubic_root_grad_vieta(
             }else if (st_id == 1){
                 // st[1]
                 _Dst_DQ_ = cos(theta/3. + CUDART_PI/3.)/sqrt(Q);
-                _Dst_Dtheta = 2.*sqrt(Q)*sin(theta/3. + CUDART_PI/3.)/3.;
+                _Dst_Dtheta = -2.*sqrt(Q)*sin(theta/3. + CUDART_PI/3.)/3.;
             }else{
                 // st[2]
                 _Dst_DQ_ = sin(theta/3. + CUDART_PI/6.)/sqrt(Q);

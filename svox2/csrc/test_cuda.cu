@@ -37,6 +37,7 @@ __global__ void test_cubic_root_grad_kernel(
     // float* __restrict__ grad_fs
     torch::PackedTensorAccessor32<double, 2, torch::RestrictPtrTraits> T_fs,
     torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> T_st_id,
+    bool use_vieta,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> T_grad_fs,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> T_st
 ) {
@@ -93,15 +94,18 @@ __global__ void test_cubic_root_grad_kernel(
         grad_fs[3] = 0;
         return;
     }
-
-    calc_cubic_root_grad_vieta(cubic_root_type, st_id, fs, grad_fs);
+    if (use_vieta){
+        calc_cubic_root_grad_vieta(cubic_root_type, st_id, fs, grad_fs);
+    } else {
+        calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
+    }
 }
 
 }
 
 }  // namespace device
 
-torch::Tensor test_cubic_root_grad(Tensor T_fs, Tensor T_st_ids, Tensor T_grad_fs, Tensor T_st) {
+torch::Tensor test_cubic_root_grad(Tensor T_fs, Tensor T_st_ids, Tensor T_grad_fs, Tensor T_st, bool use_vieta) {
     const auto Q = T_fs.size(0);
 
         const int cuda_n_threads = TRACE_RAY_CUDA_THREADS;
@@ -109,6 +113,7 @@ torch::Tensor test_cubic_root_grad(Tensor T_fs, Tensor T_st_ids, Tensor T_grad_f
         device::test_cubic_root_grad_kernel<<<blocks, cuda_n_threads>>>(
                 T_fs.packed_accessor32<double, 2, torch::RestrictPtrTraits>(),
                 T_st_ids.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+                use_vieta,
                 // Output
                 T_grad_fs.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 T_st.packed_accessor32<float, 2, torch::RestrictPtrTraits>());

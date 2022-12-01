@@ -457,11 +457,13 @@ while True:
                     surface_rescale=args.surface_init_rescale,
                     )
                 eval_step(step_id=gstep_id)
-                # also save a ckpt
-                # ckpt_path = path.join(args.train_dir, f'ckpt_surface_init.npz')
-                # print('Saving after surface init', ckpt_path)
+                if args.no_surface_init_debug_ckpt:
+                    # also save a ckpt
+                    ckpt_path = path.join(args.train_dir, f'ckpt_surface_init.npz')
+                    print('Saving after surface init', ckpt_path)
+                    grid.save(ckpt_path, step_id=gstep_id)
+
                 gc.collect()
-                # grid.save(ckpt_path, step_id=gstep_id)
 
                 # reset opt for surface rendering
                 grid.opt.sigma_thresh = args.sigma_thresh
@@ -548,6 +550,7 @@ while True:
                 summary_writer.add_scalar("lr_alpha", lr_alpha, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
                 summary_writer.add_scalar("lambda_surf_normal_loss", lambda_surf_normal_loss, global_step=gstep_id)
+                summary_writer.add_scalar("max_density", grid.density_data.max().cpu().detach().numpy(), global_step=gstep_id)
                 if torch.is_tensor(grid.fake_sample_std):
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std.item(), global_step=gstep_id)
                 if grid.fake_sample_std is not None:
@@ -699,9 +702,10 @@ while True:
                     optim_basis_mlp.step()
                     optim_basis_mlp.zero_grad()
 
-            if ((gstep_id % args.eval_every_iter) == 0) or (gstep_id == args.surface_init_freeze + args.no_surface_init_iters): # and gstep_id > 0:
-                eval_step(step_id=gstep_id)
-                gc.collect()
+            if ((gstep_id % args.eval_every_iter) == 0) or (gstep_id == args.surface_init_freeze + args.no_surface_init_iters and args.surface_init_freeze > 0): # and gstep_id > 0:
+                if not no_surface:
+                    eval_step(step_id=gstep_id)
+                    gc.collect()
 
             if gstep_id >= args.n_iters:
                 print('* Final eval and save')
@@ -715,12 +719,13 @@ while True:
                 exit(0)
             
             if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode and gstep_id > 0:
-                if args.save_all_ckpt:
-                    ckpt_path = path.join(args.train_dir, f'ckpt_{gstep_id:05d}.npz')
-                else:
-                    ckpt_path = path.join(args.train_dir, f'ckpt.npz')
-                print('Saving', ckpt_path)
-                grid.save(ckpt_path, step_id=gstep_id)
+                if not no_surface:
+                    if args.save_all_ckpt:
+                        ckpt_path = path.join(args.train_dir, f'ckpt_{gstep_id:05d}.npz')
+                    else:
+                        ckpt_path = path.join(args.train_dir, f'ckpt.npz')
+                    print('Saving', ckpt_path)
+                    grid.save(ckpt_path, step_id=gstep_id)
 
 
             global last_upsamp_step, reso_id, reso_list, factor

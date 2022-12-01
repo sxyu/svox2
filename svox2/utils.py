@@ -6,6 +6,9 @@ import numpy as np
 from dataclasses import dataclass
 import math
 
+def logit_np(x):
+    return np.log(x / (1. - x))
+
 def inthroot(x : int, n : int):
     if x <= 0:
         return None

@@ -2089,6 +2089,13 @@ class SparseGrid(nn.Module):
             ox, oy, oz = (origins[ray_ids].to(dtype)).unbind(-1)
             vx, vy, vz = (dirs[ray_ids].to(dtype)).unbind(-1)
 
+            close_planes = l + (dirs[ray_ids]<0).long()
+            far_planes = l + (~(dirs[ray_ids]<0)).long()
+
+            close_t = torch.nan_to_num((close_planes - origins[ray_ids]) / dirs[ray_ids], -torch.inf).max(axis=-1).values
+            far_t = torch.nan_to_num((far_planes - origins[ray_ids]) / dirs[ray_ids], torch.inf).min(axis=-1).values
+
+            ox, oy, oz = ((origins[ray_ids] + close_t[:, None] * dirs[ray_ids]).to(dtype)).unbind(-1)
 
             # ox, oy, oz: ray origins
             # vx, vy, vz: ray dirs
@@ -2157,6 +2164,9 @@ class SparseGrid(nn.Module):
 
             # negative roots are considered no roots and are filtered out later
             ts = torch.ones([f0.numel(), 3]).to(dtype).to(device=dirs.device) * -1 # [VV, 3]
+
+            fs = torch.stack([f0,f1,f2,f3]).T
+            # np.save('fs.npy', fs.cpu().detach().numpy())
 
             # solve cubic equations
             numerical_solution = False
@@ -2322,7 +2332,8 @@ class SparseGrid(nn.Module):
 
             N_INTERSECT = ts.shape[1]
             # ts = torch.sort(ts, dim=-1).values
-            samples = origins[ray_ids, None, :] + ts[..., None] * dirs[ray_ids, None, :] # [VEV, N_INTERSECT, 3]
+            close_t = close_t[:, None].repeat(1, N_INTERSECT)
+            samples = origins[ray_ids, None, :] + (ts[..., None] + close_t[..., None]) * dirs[ray_ids, None, :] # [VEV, N_INTERSECT, 3]
             ray_ids = ray_ids[:, None].repeat(1, N_INTERSECT)
             l_ids = l_ids[:, None].repeat(1, N_INTERSECT)
             lv_set_ids = lv_set_ids[:, None].repeat(1, N_INTERSECT)
@@ -2361,10 +2372,10 @@ class SparseGrid(nn.Module):
                 close_planes = _l + (_ds<0).long()
                 far_planes = _l + (~(_ds<0)).long()
 
-                close_t = torch.nan_to_num((close_planes - _os) / _ds, -torch.inf).max(axis=-1).values
-                far_t = torch.nan_to_num((far_planes - _os) / _ds, torch.inf).min(axis=-1).values
+                _close_t = torch.nan_to_num((close_planes - _os) / _ds, -torch.inf).max(axis=-1).values
+                _far_t = torch.nan_to_num((far_planes - _os) / _ds, torch.inf).min(axis=-1).values
 
-                ts[fake_sample_mask] = (close_t + far_t)/2
+                ts[fake_sample_mask] = (_close_t + _far_t)/2 - close_t[fake_sample_mask]
                 samples[fake_sample_mask, :] = _os + ts[fake_sample_mask][:, None] * _ds
 
                 valid_sample_mask = valid_sample_mask | fake_sample_mask
@@ -2378,6 +2389,7 @@ class SparseGrid(nn.Module):
                 fake_sample_ids = fake_sample_ids.view(fake_sample_mask.shape)[fake_sample_mask]
 
             ts = ts[valid_sample_mask] # [VEV * N_INTERSECT]
+            close_t = close_t[valid_sample_mask] # [VEV * N_INTERSECT]
             ray_ids = ray_ids[valid_sample_mask] # [VEV * N_INTERSECT]
             l_ids = l_ids[valid_sample_mask] # [VEV * N_INTERSECT]
             lv_set_ids = lv_set_ids[valid_sample_mask] # [VEV * N_INTERSECT]
@@ -2386,9 +2398,9 @@ class SparseGrid(nn.Module):
 
 
             ts_raw = ts
-            ts = torch.concat([ts_raw[:0].detach().clone(), ts_raw[0:1], ts_raw[1:].detach().clone()], dim=-1)
+            ts = torch.concat([ts_raw[:1].detach().clone(), ts_raw[1:2], ts_raw[2:].detach().clone()], dim=-1)
             ts = ts_raw
-            samples = origins[ray_ids, :] + ts[..., None] * dirs[ray_ids, :] # [VEV * N_INTERSECT, 3]
+            samples = origins[ray_ids, :] + (ts[..., None] + close_t[...,None]) * dirs[ray_ids, :] # [VEV * N_INTERSECT, 3]
         
         elif self.surface_type == SURFACE_TYPE_PLANE:
             # raise NotImplementedError
@@ -2648,7 +2660,7 @@ class SparseGrid(nn.Module):
 
         if return_depth:
             B_ts = torch.zeros((B, MS), device=origins.device)
-            B_ts[B_to_sample_mask] = ts.to(B_ts.dtype) # [N_samples]
+            B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
 
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
 
@@ -2835,6 +2847,9 @@ class SparseGrid(nn.Module):
             ts_raw.retain_grad()
             out['rgb'].retain_grad()
             _R.retain_grad() 
+            Q.retain_grad() 
+            R.retain_grad() 
+            theta.retain_grad() 
             # _S.retain_grad()
             # _T.retain_grad()
             # _U.retain_grad()
@@ -2898,7 +2913,7 @@ class SparseGrid(nn.Module):
         return out
 
 
-    def _init_surface_from_density(self, alpha_lv_sets=0.5, reset_alpha=False, init_alpha=0.1, surface_rescale=0.1):
+    def _init_surface_from_density(self, alpha_lv_sets=0.5, reset_alpha=False, init_alpha=0.1, surface_rescale=0.1, alpha_clip_thresh=1e-6):
         '''
         Initialize surface data from density values
         '''
@@ -2919,7 +2934,11 @@ class SparseGrid(nn.Module):
             alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 0) * delta_scale * self.opt.step_size)
             raw_alpha_data = torch.logit(torch.clamp(alpha_data, 1e-10, 1-1e-7))
             if reset_alpha:
-                self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha).to(torch.float32))
+                # self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha).to(torch.float32))
+                
+                new_density_data = torch.full_like(alpha_data, utils.logit_np(0.1), dtype=torch.float32)
+                new_density_data[alpha_data < alpha_clip_thresh] = -25.
+                self.density_data = nn.Parameter(new_density_data)
             else:
                 self.density_data = nn.Parameter(raw_alpha_data.detach().clone().to(torch.float32))
 
