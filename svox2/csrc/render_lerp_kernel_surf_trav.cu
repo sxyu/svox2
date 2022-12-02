@@ -221,7 +221,13 @@ __device__ __inline__ void trace_ray_surf_trav(
 
             if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
                 // only solve for cubic if we know there is a root
-                cubic_equation_solver(
+                // cubic_equation_solver(
+                //     fs[0] - lv_set, fs[1], fs[2], fs[3],
+                //     1e-8, // float eps
+                //     1e-10, // double eps
+                //     st
+                //     );
+                cubic_equation_solver_vieta(
                     fs[0] - lv_set, fs[1], fs[2], fs[3],
                     1e-8, // float eps
                     1e-10, // double eps
@@ -786,6 +792,175 @@ __device__ __inline__ void trace_ray_sigma_thresh(
     *out = 0.f;
 }
 
+__device__ __inline__ void trace_ray_extract_pt(
+        const PackedSparseGridSpec& __restrict__ grid,
+        SingleRaySpec& __restrict__ ray,
+        const RenderOptions& __restrict__ opt,
+        int max_sample,
+        float alpha_thresh,
+        float* __restrict__ out,
+        float* __restrict__ out_alpha) {
+
+    int sample_id = 0;
+
+    if (ray.tmin > ray.tmax) {
+        *out = 0.f;
+        return;
+    }
+
+    double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
+    double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
+
+    float t = ray.tmin;
+
+    // int32_t last_voxel[] = {-1,-1,-1};
+    int32_t voxel_l[] = {-1,-1,-1};
+
+    int32_t next_voxel[3];
+#pragma unroll 3
+    for (int j = 0; j < 3; ++j) {
+        next_voxel[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+        next_voxel[j] = min(max(next_voxel[j], 0), grid.size[j] - 2);
+    }
+
+    while (t <= ray.tmax) {
+
+        voxel_l[0] = next_voxel[0];
+        voxel_l[1] = next_voxel[1];
+        voxel_l[2] = next_voxel[2];
+
+        // Find close and far intersections between ray and voxel
+        int32_t const close_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+            ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+            ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+        };
+        int32_t const far_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+            ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+            ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+        };
+
+        // threshold t_close by 0.f to prevent cases where camera origin is within the voxel
+        float const t_close = max(max(
+            max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+            (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]), 0.f);
+        
+        float const t_fars [] = {
+            (static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0],
+            (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1],
+            (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]
+            };
+
+        float const t_far = min(min(t_fars[0], t_fars[1]), t_fars[2]);
+
+        t = t_far;
+
+        if (t_far == t_fars[0]){
+            next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
+            if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
+        }else if (t_far == t_fars[1]){
+            next_voxel[1] += (ray.dir[1] > 0.f) ?  1 : -1;
+            if ((next_voxel[1] < 0) || (next_voxel[1] >= grid.size[1]-1)) t = ray.tmax + 1.f;
+        }else{
+            next_voxel[2] += (ray.dir[2] > 0.f) ?  1 : -1;
+            if ((next_voxel[2] < 0) || (next_voxel[2] >= grid.size[2]-1)) t = ray.tmax + 1.f;
+        }
+
+        int const offx = grid.stride_x, offy = grid.size[2];
+        const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
+
+        // skip voxel if any of the vertices is turned off
+        if ((voxel_l[0] + 1 >= grid.size[0]) || (voxel_l[1] + 1 >= grid.size[1]) || (voxel_l[2] + 1 >= grid.size[2]) \
+            || (link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) \
+            || (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
+        ){
+            // const float skip = compute_skip_dist(ray,
+            //             grid.links, grid.stride_x,
+            //             grid.size[2], 0);
+
+            continue;
+        }
+
+        double const new_origin[] = {ray.origin[0] + t_close*ray.dir[0], ray.origin[1] + t_close*ray.dir[1], ray.origin[2] + t_close*ray.dir[2]};
+
+        // find intersections
+        double const surface[8] = {
+            grid.surface_data[link_ptr[0]],
+            grid.surface_data[link_ptr[1]],
+            grid.surface_data[link_ptr[offy]],
+            grid.surface_data[link_ptr[offy+1]],
+            grid.surface_data[link_ptr[offx]],
+            grid.surface_data[link_ptr[offx+1]],
+            grid.surface_data[link_ptr[offx+offy]],
+            grid.surface_data[link_ptr[offx+offy+1]],
+        };
+
+        double fs[4];
+        double const new_norm_origin[] = {new_origin[0] - voxel_l[0], new_origin[1] - voxel_l[1], new_origin[2] - voxel_l[2]};
+        // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
+        surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
+
+        // only supports single level set!
+        const int level_set_num = 1;
+        const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
+        for (int i=0; i < level_set_num; ++i){
+            double const lv_set = grid.level_set_data[i];
+            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+                continue;
+            }
+            ////////////// CUBIC ROOT SOLVING //////////////
+            double st[3] = {-1, -1, -1}; // sample t
+
+            cubic_equation_solver_vieta(
+                fs[0] - lv_set, fs[1], fs[2], fs[3],
+                1e-8, // float eps
+                1e-10, // double eps
+                st
+                );
+
+            
+            ////////////// TRILINEAR INTERPOLATE //////////////
+            for (int j=0; j < 3; ++j){
+                if (st[j] <= 0){
+                    // ignore intersection at negative direction
+                    continue;
+                }
+
+#pragma unroll 3
+                for (int k=0; k < 3; ++k){
+                    // assert(!isnan(st[j]));
+                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], static_cast<float>(new_origin[k])); // fmaf(x,y,z) = (x*y)+z
+                    ray.l[k] = voxel_l[k]; // get l
+                    ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
+                    ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
+                }
+
+                // check if intersection is within grid
+                if ((ray.pos[0] < 0) | (ray.pos[0] > 1) | (ray.pos[1] < 0) | (ray.pos[1] > 1) | (ray.pos[2] < 0) | (ray.pos[2] > 1)){
+                    continue;
+                }
+
+
+                float const alpha = _SIGMOID(trilerp_cuvol_one(
+                        grid.links, grid.density_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        1,
+                        ray.l, ray.pos,
+                        0));
+
+                if (alpha > alpha_thresh) {
+                    *(out+sample_id) = ((st[j]+t_close) / opt.step_size) * ray.world_step;
+                    *(out_alpha+sample_id) = alpha;
+                    sample_id += 1;
+                }
+            }
+
+        }
+    }
+}
+
 
 
 
@@ -975,7 +1150,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
             if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
                 // only solve for cubic if we know there is a root
-                cubic_root_type = cubic_equation_solver(
+                // cubic_root_type = cubic_equation_solver(
+                //     fs[0], fs[1], fs[2], fs[3],
+                //     1e-8, // float eps
+                //     1e-10, // double eps
+                //     st
+                //     );
+                cubic_root_type = cubic_equation_solver_vieta(
                     fs[0], fs[1], fs[2], fs[3],
                     1e-8, // float eps
                     1e-10, // double eps
@@ -1075,13 +1256,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     // compute d_mse/d_alpha_i
                     float  curr_grad_alpha = accum / min(alpha-1.f, -1e-9f) + total_color * _EXP(log_transmit); 
                     log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
-                    if (sparsity_loss > 0.f) {
-                        // Cauchy version (from SNeRG)
-                        // curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
+                    // if (sparsity_loss > 0.f) {
+                    //     // Cauchy version (from SNeRG)
+                    //     // curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
 
-                        // Log Alpha version
-                        curr_grad_alpha += sparsity_loss / alpha;
-                    }
+                    //     // // Log Alpha version
+                    //     // curr_grad_alpha += sparsity_loss / alpha;
+                    // }
 
                     // if (lane_id == 0){
                     //     // printf("weight: [%f]\n", weight);
@@ -1148,7 +1329,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // grad_st is now d_mse/d_t
 
                         float grad_fs[4] = {grad_st, grad_st, grad_st, grad_st};
-                        calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
+                        // calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
+                        calc_cubic_root_grad_vieta(cubic_root_type, st_id, fs, grad_fs);
                         // grad_fs is now d_mse/d_f0123
 
 
@@ -1307,17 +1489,17 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // compute d_mse/d_rwalpha_i (reweighted alpha)
                         float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-9f) + total_color_fs * _EXP(log_transmit); 
                         log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
+
+                        // curr_grad_alpha is now d_mse/d_alpha_i
+                        float curr_grad_alpha = curr_grad_rwalpha * reweight;
                         // if (sparsity_loss > 0.f) {
                         //     // Cauchy version (from SNeRG)
                         //     // TODO: check if expected!
-                        //     curr_grad_rwalpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
+                        //     // curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
 
-                        //     // Alphs version (from PlenOctrees)
-                        //     // curr_grad_alpha += sparsity_loss * _EXP(-pcnt) * ray.world_step;
+                        //     // Log Alpha version
+                        //     curr_grad_alpha += sparsity_loss / alpha;
                         // }
-
-                        // curr_grad_alpha is now d_mse/d_alpha_i
-                        float const curr_grad_alpha = curr_grad_rwalpha * reweight;
 
                         // if (lane_id == 0){
                         //     printf("weight: [%f]\n", weight);
@@ -2012,23 +2194,28 @@ __global__ void render_ray_sigma_thresh_kernel(
         out + ray_id);
 }
 
-// __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
-// __global__ void extract_ray_pts_kernel(
-//         PackedSparseGridSpec grid,
-//         PackedRaysSpec rays,
-//         RenderOptions opt,
-//         float alpha_thresh,
-//         float* __restrict__ out) {
-//     CUDA_GET_THREAD_ID(ray_id, rays.origins.size(0));
-//     SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
-//     ray_find_bounds(ray_spec, grid, opt, ray_id);
-//     trace_ray_extract_pt(
-//         grid,
-//         ray_spec,
-//         opt,
-//         alpha_thresh,
-//         out + ray_id);
-// }
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void extract_ray_pts_kernel(
+        PackedSparseGridSpec grid,
+        PackedRaysSpec rays,
+        RenderOptions opt,
+        int max_sample,
+        float alpha_thresh,
+        float* __restrict__ out,
+        float* __restrict__ out_alpha
+        ) {
+    CUDA_GET_THREAD_ID(ray_id, rays.origins.size(0));
+    SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
+    ray_find_bounds(ray_spec, grid, opt, ray_id);
+    trace_ray_extract_pt(
+        grid,
+        ray_spec,
+        opt,
+        max_sample,
+        alpha_thresh,
+        out + ray_id * max_sample,
+        out_alpha + ray_id * max_sample);
+}
 
 }  // namespace device
 
@@ -2337,25 +2524,33 @@ torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec& grid,
     return results;
 }
 
-// torch::Tensor extract_pts_surf_trav(SparseGridSpec& grid,
-//         RaysSpec& rays,
-//         RenderOptions& opt,
-//         float sigma_thresh) {
-//     auto options =
-//         torch::TensorOptions()
-//         .dtype(rays.origins.dtype())
-//         .layout(torch::kStrided)
-//         .device(rays.origins.device())
-//         .requires_grad(false);
-//     torch::Tensor results = torch::empty({rays.origins.size(0)}, options);
-//     const auto Q = rays.origins.size(0);
-//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
-//     device::extract_ray_pts_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
-//             grid,
-//             rays,
-//             opt,
-//             sigma_thresh,
-//             results.data_ptr<float>()
-//         );
-//     return results;
-// }
+std::tuple<torch::Tensor, torch::Tensor> extract_pts_surf_trav(SparseGridSpec& grid,
+        RaysSpec& rays,
+        RenderOptions& opt,
+        int max_sample,
+        float alpha_thresh) {
+    /**
+     * Extract all intersection points with alpha values
+     * Each ray can have up to max_sample intersections
+    */
+    auto options =
+        torch::TensorOptions()
+        .dtype(rays.origins.dtype())
+        .layout(torch::kStrided)
+        .device(rays.origins.device())
+        .requires_grad(false);
+    torch::Tensor results = torch::zeros({rays.origins.size(0), max_sample}, options);
+    torch::Tensor alphas = torch::zeros({rays.origins.size(0), max_sample}, options);
+    const auto Q = rays.origins.size(0);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
+    device::extract_ray_pts_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+            grid,
+            rays,
+            opt,
+            max_sample,
+            alpha_thresh,
+            results.data_ptr<float>(),
+            alphas.data_ptr<float>()
+        );
+    return std::tuple<torch::Tensor, torch::Tensor>{results, alphas};
+}

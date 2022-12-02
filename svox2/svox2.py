@@ -2161,6 +2161,7 @@ class SparseGrid(nn.Module):
 
             f0 = f0 - lv_sets
 
+            close_t = torch.repeat_interleave(close_t, lv_set_bincount)
 
             # negative roots are considered no roots and are filtered out later
             ts = torch.ones([f0.numel(), 3]).to(dtype).to(device=dirs.device) * -1 # [VV, 3]
@@ -2829,7 +2830,8 @@ class SparseGrid(nn.Module):
             # intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
             # intersects = intersects[sample_mask.any(axis=-1)]
             intersects = B_samples[sample_mask, :]
-            intersect_alphas = B_weights[sample_mask]
+            # intersect_alphas = B_weights[sample_mask]
+            intersect_alphas = B_alpha[sample_mask]
             out['intersections'] = self.grid2world(intersects)
             out['intersect_alphas'] = intersect_alphas
 
@@ -3490,8 +3492,25 @@ class SparseGrid(nn.Module):
         :return: [N, 3] points array
         """
         rays = camera.gen_rays()
-        if self.surface_type == SURFACE_TYPE_NONE or self.opt.backend in ['surf_trav']:
+        if self.surface_type == SURFACE_TYPE_NONE:
             raise NotImplementedError
+        elif self.opt.backend in ['surf_trav']:
+            all_depths = []
+            all_alpha = []
+            for batch_start in range(0, camera.height * camera.width, batch_size):
+                cu_fn = _C.__dict__[f"extract_pts_surf_trav"]
+                depths, alphas =  cu_fn(
+                                    self._to_cpp(),
+                                    rays._to_cpp(),
+                                    self.opt._to_cpp(),
+                                    20, # max sample per ray
+                                    sigma_thresh)
+                all_alpha.append(alphas[depths!=0.])
+                all_depths.append(depths[depths!=0.])
+            all_depths = torch.cat(all_depths, dim=0)
+            all_alpha = torch.cat(all_alpha, dim=0)
+            all_pts = rays.origins + rays.dirs * all_depths[:,None]
+            
         else:
             # extract from intersections
             all_pts = []
