@@ -1,5 +1,5 @@
 # Copyright 2021 Alex Yu
-# Eval
+# Render 360 circle path
 
 import torch
 import svox2
@@ -10,7 +10,7 @@ import numpy as np
 import os
 from os import path
 from util.dataset import datasets
-from util.util import Timing, compute_ssim, viridis_cmap
+from util.util import Timing, compute_ssim, viridis_cmap, pose_spherical
 from util import config_util
 
 import imageio
@@ -22,38 +22,33 @@ parser.add_argument('ckpt', type=str)
 config_util.define_common_args(parser)
 
 parser.add_argument('--n_eval', '-n', type=int, default=100000, help='images to evaluate (equal interval), at most evals every image')
-parser.add_argument('--train', action='store_true', default=False, help='render train set')
-parser.add_argument('--render_path',
-                    action='store_true',
-                    default=False,
-                    help="Render path instead of test images (no metrics will be given)")
-parser.add_argument('--timing',
-                    action='store_true',
-                    default=False,
-                    help="Run only for timing (do not save images or use LPIPS/SSIM; "
-                    "still computes PSNR to make sure images are being generated)")
-parser.add_argument('--no_lpips',
-                    action='store_true',
-                    default=False,
-                    help="Disable LPIPS (faster load)")
-parser.add_argument('--no_vid',
-                    action='store_true',
-                    default=False,
-                    help="Disable video generation")
-parser.add_argument('--no_imsave',
-                    action='store_true',
-                    default=False,
-                    help="Disable image saving (can still save video; MUCH faster)")
 parser.add_argument('--fps',
                     type=int,
-                    default=30,
+                    default=2,
                     help="FPS of video")
+parser.add_argument(
+                "--width", "-W", type=float, default=None, help="Rendering image width (only if not --traj)"
+                        )
+parser.add_argument(
+                    "--height", "-H", type=float, default=None, help="Rendering image height (only if not --traj)"
+                            )
+parser.add_argument(
+	"--num_views", "-N", type=int, default=10,
+    help="Number of frames to render"
+)
+
+# Path adjustment
+parser.add_argument(
+    "--offset", type=str, default="0,0,0", help="Center point to rotate around (only if not --traj)"
+)
+
 
 # Camera adjustment
 parser.add_argument('--crop',
                     type=float,
                     default=1.0,
                     help="Crop (0, 1], 1.0 = full image")
+
 
 # Foreground/background only
 parser.add_argument('--nofg',
@@ -70,179 +65,145 @@ parser.add_argument('--blackbg',
                     action='store_true',
                     default=False,
                     help="Force a black BG (behind BG model) color; useful for debugging 'clouds'")
-parser.add_argument('--ray_len',
+parser.add_argument('--render_depth',
                     action='store_true',
                     default=False,
-                    help="Render the ray lengths")
+                    help="Render depth images instead")
+parser.add_argument('--depth_thresh',
+                    type=float,
+                    default=None,
+                    help="Sigma/alpha threshold for rendering depth. None means median depth")
 
 args = parser.parse_args()
 USE_KERNEL = not args.nokernel
-USE_KERNEL = True
+# USE_KERNEL = False
 # config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 
-if args.timing:
-    args.no_lpips = True
-    args.no_vid = True
-    args.ray_len = False
 
-if not args.no_lpips:
-    import lpips
-    lpips_vgg = lpips.LPIPS(net="vgg").eval().to(device)
+dset = datasets[args.dataset_type](args.data_dir, split="test",
+                                    **config_util.build_data_options(args))
+
+
+
+if args.num_views >= dset.c2w.shape[0]:
+    c2ws = dset.c2w.numpy()[:, :4, :4]
+else:
+    test_cam_ids = np.round(np.linspace(0, dset.c2w.shape[0] - 1, args.num_views)).astype(int)
+    # test_cam_ids = np.array([24])
+    print(f'Using test views with ids: {test_cam_ids}')
+    c2ws = dset.c2w.numpy()[test_cam_ids, :4, :4]
+
+
+c2ws = np.stack(c2ws, axis=0)
+c2ws = torch.from_numpy(c2ws).to(device=device)
+
 if not path.isfile(args.ckpt):
     args.ckpt = path.join(args.ckpt, 'ckpt.npz')
 
-render_dir = path.join(path.dirname(args.ckpt),
-            'train_renders' if args.train else 'test_renders')
-want_metrics = True
-if args.render_path:
-    assert not args.train
-    render_dir += '_path'
-    want_metrics = False
+
+render_out_path = path.join(path.dirname(args.ckpt), 'test_render_vid')
+img_out_path = path.join(path.dirname(args.ckpt), 'test_renders')
+
+os.makedirs(img_out_path, exist_ok=True)
+
+if args.render_depth:
+    render_out_path += '_depth'
 
 # Handle various image transforms
-if not args.render_path:
-    # Do not crop if not render_path
-    args.crop = 1.0
 if args.crop != 1.0:
-    render_dir += f'_crop{args.crop}'
-if args.ray_len:
-    render_dir += f'_raylen'
-    want_metrics = False
-
-dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test",
-                                    **config_util.build_data_options(args))
+    render_out_path += f'_crop{args.crop}'
 
 grid = svox2.SparseGrid.load(args.ckpt, device=device)
+# args.renderer_backend = grid.surface_type
+print(grid.center, grid.radius)
+
+# grid.density_data.data = torch.clamp_min(grid.density_data.data, torch.logit(torch.tensor(0.1)).to(grid.density_data.device))
+
+# DEBUG
+#  grid.background_data.data[:, 32:, -1] = 0.0
+#  render_out_path += '_front'
 
 if grid.use_background:
     if args.nobg:
-        #  grid.background_cubemap.data = grid.background_cubemap.data.cuda()
         grid.background_data.data[..., -1] = 0.0
-        render_dir += '_nobg'
+        render_out_path += '_nobg'
     if args.nofg:
         grid.density_data.data[:] = 0.0
         #  grid.sh_data.data[..., 0] = 1.0 / svox2.utils.SH_C0
         #  grid.sh_data.data[..., 9] = 1.0 / svox2.utils.SH_C0
         #  grid.sh_data.data[..., 18] = 1.0 / svox2.utils.SH_C0
-        render_dir += '_nofg'
+        render_out_path += '_nofg'
 
-    # DEBUG
-    #  grid.links.data[grid.links.size(0)//2:] = -1
-    #  render_dir += "_chopx2"
+    #  # DEBUG
+    #  grid.background_data.data[..., -1] = 100.0
+    #  a1 = torch.linspace(0, 1, grid.background_data.size(0) // 2, dtype=torch.float32, device=device)[:, None]
+    #  a2 = torch.linspace(1, 0, (grid.background_data.size(0) - 1) // 2 + 1, dtype=torch.float32, device=device)[:, None]
+    #  a = torch.cat([a1, a2], dim=0)
+    #  c = torch.stack([a, 1-a, torch.zeros_like(a)], dim=-1)
+    #  grid.background_data.data[..., :-1] = c
+    #  render_out_path += "_gradient"
 
 config_util.setup_render_opts(grid.opt, args)
 
 if args.blackbg:
     print('Forcing black bg')
-    render_dir += '_blackbg'
+    render_out_path += '_blackbg'
     grid.opt.background_brightness = 0.0
 
-print('Writing to', render_dir)
-os.makedirs(render_dir, exist_ok=True)
-
-if not args.no_imsave:
-    print('Will write out all frames as PNG (this take most of the time)')
+render_out_path += '.mp4'
+print('Writing to', render_out_path)
 
 # NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
 # other backends will manually generate rays per frame (slow)
 with torch.no_grad():
-    n_images = dset.render_c2w.size(0) if args.render_path else dset.n_images
+    n_images = c2ws.size(0)
     img_eval_interval = max(n_images // args.n_eval, 1)
-    avg_psnr = 0.0
-    avg_ssim = 0.0
-    avg_lpips = 0.0
     n_images_gen = 0
-    c2ws = dset.render_c2w.to(device=device) if args.render_path else dset.c2w.to(device=device)
-    # DEBUGGING
-    #  rad = [1.496031746031746, 1.6613756613756614, 1.0]
-    #  half_sz = [grid.links.size(0) // 2, grid.links.size(1) // 2]
-    #  pad_size_x = int(half_sz[0] - half_sz[0] / 1.496031746031746)
-    #  pad_size_y = int(half_sz[1] - half_sz[1] / 1.6613756613756614)
-    #  print(pad_size_x, pad_size_y)
-    #  grid.links[:pad_size_x] = -1
-    #  grid.links[-pad_size_x:] = -1
-    #  grid.links[:, :pad_size_y] = -1
-    #  grid.links[:, -pad_size_y:] = -1
-    #  grid.links[:, :, -8:] = -1
-
-    #  LAYER = -16
-    #  grid.links[:, :, :LAYER] = -1
-    #  grid.links[:, :, LAYER+1:] = -1
-
     frames = []
-    #  im_gt_all = dset.gt.to(device=device)
+    #  if args.near_clip >= 0.0:
+    grid.opt.near_clip = 0.0 #args.near_clip
+    if args.width is None:
+        args.width = dset.get_image_size(0)[1]
+    if args.height is None:
+        args.height = dset.get_image_size(0)[0]
 
     for img_id in tqdm(range(0, n_images, img_eval_interval)):
-        dset_h, dset_w = dset.get_image_size(img_id)
+        dset_h, dset_w = args.height, args.width
         im_size = dset_h * dset_w
         w = dset_w if args.crop == 1.0 else int(dset_w * args.crop)
         h = dset_h if args.crop == 1.0 else int(dset_h * args.crop)
 
         cam = svox2.Camera(c2ws[img_id],
-                           dset.intrins.get('fx', img_id),
-                           dset.intrins.get('fy', img_id),
-                           dset.intrins.get('cx', img_id) + (w - dset_w) * 0.5,
-                           dset.intrins.get('cy', img_id) + (h - dset_h) * 0.5,
+                           dset.intrins.get('fx', 0),
+                           dset.intrins.get('fy', 0),
+                           w * 0.5,
+                           h * 0.5,
                            w, h,
-                           ndc_coeffs=dset.ndc_coeffs)
-        im = grid.volume_render_image(cam, use_kernel=True, return_raylen=args.ray_len)
-        if args.ray_len:
-            minv, meanv, maxv = im.min().item(), im.mean().item(), im.max().item()
-            im = viridis_cmap(im.cpu().numpy())
-            cv2.putText(im, f"{minv=:.4f} {meanv=:.4f} {maxv=:.4f}", (10, 20),
-                        0, 0.5, [255, 0, 0])
-            im = torch.from_numpy(im).to(device=device)
-        im.clamp_(0.0, 1.0)
+                           ndc_coeffs=(-1.0, -1.0))
+        torch.cuda.synchronize()
+        if args.render_depth:
+            im = grid.volume_render_depth_image(cam, args.depth_thresh)
+        else:
+            im = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
+        torch.cuda.synchronize()
+        
+        if args.render_depth:
+            im = viridis_cmap(im.cpu())
+        else:
+            im.clamp_(0.0, 1.0)
+            im = im.cpu().numpy()
 
-        if not args.render_path:
-            im_gt = dset.gt[img_id].to(device=device)
-            mse = (im - im_gt) ** 2
-            mse_num : float = mse.mean().item()
-            psnr = -10.0 * math.log10(mse_num)
-            avg_psnr += psnr
-            if not args.timing:
-                ssim = compute_ssim(im_gt, im).item()
-                avg_ssim += ssim
-                if not args.no_lpips:
-                    lpips_i = lpips_vgg(im_gt.permute([2, 0, 1]).contiguous(),
-                            im.permute([2, 0, 1]).contiguous(), normalize=True).item()
-                    avg_lpips += lpips_i
-                    print(img_id, 'PSNR', psnr, 'SSIM', ssim, 'LPIPS', lpips_i)
-                else:
-                    print(img_id, 'PSNR', psnr, 'SSIM', ssim)
-        img_path = path.join(render_dir, f'{img_id:04d}.png');
-        im = im.cpu().numpy()
-        if not args.render_path:
-            im_gt = dset.gt[img_id].numpy()
-            im = np.concatenate([im_gt, im], axis=1)
-        if not args.timing:
-            im = (im * 255).astype(np.uint8)
-            if not args.no_imsave:
-                imageio.imwrite(img_path,im)
-            if not args.no_vid:
-                frames.append(im)
+        im = (im * 255).astype(np.uint8)
+        frames.append(im)
         im = None
         n_images_gen += 1
-    if want_metrics:
-        print('AVERAGES')
-
-        avg_psnr /= n_images_gen
-        with open(path.join(render_dir, 'psnr.txt'), 'w') as f:
-            f.write(str(avg_psnr))
-        print('PSNR:', avg_psnr)
-        if not args.timing:
-            avg_ssim /= n_images_gen
-            print('SSIM:', avg_ssim)
-            with open(path.join(render_dir, 'ssim.txt'), 'w') as f:
-                f.write(str(avg_ssim))
-            if not args.no_lpips:
-                avg_lpips /= n_images_gen
-                print('LPIPS:', avg_lpips)
-                with open(path.join(render_dir, 'lpips.txt'), 'w') as f:
-                    f.write(str(avg_lpips))
-    if not args.no_vid and len(frames):
-        vid_path = render_dir + '.mp4'
+    if len(frames):
+        vid_path = render_out_path
         imageio.mimwrite(vid_path, frames, fps=args.fps, macro_block_size=8)  # pip install imageio-ffmpeg
+
+        for i in range(len(frames)):
+            imageio.imwrite(os.path.join(img_out_path, f"{i:04d}.png"), frames[i])
+            
 
 
