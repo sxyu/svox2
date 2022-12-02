@@ -2185,6 +2185,8 @@ class SparseGrid(nn.Module):
                 # # ts[cubic_ids[_mask], 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
                 # # ts[cubic_ids[_mask], 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
 
+
+
                 Q = ((b**2) - 3.*c) / 9.
                 R = (2.*(b**3) - 9.*b*c + 27.*d) /54.
 
@@ -2196,10 +2198,9 @@ class SparseGrid(nn.Module):
                 _mask2 = (R)**2 < (Q)**3
                 _b, _Q, _R = b[_mask2], Q[_mask2], R[_mask2]
 
-
                 eps = 1e-10
-                # theta = torch.acos(torch.clamp(_R / torch.sqrt((_Q)**3), -1+eps, 1-eps))
-                theta = torch.acos((_R / torch.sqrt((_Q)**3)))
+                theta = torch.acos(torch.clamp(_R / torch.sqrt((_Q)**3), -1+eps, 1-eps))
+                # theta = torch.acos((_R / torch.sqrt((_Q)**3)))
                 
                 ts[cubic_ids[_mask2], 0] = -2. * torch.sqrt(_Q) * torch.cos(theta/3.) - _b/3.
                 ts[cubic_ids[_mask2], 1] = -2. * torch.sqrt(_Q) * torch.cos((theta - 2.*torch.pi)/3.) - _b/3.
@@ -2209,12 +2210,15 @@ class SparseGrid(nn.Module):
                 _mask3 = ~_mask2
                 __b, __Q, __R = b[_mask3], Q[_mask3], R[_mask3]
 
-                # A = -torch.sign(__R) * (torch.abs(__R) + torch.sqrt(torch.clamp_min((__R)**2 - (__Q)**3, 1e-8))) ** (1./3.)
-                A = -torch.sign(__R) * (torch.abs(__R) + torch.sqrt(((__R)**2 - (__Q)**3))) ** (1./3.)
+                A = -torch.sign(__R) * (torch.abs(__R) + torch.sqrt(torch.clamp_min((__R)**2 - (__Q)**3, 1e-8))) ** (1./3.)
+                # A = -torch.sign(__R) * (torch.abs(__R) + torch.sqrt(((__R)**2 - (__Q)**3))) ** (1./3.)
                 _B = __Q/A
                 _B[A== 0.] = 0.
 
                 ts[cubic_ids[_mask3], 0] = (A+_B) - __b/3.
+
+
+                
 
                 assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots'
                 assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
@@ -2236,7 +2240,7 @@ class SparseGrid(nn.Module):
 
             # filter out roots with t that's smaller than near clip
             # Note that scaling is not exactly correct when grid reso are not the same
-            neg_roots_mask = ts < self.opt.near_clip * self._scaling.to(device=ts.device) * gsz_cu.mean()
+            neg_roots_mask = (ts + close_t) < self.opt.near_clip * self._scaling.to(device=ts.device) * gsz_cu.mean()
 
 
             if allow_outside:
@@ -2289,7 +2293,7 @@ class SparseGrid(nn.Module):
 
 
             ts_raw = ts
-            ts = torch.concat([ts_raw[:1].detach().clone(), ts_raw[1:2], ts_raw[2:].detach().clone()], dim=-1)
+            # ts = torch.concat([ts_raw[:1].detach().clone(), ts_raw[1:2], ts_raw[2:].detach().clone()], dim=-1)
             ts = ts_raw
             samples = origins[ray_ids, :] + (ts[..., None] + close_t[...,None]) * dirs[ray_ids, :] # [VEV * N_INTERSECT, 3]
         
