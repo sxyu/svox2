@@ -78,6 +78,7 @@ parser.add_argument('--crop',
                     default=1.0,
                     help="Crop (0, 1], 1.0 = full image")
 
+
 # Foreground/background only
 parser.add_argument('--nofg',
                     action='store_true',
@@ -97,10 +98,14 @@ parser.add_argument('--render_depth',
                     action='store_true',
                     default=False,
                     help="Render depth images instead")
+parser.add_argument('--depth_thresh',
+                    type=float,
+                    default=None,
+                    help="Sigma/alpha threshold for rendering depth. None means median depth")
 
 args = parser.parse_args()
 USE_KERNEL = not args.nokernel
-USE_KERNEL = False
+# USE_KERNEL = False
 # config_util.maybe_merge_config_file(args, allow_invalid=True)
 device = 'cuda:0'
 
@@ -218,6 +223,9 @@ np.save(path.join(path.dirname(args.ckpt), 'test_cams.npy'), c2ws.cpu().numpy())
 
 render_out_path = path.join(path.dirname(args.ckpt), 'circle_renders')
 
+if args.render_depth:
+    render_out_path += '_depth'
+
 # Handle various image transforms
 if args.crop != 1.0:
     render_out_path += f'_crop{args.crop}'
@@ -296,7 +304,7 @@ with torch.no_grad():
                            ndc_coeffs=(-1.0, -1.0))
         torch.cuda.synchronize()
         if args.render_depth:
-            im = grid.volume_render_depth_image(cam)
+            im = grid.volume_render_depth_image(cam, args.depth_thresh)
         else:
             im = grid.volume_render_image(cam, use_kernel=USE_KERNEL)
         torch.cuda.synchronize()
