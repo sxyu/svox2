@@ -481,7 +481,7 @@ while True:
             rays = svox2.Rays(batch_origins, batch_dirs)
 
             # with Timing("Fused pass"):
-            if not USE_KERNEL:
+            if not USE_KERNEL and not no_surface:
                 if args.surface_type != 'none':
                     out = grid._surface_render_gradcheck_lerp(rays, rgb_gt,
                             beta_loss=args.lambda_beta,
@@ -505,7 +505,7 @@ while True:
 
             # eval_step(step_id=gstep_id)
 
-            if not USE_KERNEL:
+            if not USE_KERNEL and not no_surface:
                 # with Timing("Backward pass"):
                 # # normalize surface gradient:
                 # mse.backward(retain_graph=True)
@@ -600,7 +600,7 @@ while True:
                         sparse_frac=args.alpha_lap_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous,
-                        use_kernel=USE_KERNEL,
+                        # use_kernel=USE_KERNEL,
                         density_is_sigma = grid.surface_data is None or no_surface 
                         )
             if args.lambda_tv_surface > 0.0 and not no_surface:
@@ -610,7 +610,7 @@ while True:
                         sparse_frac=args.tv_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous)
-            if lambda_surf_normal_loss > 0.0 and not no_surface and USE_KERNEL and not args.fused_surf_norm_reg:
+            if lambda_surf_normal_loss > 0.0 and not no_surface and not args.fused_surf_norm_reg:
                 # with Timing("normal_loss"):
                 norm_loss = grid.inplace_surface_normal_grad(grid.surface_data.grad,
                         scaling=lambda_surf_normal_loss,
@@ -618,7 +618,7 @@ while True:
                         sparse_frac=args.norm_surface_sparsity,
                         ndc_coeffs=dset.ndc_coeffs,
                         contiguous=args.tv_contiguous,
-                        use_kernel=not args.py_surf_norm_reg,
+                        # use_kernel=not args.py_surf_norm_reg,
                         connectivity_check=not args.no_surf_norm_con_check,
                         ignore_empty=args.surf_norm_reg_ignore_empty,
                         )

@@ -1576,6 +1576,7 @@ class SparseGrid(nn.Module):
         intersect_th: float = 0.1,
         no_surface: bool = False,
         run_backward: bool = False,
+        reg: bool = False,
     ):
         """
         gradcheck version for surface rendering
@@ -1663,116 +1664,6 @@ class SparseGrid(nn.Module):
 
         if return_raylen:
             return tmax - t
-
-        if no_surface and False:
-            log_light_intensity = torch.zeros(B, device=origins.device)
-            out_rgb = torch.zeros((B, 3), device=origins.device)
-            good_indices = torch.arange(B, device=origins.device)
-
-            origins_ini = origins
-            dirs_ini = dirs
-
-            mask = t <= tmax
-            good_indices = good_indices[mask]
-            origins = origins[mask]
-            dirs = dirs[mask]
-
-            #  invdirs = invdirs[mask]
-            t = t[mask]
-            sh_mult = sh_mult[mask]
-            tmax = tmax[mask]
-
-            while good_indices.numel() > 0:
-                pos = origins + t[:, None] * dirs
-                pos = pos.clamp_min_(0.0)
-                pos[:, 0] = torch.clamp_max(pos[:, 0], gsz_cu[0] - 1)
-                pos[:, 1] = torch.clamp_max(pos[:, 1], gsz_cu[1] - 1)
-                pos[:, 2] = torch.clamp_max(pos[:, 2], gsz_cu[2] - 1)
-                #  print('pym', pos, log_light_intensity)
-
-                l = pos.to(torch.long)
-                l.clamp_min_(0)
-                l[:, 0] = torch.clamp_max(l[:, 0], (gsz_cu[0]).long() - 2)
-                l[:, 1] = torch.clamp_max(l[:, 1], (gsz_cu[1]).long() - 2)
-                l[:, 2] = torch.clamp_max(l[:, 2], (gsz_cu[2]).long() - 2)
-                pos -= l
-
-                # BEGIN CRAZY TRILERP
-                lx, ly, lz = l.unbind(-1)
-                links000 = self.links[lx, ly, lz]
-                links001 = self.links[lx, ly, lz + 1]
-                links010 = self.links[lx, ly + 1, lz]
-                links011 = self.links[lx, ly + 1, lz + 1]
-                links100 = self.links[lx + 1, ly, lz]
-                links101 = self.links[lx + 1, ly, lz + 1]
-                links110 = self.links[lx + 1, ly + 1, lz]
-                links111 = self.links[lx + 1, ly + 1, lz + 1]
-
-                sigma000, rgb000, _ = self._fetch_links(links000)
-                sigma001, rgb001, _ = self._fetch_links(links001)
-                sigma010, rgb010, _ = self._fetch_links(links010)
-                sigma011, rgb011, _ = self._fetch_links(links011)
-                sigma100, rgb100, _ = self._fetch_links(links100)
-                sigma101, rgb101, _ = self._fetch_links(links101)
-                sigma110, rgb110, _ = self._fetch_links(links110)
-                sigma111, rgb111, _ = self._fetch_links(links111)
-
-                wa, wb = 1.0 - pos, pos
-                c00 = sigma000 * wa[:, 2:] + sigma001 * wb[:, 2:]
-                c01 = sigma010 * wa[:, 2:] + sigma011 * wb[:, 2:]
-                c10 = sigma100 * wa[:, 2:] + sigma101 * wb[:, 2:]
-                c11 = sigma110 * wa[:, 2:] + sigma111 * wb[:, 2:]
-                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-                sigma = c0 * wa[:, :1] + c1 * wb[:, :1]
-
-                c00 = rgb000 * wa[:, 2:] + rgb001 * wb[:, 2:]
-                c01 = rgb010 * wa[:, 2:] + rgb011 * wb[:, 2:]
-                c10 = rgb100 * wa[:, 2:] + rgb101 * wb[:, 2:]
-                c11 = rgb110 * wa[:, 2:] + rgb111 * wb[:, 2:]
-                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-                rgb = c0 * wa[:, :1] + c1 * wb[:, :1]
-
-                # END CRAZY TRILERP
-
-                log_att = (
-                    -self.opt.step_size
-                    * torch.relu(sigma[..., 0])
-                    * delta_scale[good_indices]
-                ) # alpha
-                weight = torch.exp(log_light_intensity[good_indices]) * (
-                    1.0 - torch.exp(log_att)
-                )
-                # [B', 3, n_sh_coeffs]
-                rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
-                rgb = torch.clamp_min(
-                    torch.sum(sh_mult.unsqueeze(-2) * rgb_sh, dim=-1) + 0.5,
-                    0.0,
-                )  # [B', 3]
-                rgb = weight[:, None] * rgb[:, :3]
-
-                out_rgb[good_indices] += rgb
-                log_light_intensity[good_indices] += log_att
-                t += self.opt.step_size
-
-                mask = t <= tmax
-                good_indices = good_indices[mask]
-                origins = origins[mask]
-                dirs = dirs[mask]
-                #  invdirs = invdirs[mask]
-                t = t[mask]
-                sh_mult = sh_mult[mask]
-                tmax = tmax[mask]
-
-            # Add background color
-            if self.opt.background_brightness:
-                out_rgb += (
-                    torch.exp(log_light_intensity).unsqueeze(-1)
-                    * self.opt.background_brightness
-                )
-            return out_rgb
-
 
         if self.surface_type == SURFACE_TYPE_VOXEL_FACE:
             # take samples at ray-voxel intersections
@@ -2021,7 +1912,6 @@ class SparseGrid(nn.Module):
             out['log_stats']['no_surf_init_density_lap_loss'] = no_surf_init_density_lap_loss
 
             return out
-
 
 
         ########### Find Ray-Voxel Intersections ###########
@@ -2492,12 +2382,7 @@ class SparseGrid(nn.Module):
             c01 = n_surfaces[:,2] * wa[fake_sample_ids, 2:] + n_surfaces[:,3] * wb[fake_sample_ids, 2:]
             c10 = n_surfaces[:,4] * wa[fake_sample_ids, 2:] + n_surfaces[:,5] * wb[fake_sample_ids, 2:]
             c11 = n_surfaces[:,6] * wa[fake_sample_ids, 2:] + n_surfaces[:,7] * wb[fake_sample_ids, 2:]
-            
-            # c00 = surface000[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface001[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
-            # c01 = surface010[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface011[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
-            # c10 = surface100[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface101[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
-            # c11 = surface110[l_ids[fake_sample_ids]]/surface_norm * wa[fake_sample_ids, 2:] + surface111[l_ids[fake_sample_ids]]/surface_norm * wb[fake_sample_ids, 2:]
-            
+              
             
             c0 = c00 * wa[fake_sample_ids, 1:2] + c01 * wb[fake_sample_ids, 1:2]
             c1 = c10 * wa[fake_sample_ids, 1:2] + c11 * wb[fake_sample_ids, 1:2]
@@ -2666,92 +2551,44 @@ class SparseGrid(nn.Module):
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
 
             out['depth'] = out_depth
+        
+        if reg:
+            if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
+                out['log_stats']['m_lv_sets'] = M_LV
 
-        if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
-            out['log_stats']['m_lv_sets'] = M_LV
+                # caluclate udf_var_loss
+                # this loss is to reduce variance in UDF values in the same voxel
+                N_lv_sets = torch.count_nonzero(lv_set_mask, dim=-1)
+                if N_lv_sets.numel() == 0:
+                    udf_var_loss = 0.
+                else:
+                    udf_vars = torch.var(surface_values,dim=-1)[:,0]
+                    udf_var_loss = torch.mean(torch.clamp_min((N_lv_sets - 1), 0.) * udf_vars)
+                out['extra_loss']['udf_var_loss'] = udf_var_loss
+                out['log_stats']['udf_var_loss'] = udf_var_loss
 
-            # caluclate udf_var_loss
-            # this loss is to reduce variance in UDF values in the same voxel
-            N_lv_sets = torch.count_nonzero(lv_set_mask, dim=-1)
-            if N_lv_sets.numel() == 0:
-                udf_var_loss = 0.
+            # compute density lap loss
+            if alpha.numel() == 0:
+                density_lap_loss = 0.
             else:
-                udf_vars = torch.var(surface_values,dim=-1)[:,0]
-                udf_var_loss = torch.mean(torch.clamp_min((N_lv_sets - 1), 0.) * udf_vars)
-            out['extra_loss']['udf_var_loss'] = udf_var_loss
-            out['log_stats']['udf_var_loss'] = udf_var_loss
+                p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
+                density_lap_loss = torch.mean(-torch.log(p_lap))
+                # make positive
+                density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
+            out['extra_loss']['density_lap_loss'] = density_lap_loss
+            out['log_stats']['density_lap_loss'] = density_lap_loss
 
-        # compute density lap loss
-        if alpha.numel() == 0:
-            density_lap_loss = 0.
-        else:
-            p_lap = torch.exp(-alpha) + torch.exp(-(1-alpha))
-            density_lap_loss = torch.mean(-torch.log(p_lap))
-            # make positive
-            density_lap_loss = density_lap_loss + torch.log(torch.exp(torch.tensor(-1, device=p_lap.device)) + 1)
-        out['extra_loss']['density_lap_loss'] = density_lap_loss
-        out['log_stats']['density_lap_loss'] = density_lap_loss
-
-        # compute normal loss
-        # note that this should be replaced by a special form of TV loss really...
-        if alpha.numel() == 0:
-            normal_loss = 0.
-        else:
-            x,y,z = (l/grid_rescale).long().unbind(-1)
-            x,y,z = torch.clamp(x.long(), 0, self.links.shape[0]-3), \
-                    torch.clamp(y.long(), 0, self.links.shape[1]-3), \
-                    torch.clamp(z.long(), 0, self.links.shape[2]-3)
+            # compute normal loss
+            # note that this should be replaced by a special form of TV loss really...
+            if alpha.numel() == 0:
+                normal_loss = 0.
+            else:
+                x,y,z = (l/grid_rescale).long().unbind(-1)
+                x,y,z = torch.clamp(x.long(), 0, self.links.shape[0]-3), \
+                        torch.clamp(y.long(), 0, self.links.shape[1]-3), \
+                        torch.clamp(z.long(), 0, self.links.shape[2]-3)
 
 
-            coords = torch.tensor([
-                [0,0,0],
-                [0,0,1],
-                [0,1,0],
-                [0,1,1],
-                [1,0,0],
-                [1,0,1],
-                [1,1,0],
-                [1,1,1],
-
-                [0,0,2],
-                [0,1,2],
-                [1,0,2],
-                [1,1,2],
-
-                [0,2,0],
-                [0,2,1],
-                [1,2,0],
-                [1,2,1],
-
-                [2,0,0],
-                [2,0,1],
-                [2,1,0],
-                [2,1,1],
-            ], dtype=torch.long, device=l.device)
-
-            links=torch.zeros([3,3,3,l.shape[0]], dtype=torch.long, device=l.device)
-            alphas=torch.zeros([3,3,3,l.shape[0], 1], dtype=self.density_data.dtype, device=l.device)
-            surfaces=torch.zeros([3,3,3,l.shape[0], 1], dtype=self.surface_data.dtype, device=l.device)
-
-            for i in range(coords.shape[0]):
-                links[coords[i,0], coords[i,1], coords[i,2]] = self.links[x+coords[i,0], y+coords[i,1], z+coords[i,2]]
-                alphas[coords[i,0], coords[i,1], coords[i,2]], _ , \
-                    surfaces[coords[i,0], coords[i,1], coords[i,2]] = self._fetch_links(self.links[x+coords[i,0], y+coords[i,1], z+coords[i,2]])
-
-            def find_normal(norm_xyz):
-                x,y,z = norm_xyz.unbind(-1)
-
-                dx = ((surfaces[x+1,y,z]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
-                    (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x,y+1,z]+surfaces[x,y+1,z+1])) /4
-                dy = ((surfaces[x,y+1,z]+surfaces[x,y+1,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
-                    (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x+1,y,z]+surfaces[x+1,y,z+1]))/4
-                dz = ((surfaces[x,y,z+1]+surfaces[x,y+1,z+1]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z+1]) - \
-                    (surfaces[x,y,z]+surfaces[x,y+1,z]+surfaces[x+1,y,z]+surfaces[x+1,y+1,z]))/4
-
-                normals = torch.stack([dx, dy, dz], dim=-1)
-                normals = normals / torch.clamp(torch.norm(normals, dim=-1, keepdim=True), 1e-10)
-
-                # check if there is non-exist vertex
                 coords = torch.tensor([
                     [0,0,0],
                     [0,0,1],
@@ -2761,79 +2598,128 @@ class SparseGrid(nn.Module):
                     [1,0,1],
                     [1,1,0],
                     [1,1,1],
-                    ], dtype=torch.long, device=l.device)
-                ver_xyzs = norm_xyz[None, :] + coords
-                valid_mask = torch.ones(links.shape[-1], device=links.device).bool()
-                for i in range(ver_xyzs.shape[0]):
-                    valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
 
-                alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
-                alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
+                    [0,0,2],
+                    [0,1,2],
+                    [1,0,2],
+                    [1,1,2],
 
-                return normals, valid_mask, torch.sigmoid(alpha_v.detach().clone())
+                    [0,2,0],
+                    [0,2,1],
+                    [1,2,0],
+                    [1,2,1],
 
-            # find normals
-            norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=l.device)
-            norm000, mask000, alpha_v000 = find_normal(norm_xyzs[0])
-            norm001, mask001, alpha_v001 = find_normal(norm_xyzs[1])
-            norm010, mask010, alpha_v010 = find_normal(norm_xyzs[2])
-            norm100, mask100, alpha_v100 = find_normal(norm_xyzs[3])
+                    [2,0,0],
+                    [2,0,1],
+                    [2,1,0],
+                    [2,1,1],
+                ], dtype=torch.long, device=l.device)
+
+                links=torch.zeros([3,3,3,l.shape[0]], dtype=torch.long, device=l.device)
+                alphas=torch.zeros([3,3,3,l.shape[0], 1], dtype=self.density_data.dtype, device=l.device)
+                surfaces=torch.zeros([3,3,3,l.shape[0], 1], dtype=self.surface_data.dtype, device=l.device)
+
+                for i in range(coords.shape[0]):
+                    links[coords[i,0], coords[i,1], coords[i,2]] = self.links[x+coords[i,0], y+coords[i,1], z+coords[i,2]]
+                    alphas[coords[i,0], coords[i,1], coords[i,2]], _ , \
+                        surfaces[coords[i,0], coords[i,1], coords[i,2]] = self._fetch_links(self.links[x+coords[i,0], y+coords[i,1], z+coords[i,2]])
+
+                def find_normal(norm_xyz):
+                    x,y,z = norm_xyz.unbind(-1)
+
+                    dx = ((surfaces[x+1,y,z]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
+                        (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x,y+1,z]+surfaces[x,y+1,z+1])) /4
+                    dy = ((surfaces[x,y+1,z]+surfaces[x,y+1,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
+                        (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x+1,y,z]+surfaces[x+1,y,z+1]))/4
+                    dz = ((surfaces[x,y,z+1]+surfaces[x,y+1,z+1]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z+1]) - \
+                        (surfaces[x,y,z]+surfaces[x,y+1,z]+surfaces[x+1,y,z]+surfaces[x+1,y+1,z]))/4
+
+                    normals = torch.stack([dx, dy, dz], dim=-1)
+                    normals = normals / torch.clamp(torch.norm(normals, dim=-1, keepdim=True), 1e-10)
+
+                    # check if there is non-exist vertex
+                    coords = torch.tensor([
+                        [0,0,0],
+                        [0,0,1],
+                        [0,1,0],
+                        [0,1,1],
+                        [1,0,0],
+                        [1,0,1],
+                        [1,1,0],
+                        [1,1,1],
+                        ], dtype=torch.long, device=l.device)
+                    ver_xyzs = norm_xyz[None, :] + coords
+                    valid_mask = torch.ones(links.shape[-1], device=links.device).bool()
+                    for i in range(ver_xyzs.shape[0]):
+                        valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
+
+                    alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
+                    alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
+
+                    return normals, valid_mask, torch.sigmoid(alpha_v.detach().clone())
+
+                # find normals
+                norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=l.device)
+                norm000, mask000, alpha_v000 = find_normal(norm_xyzs[0])
+                norm001, mask001, alpha_v001 = find_normal(norm_xyzs[1])
+                norm010, mask010, alpha_v010 = find_normal(norm_xyzs[2])
+                norm100, mask100, alpha_v100 = find_normal(norm_xyzs[3])
 
 
-            # check connectivity of surfaces
-            face001 = torch.concat([surfaces[0,0,1], surfaces[0,1,1], surfaces[1,0,1], surfaces[1,1,1]], axis=-1)
-            face010 = torch.concat([surfaces[0,1,0], surfaces[0,1,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
-            face100 = torch.concat([surfaces[1,0,0], surfaces[1,0,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
-            con001 = torch.count_nonzero(
-                (self.level_set_data[None, :] >= face001.min(axis=-1, keepdim=True).values) & \
-                (self.level_set_data[None, :] <= face001.max(axis=-1, keepdim=True).values),
-                axis=-1
-                ) > 0
-            con010 = torch.count_nonzero(
-                (self.level_set_data[None, :] >= face010.min(axis=-1, keepdim=True).values) & \
-                (self.level_set_data[None, :] <= face010.max(axis=-1, keepdim=True).values),
-                axis=-1
-                ) > 0
-            con100 = torch.count_nonzero(
-                (self.level_set_data[None, :] >= face100.min(axis=-1, keepdim=True).values) & \
-                (self.level_set_data[None, :] <= face100.max(axis=-1, keepdim=True).values),
-                axis=-1
-                ) > 0
+                # check connectivity of surfaces
+                face001 = torch.concat([surfaces[0,0,1], surfaces[0,1,1], surfaces[1,0,1], surfaces[1,1,1]], axis=-1)
+                face010 = torch.concat([surfaces[0,1,0], surfaces[0,1,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+                face100 = torch.concat([surfaces[1,0,0], surfaces[1,0,1], surfaces[1,1,0], surfaces[1,1,1]], axis=-1)
+                con001 = torch.count_nonzero(
+                    (self.level_set_data[None, :] >= face001.min(axis=-1, keepdim=True).values) & \
+                    (self.level_set_data[None, :] <= face001.max(axis=-1, keepdim=True).values),
+                    axis=-1
+                    ) > 0
+                con010 = torch.count_nonzero(
+                    (self.level_set_data[None, :] >= face010.min(axis=-1, keepdim=True).values) & \
+                    (self.level_set_data[None, :] <= face010.max(axis=-1, keepdim=True).values),
+                    axis=-1
+                    ) > 0
+                con100 = torch.count_nonzero(
+                    (self.level_set_data[None, :] >= face100.min(axis=-1, keepdim=True).values) & \
+                    (self.level_set_data[None, :] <= face100.max(axis=-1, keepdim=True).values),
+                    axis=-1
+                    ) > 0
 
-            norm_dz = torch.norm(norm001 - norm000, dim=-1)
-            norm_dy = torch.norm(norm010 - norm000, dim=-1)
-            norm_dx = torch.norm(norm100 - norm000, dim=-1)
-            # filter out gradients on non-exist voxel or non-connected surfaces
-            norm_dz[(~mask001)|(~mask000)|(~con001)] = 0.
-            norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
-            norm_dx[(~mask100)|(~mask000)|(~con100)] = 0.
+                norm_dz = torch.norm(norm001 - norm000, dim=-1)
+                norm_dy = torch.norm(norm010 - norm000, dim=-1)
+                norm_dx = torch.norm(norm100 - norm000, dim=-1)
+                # filter out gradients on non-exist voxel or non-connected surfaces
+                norm_dz[(~mask001)|(~mask000)|(~con001)] = 0.
+                norm_dy[(~mask010)|(~mask000)|(~con010)] = 0.
+                norm_dx[(~mask100)|(~mask000)|(~con100)] = 0.
 
-            if alpha_weighted_norm_loss:
-                # use alpha value to re-weight the normal loss
-                norm_dz = norm_dz * alpha_v000[:, None] * alpha_v001[:, None]
-                norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
-                norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
+                if alpha_weighted_norm_loss:
+                    # use alpha value to re-weight the normal loss
+                    norm_dz = norm_dz * alpha_v000[:, None] * alpha_v001[:, None]
+                    norm_dy = norm_dy * alpha_v000[:, None] * alpha_v010[:, None]
+                    norm_dx = norm_dx * alpha_v100[:, None] * alpha_v100[:, None]
 
-            normal_loss = torch.mean(torch.concat([norm_dx,norm_dy,norm_dz],axis=-1))
+                normal_loss = torch.mean(torch.concat([norm_dx,norm_dy,norm_dz],axis=-1))
 
-        out['extra_loss']['normal_loss'] = normal_loss
-        out['log_stats']['normal_loss'] = normal_loss
+            out['extra_loss']['normal_loss'] = normal_loss
+            out['log_stats']['normal_loss'] = normal_loss
 
-        if B_alpha.numel() == 0:
-            out['intersections'] = torch.ones((0, 3), device=origins.device)
-        else:
-            B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
-            B_samples[B_to_sample_mask] = (samples / grid_rescale).to(B_samples.dtype)
-            sample_mask = B_alpha > intersect_th
-            B_samples[~sample_mask, :] = -1.
-            # ids = torch.argmax(sample_mask.long(), dim=-1)
-            # intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
-            # intersects = intersects[sample_mask.any(axis=-1)]
-            intersects = B_samples[sample_mask, :]
-            # intersect_alphas = B_weights[sample_mask]
-            intersect_alphas = B_alpha[sample_mask]
-            out['intersections'] = self.grid2world(intersects)
-            out['intersect_alphas'] = intersect_alphas
+            if B_alpha.numel() == 0:
+                out['intersections'] = torch.ones((0, 3), device=origins.device)
+            else:
+                B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
+                B_samples[B_to_sample_mask] = (samples / grid_rescale).to(B_samples.dtype)
+                sample_mask = B_alpha > intersect_th
+                B_samples[~sample_mask, :] = -1.
+                # ids = torch.argmax(sample_mask.long(), dim=-1)
+                # intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
+                # intersects = intersects[sample_mask.any(axis=-1)]
+                intersects = B_samples[sample_mask, :]
+                # intersect_alphas = B_weights[sample_mask]
+                intersect_alphas = B_alpha[sample_mask]
+                out['intersections'] = self.grid2world(intersects)
+                out['intersect_alphas'] = intersect_alphas
 
         if run_backward:
             alpha.retain_grad()
