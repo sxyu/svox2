@@ -670,6 +670,8 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
         float scale_surf,
         bool surf_sparse_decrease,
         float surf_sparse_thresh,
+        float alpha_bound,
+        float surf_bound,
         size_t Q,
         // Output
         bool* __restrict__ mask_out,
@@ -681,6 +683,8 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
      * Sparsity loss on surf: log(sigmoid(alpha_raw)) if alpha_raw < surf_sparse_thresh
      * 
      * If surf_sparse_decrease is false, then grad to surf is negative (surf scalars encouraged to increaese)
+     * alpha/surf bounds: do not apply gradient if the values are below their bounds
+     * if surf_sparse_decrease is false, surf_bound is used as upper bound, otherwise it's lower bound
     */
     CUDA_GET_THREAD_ID_U64(tid, Q);
     const int idx = 0;
@@ -698,15 +702,27 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
 
     // alpha sparsify loss
     const float alpha_raw = data_alpha[lnk000][idx];
-
     const float grad = _EXP(-alpha_raw) / (1+ _EXP(-alpha_raw));
+    const float safe_grad = isnan(grad) ? 1.f : grad;
 
-    atomicAdd(&grad_alpha_out[lnk000 * data_alpha.size(1) + idx], scale_alpha * grad);
+    if (alpha_raw > alpha_bound){
+        atomicAdd(&grad_alpha_out[lnk000 * data_alpha.size(1) + idx], scale_alpha * safe_grad);
+    }
+
+
+    // if (isnan(scale_alpha * grad)){
+    //     printf("x,y,z: [%d, %d, %d]\n", x, y, z);
+    //     printf("alpha_raw: [%f]\n", alpha_raw);
+    //     printf("grad: [%f]\n", grad);
+    // }
+
+
+    bool const reg_surf = (surf_sparse_decrease) ? (data_surf[lnk000][idx] > surf_bound) : (data_surf[lnk000][idx] < surf_bound);
 
     // surface sparsify loss
-    if (alpha_raw < surf_sparse_thresh){
+    if ( reg_surf && (alpha_raw < surf_sparse_thresh)){
         atomicAdd(&grad_surf_out[lnk000 * data_alpha.size(1) + idx], 
-            surf_sparse_decrease ? (scale_surf * grad) : (-scale_surf * grad));
+            surf_sparse_decrease ? (scale_surf * grad) : (-scale_surf * safe_grad));
     }
     
 }
@@ -1356,6 +1372,8 @@ void alpha_surf_sparsify_grad_sparse(torch::Tensor links,
              float scale_surf,
              bool surf_sparse_decrease,
              float surf_sparse_thresh,
+             float alpha_bound,
+             float surf_bound,
              torch::Tensor grad_alpha,
              torch::Tensor grad_surf
              ) {
@@ -1392,6 +1410,8 @@ void alpha_surf_sparsify_grad_sparse(torch::Tensor links,
             scale_surf / nl,
             surf_sparse_decrease,
             surf_sparse_thresh,
+            alpha_bound,
+            surf_bound,
             Q,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,

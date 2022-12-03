@@ -104,7 +104,7 @@ void surface_normal_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, int, int,
              Tensor);
 void alpha_lap_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, float, float, float,
              Tensor);
-void alpha_surf_sparsify_grad_sparse(Tensor, Tensor, Tensor, Tensor, Tensor, float, float, bool, float,
+void alpha_surf_sparsify_grad_sparse(Tensor, Tensor, Tensor, Tensor, Tensor, float, float, bool, float, float, float,
              Tensor, Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
                     float, bool, bool, float, float, Tensor);

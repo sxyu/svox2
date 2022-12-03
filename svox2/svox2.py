@@ -4291,6 +4291,8 @@ class SparseGrid(nn.Module):
                         sparse_frac: float = 0.01,
                         surf_sparse_decrease: bool = True,
                         surf_sparse_thresh: float = 0.01,
+                        alpha_sparsify_bound: float = 1e-6,
+                        surf_sparsify_bound: float = -1,
                         contiguous: bool = True
                     ):
         '''
@@ -4319,6 +4321,8 @@ class SparseGrid(nn.Module):
                         scaling_alpha, scaling_surf,
                         surf_sparse_decrease,
                         utils.logit_np(surf_sparse_thresh),
+                        utils.logit_np(alpha_sparsify_bound),
+                        surf_sparsify_bound,
                         grad_alpha,
                         grad_surf)
         else:

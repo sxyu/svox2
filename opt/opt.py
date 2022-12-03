@@ -547,6 +547,7 @@ while True:
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
                 summary_writer.add_scalar("lambda_surf_normal_loss", lambda_surf_normal_loss, global_step=gstep_id)
                 summary_writer.add_scalar("max_density", grid.density_data.max().cpu().detach().numpy(), global_step=gstep_id)
+                summary_writer.add_scalar("min_density", grid.density_data.min().cpu().detach().numpy(), global_step=gstep_id)
                 if torch.is_tensor(grid.fake_sample_std):
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std.item(), global_step=gstep_id)
                 if grid.fake_sample_std is not None:
@@ -634,8 +635,12 @@ while True:
                             sparse_frac = args.alpha_surf_sparsify_sparsity,
                             surf_sparse_decrease = args.sparsify_surf_decrease,
                             surf_sparse_thresh = args.sparsify_surf_thresh,
+                            alpha_sparsify_bound = args.alpha_sparsify_bound,
+                            surf_sparsify_bound = args.surf_sparsify_bound,
                             contiguous=args.tv_contiguous,
                             )
+
+                    assert not torch.isnan(grid.density_data.grad).any()
 
             if args.lambda_alpha_lap_loss > 0.0:
                 grid.inplace_alpha_lap_grad(grid.density_data.grad,
@@ -646,8 +651,6 @@ while True:
                         # use_kernel=USE_KERNEL,
                         density_is_sigma = grid.surface_data is None or no_surface 
                         )
-
-
 
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):
