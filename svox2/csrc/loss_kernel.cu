@@ -660,7 +660,56 @@ __global__ void alpha_lap_grad_sparse_kernel(
     
 }
 
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void alpha_surf_sparsify_grad_sparse_kernel(
+        const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data_alpha,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data_surf,
+        const int32_t* __restrict__ rand_cells,
+        float scale_alpha,
+        float scale_surf,
+        bool surf_sparse_decrease,
+        float surf_sparse_thresh,
+        size_t Q,
+        // Output
+        bool* __restrict__ mask_out,
+        float* __restrict__ grad_alpha_out,
+        float* __restrict__ grad_surf_out
+        ) {
+    /**
+     * Sparsity loss on alpha: log(sigmoid(alpha_raw))
+     * Sparsity loss on surf: log(sigmoid(alpha_raw)) if alpha_raw < surf_sparse_thresh
+     * 
+     * If surf_sparse_decrease is false, then grad to surf is negative (surf scalars encouraged to increaese)
+    */
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int idx = 0;
+    const int xyz = rand_cells[tid];
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
 
+    const auto lnk000 = links[x][y][z];
+
+    if (lnk000 < 0) return;
+
+    if (mask_out != nullptr) mask_out[lnk000] = true; 
+
+    // alpha sparsify loss
+    const float alpha_raw = data_alpha[lnk000][idx];
+
+    const float grad = _EXP(-alpha_raw) / (1+ _EXP(-alpha_raw));
+
+    atomicAdd(&grad_alpha_out[lnk000 * data_alpha.size(1) + idx], scale_alpha * grad);
+
+    // surface sparsify loss
+    if (alpha_raw < surf_sparse_thresh){
+        atomicAdd(&grad_surf_out[lnk000 * data_alpha.size(1) + idx], 
+            surf_sparse_decrease ? (scale_surf * grad) : (-scale_surf * grad));
+    }
+    
+}
 
 
 
@@ -1295,6 +1344,60 @@ void alpha_lap_grad_sparse(torch::Tensor links,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
             grad_data.data_ptr<float>());
+    CUDA_CHECK_ERRORS;
+}
+
+void alpha_surf_sparsify_grad_sparse(torch::Tensor links,
+             torch::Tensor alpha_data,
+             torch::Tensor surf_data,
+             torch::Tensor rand_cells,
+             torch::Tensor mask_out,
+             float scale_alpha,
+             float scale_surf,
+             bool surf_sparse_decrease,
+             float surf_sparse_thresh,
+             torch::Tensor grad_alpha,
+             torch::Tensor grad_surf
+             ) {
+    DEVICE_GUARD(alpha_data);
+    CHECK_INPUT(alpha_data);
+    CHECK_INPUT(surf_data);
+    CHECK_INPUT(links);
+    CHECK_INPUT(grad_alpha);
+    CHECK_INPUT(grad_surf);
+    CHECK_INPUT(rand_cells);
+    CHECK_INPUT(mask_out);
+    TORCH_CHECK(alpha_data.is_floating_point());
+    TORCH_CHECK(surf_data.is_floating_point());
+    TORCH_CHECK(grad_alpha.is_floating_point());
+    TORCH_CHECK(grad_surf.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(alpha_data.ndimension() == 2);
+    TORCH_CHECK(surf_data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(grad_alpha.ndimension() == 2);
+    TORCH_CHECK(grad_surf.ndimension() == 2);
+
+    int nl = rand_cells.size(0);
+    size_t Q = rand_cells.size(0);
+
+    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    device::alpha_surf_sparsify_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            alpha_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            surf_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            rand_cells.data_ptr<int32_t>(),
+            scale_alpha / nl,
+            scale_surf / nl,
+            surf_sparse_decrease,
+            surf_sparse_thresh,
+            Q,
+            // Output
+            (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
+            grad_alpha.data_ptr<float>(),
+            grad_surf.data_ptr<float>()
+            );
     CUDA_CHECK_ERRORS;
 }
 

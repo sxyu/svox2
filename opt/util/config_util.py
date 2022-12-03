@@ -446,6 +446,19 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--tv_logalpha', action='store_true', default=False,
                     help='Use log(1-exp(-delta * sigma)) as in neural volumes')
 
+    group.add_argument('--lambda_sparsify_alpha', type=float, default=
+                        0.0,
+                        help="Weight for sparsity loss on log alpha. Used for surface optimization. Note that it works differently to plenoxel sparsity")
+    
+    group.add_argument('--lambda_sparsify_surf', type=float, default=
+                        0.0,
+                        help="Weight for sparsity loss on log surface. ")
+    group.add_argument('--sparsify_surf_decrease', action='store_true', default=False,
+                        help="Sparsifying surface by decreasing the values ")
+    group.add_argument('--sparsify_surf_thresh', type=float, default=0.1)
+    group.add_argument('--alpha_surf_sparsify_sparsity', type=float, default=0.01)
+    
+
     group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
     group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
 
@@ -466,9 +479,6 @@ def setup_train_conf(return_parpser=False):
                         0.0,
                         help="Weight for sparsity loss as in SNeRG/PlenOctrees " +
                             "(but applied on the ray)")
-    group.add_argument('--lambda_sparsity_alpha', type=float, default=
-                        0.0,
-                        help="Weight for sparsity loss on log alpha. Used for surface optimization")
     group.add_argument('--lambda_beta', type=float, default=
                         0.0,
                         help="Weight for beta distribution sparsity loss as in neural volumes")

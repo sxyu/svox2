@@ -3370,7 +3370,12 @@ class SparseGrid(nn.Module):
             
         return all_pts
 
-    def volume_render_extract_pts_with_alpha(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
+    def volume_render_extract_pts_with_alpha(self, 
+    camera: Camera, 
+    sigma_thresh: Optional[float] = None, 
+    batch_size: int = 5000, 
+    max_sample: int = 20,
+    **kwargs):
         """
         Volume render and caculate depth for each camera ray, then store a 3D point for each ray
 
@@ -3393,7 +3398,7 @@ class SparseGrid(nn.Module):
                                     self._to_cpp(),
                                     rays._to_cpp(),
                                     self.opt._to_cpp(),
-                                    20, # max sample per ray
+                                    max_sample, # max sample per ray
                                     sigma_thresh)
                 all_alpha.append(alphas[depths!=0.])
                 all_depths.append(depths[depths!=0.])
@@ -4251,6 +4256,71 @@ class SparseGrid(nn.Module):
                         ndc_coeffs[0], ndc_coeffs[1],
                         world_step,
                         grad)
+        else:
+            raise NotImplementedError
+
+    def _alpha_surf_sparsify_grad_check(self, rand_cells, scale_alpha, scale_surf, surf_decrease, surf_thresh, device='cuda'):
+        xyz = rand_cells
+        z = (xyz % self.links.shape[2]).long()
+        xy = xyz / self.links.shape[2]
+        y = (xy % self.links.shape[1]).long()
+        x = (xy / self.links.shape[1]).long()
+
+
+        links = self.links[x,y,z]
+        alpha_raws, _ , surfaces = self._fetch_links(links)
+
+        alpha_raws_de = alpha_raws.detach().clone()
+
+        alpha_loss = torch.log(torch.sigmoid(alpha_raws))
+        surface_loss = torch.where(alpha_raws < surf_thresh, 
+        torch.exp(-alpha_raws_de) / (1+torch.exp(-alpha_raws_de)), torch.zeros_like(alpha_loss)) * surfaces
+        if not surf_decrease:
+            surface_loss = -surface_loss
+
+        loss = torch.mean(scale_alpha * alpha_loss + scale_surf * surface_loss)
+        loss.backward()
+
+        return loss
+
+    def inplace_alpha_surf_sparsify_grad(self, 
+                        grad_alpha: torch.Tensor,
+                        grad_surf: torch.Tensor,
+                        scaling_alpha: float = 1.0,
+                        scaling_surf: float = 1.0,
+                        sparse_frac: float = 0.01,
+                        surf_sparse_decrease: bool = True,
+                        surf_sparse_thresh: float = 0.01,
+                        contiguous: bool = True
+                    ):
+        '''
+        Inplace sparsify grad for alpha and surf
+        Alpha is sparsified by log(alpha)
+        Surface is sparsified by reducing/increasing values depending on surf_sparse_decrease
+
+        surf_sparse_decrease: sparsify surface scalars by decreasing or increasing the values
+        '''
+        # if self.surface_type != SURFACE_TYPE_NONE:
+        #     raise NotImplementedError
+
+
+        assert (
+            _C is not None and self.density_data.is_cuda
+        ), "CUDA extension is currently required for alpha lap"
+
+        rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+        if rand_cells is not None:
+            if rand_cells.size(0) > 0:
+                _C.alpha_surf_sparsify_grad_sparse(self.links, 
+                        self.density_data,
+                        self.surface_data,
+                        rand_cells,
+                        self._get_sparse_grad_indexer(),
+                        scaling_alpha, scaling_surf,
+                        surf_sparse_decrease,
+                        utils.logit_np(surf_sparse_thresh),
+                        grad_alpha,
+                        grad_surf)
         else:
             raise NotImplementedError
 

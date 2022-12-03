@@ -490,7 +490,7 @@ while True:
             else:
                 out = grid.volume_render_fused(rays, rgb_gt,
                         beta_loss=args.lambda_beta,
-                        sparsity_loss=args.lambda_sparsity if (grid.surface_data is None or no_surface) else args.lambda_sparsity_alpha,
+                        sparsity_loss=args.lambda_sparsity if (grid.surface_data is None or no_surface) else 0,
                         fused_surf_norm_reg_scale = lambda_surf_normal_loss if args.fused_surf_norm_reg else 0.0,
                         fused_surf_norm_reg_con_check = not args.no_surf_norm_con_check,
                         fused_surf_norm_reg_ignore_empty = args.surf_norm_reg_ignore_empty,
@@ -582,6 +582,8 @@ while True:
                             ndc_coeffs=dset.ndc_coeffs,
                             contiguous=args.tv_contiguous)
             else:
+                # loses defined for surface
+
                 # TV on alpha
                 if args.lambda_tv_alpha > 0.0:
                     grid.inplace_tv_grad(grid.density_data.grad,
@@ -589,6 +591,51 @@ while True:
                             sparse_frac=args.tv_sparsity,
                             ndc_coeffs=dset.ndc_coeffs,
                             contiguous=args.tv_contiguous)
+
+                if args.lambda_tv_surface > 0.0:
+                    #  with Timing("tv_inpl"):
+                    grid.inplace_tv_surface_grad(grid.surface_data.grad,
+                            scaling=args.lambda_tv_surface,
+                            sparse_frac=args.tv_surface_sparsity,
+                            ndc_coeffs=dset.ndc_coeffs,
+                            contiguous=args.tv_contiguous)
+                if lambda_surf_normal_loss > 0.0 and not args.fused_surf_norm_reg:
+                    # with Timing("normal_loss"):
+                    norm_loss = grid.inplace_surface_normal_grad(grid.surface_data.grad,
+                            scaling=lambda_surf_normal_loss,
+                            eikonal_scale=args.lambda_surface_eikonal,
+                            sparse_frac=args.norm_surface_sparsity,
+                            ndc_coeffs=dset.ndc_coeffs,
+                            contiguous=args.tv_contiguous,
+                            # use_kernel=not args.py_surf_norm_reg,
+                            connectivity_check=not args.no_surf_norm_con_check,
+                            ignore_empty=args.surf_norm_reg_ignore_empty,
+                            )
+
+                    if (gstep_id + 1) % args.print_every == 0 and norm_loss is not None:
+                        summary_writer.add_scalar("surf_norm_loss", norm_loss, global_step=gstep_id)
+
+                if args.lambda_surf_sign_loss > 0.0:
+                    # with Timing("normal_loss"):
+                    grid.inplace_surface_sign_change_grad(grid.surface_data.grad,
+                            scaling=args.lambda_surf_sign_loss,
+                            sparse_frac=args.norm_surface_sparsity,
+                            contiguous=args.tv_contiguous,
+                            use_kernel=USE_KERNEL,
+                            )
+
+                if args.lambda_sparsify_alpha > 0.0 or args.lambda_sparsify_surf > 0.0:
+                    # with Timing("normal_loss"):
+                    grid.inplace_alpha_surf_sparsify_grad(
+                            grid.density_data.grad,
+                            grid.surface_data.grad,
+                            scaling_alpha = args.lambda_sparsify_alpha,
+                            scaling_surf = args.lambda_sparsify_surf,
+                            sparse_frac = args.alpha_surf_sparsify_sparsity,
+                            surf_sparse_decrease = args.sparsify_surf_decrease,
+                            surf_sparse_thresh = args.sparsify_surf_thresh,
+                            contiguous=args.tv_contiguous,
+                            )
 
             if args.lambda_alpha_lap_loss > 0.0:
                 grid.inplace_alpha_lap_grad(grid.density_data.grad,
@@ -599,37 +646,7 @@ while True:
                         # use_kernel=USE_KERNEL,
                         density_is_sigma = grid.surface_data is None or no_surface 
                         )
-            if args.lambda_tv_surface > 0.0 and not no_surface:
-                #  with Timing("tv_inpl"):
-                grid.inplace_tv_surface_grad(grid.surface_data.grad,
-                        scaling=args.lambda_tv_surface,
-                        sparse_frac=args.tv_surface_sparsity,
-                        ndc_coeffs=dset.ndc_coeffs,
-                        contiguous=args.tv_contiguous)
-            if lambda_surf_normal_loss > 0.0 and not no_surface and not args.fused_surf_norm_reg:
-                # with Timing("normal_loss"):
-                norm_loss = grid.inplace_surface_normal_grad(grid.surface_data.grad,
-                        scaling=lambda_surf_normal_loss,
-                        eikonal_scale=args.lambda_surface_eikonal,
-                        sparse_frac=args.norm_surface_sparsity,
-                        ndc_coeffs=dset.ndc_coeffs,
-                        contiguous=args.tv_contiguous,
-                        # use_kernel=not args.py_surf_norm_reg,
-                        connectivity_check=not args.no_surf_norm_con_check,
-                        ignore_empty=args.surf_norm_reg_ignore_empty,
-                        )
 
-                if (gstep_id + 1) % args.print_every == 0 and norm_loss is not None:
-                    summary_writer.add_scalar("surf_norm_loss", norm_loss, global_step=gstep_id)
-
-            if args.lambda_surf_sign_loss > 0.0 and not no_surface:
-                # with Timing("normal_loss"):
-                grid.inplace_surface_sign_change_grad(grid.surface_data.grad,
-                        scaling=args.lambda_surf_sign_loss,
-                        sparse_frac=args.norm_surface_sparsity,
-                        contiguous=args.tv_contiguous,
-                        use_kernel=USE_KERNEL,
-                        )
 
 
             if args.lambda_tv_sh > 0.0:
