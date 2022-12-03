@@ -2,6 +2,7 @@ import torch
 import configargparse
 from util.dataset import datasets
 import json
+import numpy as np
 
 
 def define_common_args(parser : configargparse.ArgumentParser):
@@ -174,7 +175,13 @@ def setup_render_opts(opt, args):
     Pass render arguments to the SparseGrid renderer options
     """
     opt.step_size = args.step_size
-    opt.sigma_thresh = args.sigma_thresh
+    
+    # convert alpha threshold to raw alpha values
+    if args.renderer_backend in ['surface', 'surf_trav']:
+        opt.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
+    else:
+        opt.sigma_thresh = args.sigma_thresh
+
     opt.stop_thresh = args.stop_thresh
     opt.background_brightness = args.background_brightness
     opt.backend = args.renderer_backend

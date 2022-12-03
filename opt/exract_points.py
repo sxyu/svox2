@@ -202,6 +202,8 @@ if args.extract_nerf:
     grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
     grid.opt.backend = 'cuvol'
 
+print('Render options', grid.opt)
+
 with torch.no_grad():
     n_images = c2ws.size(0)
     img_eval_interval = max(n_images // args.n_eval, 1)

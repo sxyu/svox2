@@ -90,7 +90,7 @@ if args.num_views >= dset.c2w.shape[0]:
     c2ws = dset.c2w.numpy()[:, :4, :4]
 else:
     test_cam_ids = np.round(np.linspace(0, dset.c2w.shape[0] - 1, args.num_views)).astype(int)
-    # test_cam_ids = np.array([24])
+    # test_cam_ids = np.array([48])
     print(f'Using test views with ids: {test_cam_ids}')
     c2ws = dset.c2w.numpy()[test_cam_ids, :4, :4]
 
@@ -154,6 +154,8 @@ if args.blackbg:
 render_out_path += '.mp4'
 print('Writing to', render_out_path)
 
+print('Render options', grid.opt)
+
 # NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
 # other backends will manually generate rays per frame (slow)
 with torch.no_grad():
@@ -162,7 +164,7 @@ with torch.no_grad():
     n_images_gen = 0
     frames = []
     #  if args.near_clip >= 0.0:
-    grid.opt.near_clip = 0.0 #args.near_clip
+    # grid.opt.near_clip = 0.0 #args.near_clip
     if args.width is None:
         args.width = dset.get_image_size(0)[1]
     if args.height is None:
