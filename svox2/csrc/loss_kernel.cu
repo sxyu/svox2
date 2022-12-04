@@ -702,8 +702,9 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
 
     // alpha sparsify loss
     const float alpha_raw = data_alpha[lnk000][idx];
-    const float grad = _EXP(-alpha_raw) / (1+ _EXP(-alpha_raw));
-    const float safe_grad = isnan(grad) ? 1.f : grad;
+    // const float grad = _EXP(-alpha_raw) / (1+ _EXP(-alpha_raw));
+    // const float safe_grad = isnan(grad) ? 1.f : grad;
+    const float safe_grad = 1.f; // change to use L1 loss
 
     if (alpha_raw > alpha_bound){
         atomicAdd(&grad_alpha_out[lnk000 * data_alpha.size(1) + idx], scale_alpha * safe_grad);
@@ -722,7 +723,7 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
     // surface sparsify loss
     if ( reg_surf && (alpha_raw < surf_sparse_thresh)){
         atomicAdd(&grad_surf_out[lnk000 * data_alpha.size(1) + idx], 
-            surf_sparse_decrease ? (scale_surf * grad) : (-scale_surf * safe_grad));
+            surf_sparse_decrease ? (scale_surf * safe_grad) : (-scale_surf * safe_grad));
     }
     
 }
