@@ -63,7 +63,7 @@ torch::Tensor volume_render_expected_term_surf_trav(SparseGridSpec &, RaysSpec &
 // Depth rendering based on sigma-threshold as in Dex-NeRF
 torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, float);
-torch::Tensor extract_pts_surf_trav(SparseGridSpec &, RaysSpec &,
+std::tuple<torch::Tensor, torch::Tensor> extract_pts_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, int, float);
 
 // ** NV rendering formula (trilerp)

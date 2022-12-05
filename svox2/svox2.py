@@ -2709,21 +2709,22 @@ class SparseGrid(nn.Module):
             out['extra_loss']['normal_loss'] = normal_loss
             out['log_stats']['normal_loss'] = normal_loss
 
-            if B_alpha.numel() == 0:
-                out['intersections'] = torch.ones((0, 3), device=origins.device)
-            else:
-                B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
-                B_samples[B_to_sample_mask] = (samples / grid_rescale).to(B_samples.dtype)
-                sample_mask = B_alpha > intersect_th
-                B_samples[~sample_mask, :] = -1.
-                # ids = torch.argmax(sample_mask.long(), dim=-1)
-                # intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
-                # intersects = intersects[sample_mask.any(axis=-1)]
-                intersects = B_samples[sample_mask, :]
-                # intersect_alphas = B_weights[sample_mask]
-                intersect_alphas = B_alpha[sample_mask]
-                out['intersections'] = self.grid2world(intersects)
-                out['intersect_alphas'] = intersect_alphas
+        if B_alpha.numel() == 0:
+            out['intersections'] = torch.ones((0, 3), device=origins.device)
+            out['intersect_alphas'] = torch.ones((0), device=origins.device)
+        else:
+            B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
+            B_samples[B_to_sample_mask] = (samples / grid_rescale).to(B_samples.dtype)
+            sample_mask = B_alpha > intersect_th
+            B_samples[~sample_mask, :] = -1.
+            # ids = torch.argmax(sample_mask.long(), dim=-1)
+            # intersects = B_samples[torch.arange(B_samples.shape[0]), ids]
+            # intersects = intersects[sample_mask.any(axis=-1)]
+            intersects = B_samples[sample_mask, :]
+            # intersect_alphas = B_weights[sample_mask]
+            intersect_alphas = B_alpha[sample_mask]
+            out['intersections'] = self.grid2world(intersects)
+            out['intersect_alphas'] = intersect_alphas
 
         if run_backward:
             alpha.retain_grad()
@@ -3387,35 +3388,35 @@ class SparseGrid(nn.Module):
         :return: [N, 3] points array
         """
         rays = camera.gen_rays()
+        all_pts = []
+        all_alpha = []
         if self.surface_type == SURFACE_TYPE_NONE:
             raise NotImplementedError
         elif self.opt.backend in ['surf_trav']:
-            all_depths = []
-            all_alpha = []
             for batch_start in range(0, camera.height * camera.width, batch_size):
+                ray_batch =  rays[batch_start: batch_start + batch_size]
                 cu_fn = _C.__dict__[f"extract_pts_surf_trav"]
                 depths, alphas =  cu_fn(
                                     self._to_cpp(),
-                                    rays._to_cpp(),
+                                    ray_batch._to_cpp(),
                                     self.opt._to_cpp(),
                                     max_sample, # max sample per ray
                                     sigma_thresh)
-                all_alpha.append(alphas[depths!=0.])
-                all_depths.append(depths[depths!=0.])
-            all_depths = torch.cat(all_depths, dim=0)
-            all_alpha = torch.cat(all_alpha, dim=0)
-            all_pts = rays.origins + rays.dirs * all_depths[:,None]
+
+                mask = depths != 0.
+                all_alpha.append(alphas[mask])
+                pts = ray_batch.origins[:, None, :] + ray_batch.dirs[:, None, :] * depths[..., None]
+                all_pts.append(pts[mask])
             
         else:
             # extract from intersections
-            all_pts = []
-            all_alpha = []
             for batch_start in range(0, camera.height * camera.width, batch_size):
                 out = self._surface_render_gradcheck_lerp(rays[batch_start: batch_start + batch_size], **kwargs)
                 all_pts.append(out['intersections'])
                 all_alpha.append(out['intersect_alphas'])
-            all_pts = torch.cat(all_pts, dim=0)
-            all_alpha = torch.cat(all_alpha, dim=0)
+
+        all_pts = torch.cat(all_pts, dim=0)
+        all_alpha = torch.cat(all_alpha, dim=0)
             
         return all_pts, all_alpha
 
@@ -4311,6 +4312,18 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for alpha lap"
 
         rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+
+        # grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
+        # # sparse_num = max(int(sparse_frac * grid_size), 1)
+        # sparse_num = 100
+        # start = np.random.randint(0, grid_size)
+        # rand_cells = torch.arange(start, start + sparse_num, dtype=torch.int32, device=
+        #                                 self.links.device)
+
+        # if start > grid_size - sparse_num:
+        #     rand_cells[grid_size - sparse_num - start:] -= grid_size
+            
+
         if rand_cells is not None:
             if rand_cells.size(0) > 0:
                 _C.alpha_surf_sparsify_grad_sparse(self.links, 

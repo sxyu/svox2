@@ -954,6 +954,10 @@ __device__ __inline__ void trace_ray_extract_pt(
                     *(out+sample_id) = ((st[j]+t_close) / opt.step_size) * ray.world_step;
                     *(out_alpha+sample_id) = alpha;
                     sample_id += 1;
+
+                    if (sample_id >= max_sample){
+                        return;
+                    }
                 }
             }
 
