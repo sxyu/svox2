@@ -4311,6 +4311,9 @@ class SparseGrid(nn.Module):
             _C is not None and self.density_data.is_cuda
         ), "CUDA extension is currently required for alpha lap"
 
+        if sparse_frac * self.links.size(0) * self.links.size(1) * self.links.size(2) < 1.:
+            return
+
         rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
 
         # grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
