@@ -559,9 +559,11 @@ while True:
                     summary_writer.add_scalar("lr_color_bg", lr_color_bg, global_step=gstep_id)
 
                 # log alpha inspect
-                coords = torch.tensor([[197, 300, 348]], device='cuda')
-                scale = grid.links.shape[0] / 512
-                coords = coords * scale
+                world_coords = torch.tensor([[-0.1152,  0.0859,  0.1797]], device='cuda:0')
+                # coords = torch.tensor([[197, 300, 348]], device='cuda')
+                # scale = grid.links.shape[0] / 512
+                # coords = coords * scale
+                coords = grid.world2grid(world_coords)
                 alpha_inspect = grid._C.sample_grid_raw_alpha(
                     grid._to_cpp(grid_coords=True),
                     coords,

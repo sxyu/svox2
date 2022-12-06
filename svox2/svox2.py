@@ -3680,25 +3680,46 @@ class SparseGrid(nn.Module):
             self.capacity: int = reduce(lambda x, y: x * y, reso)
             curr_reso = self.links.shape
             dtype = torch.float32
-            reso_facts = [0. * curr_reso[i] / reso[i] for i in range(3)]
+            # reso_facts = [0. * curr_reso[i] / reso[i] for i in range(3)]
+            # X = torch.linspace(
+            #     reso_facts[0],
+            #     curr_reso[0] - reso_facts[0] - 0.5,
+            #     reso[0],
+            #     dtype=dtype,
+            # )
+            # Y = torch.linspace(
+            #     reso_facts[1],
+            #     curr_reso[1] - reso_facts[1] - 0.5,
+            #     reso[1],
+            #     dtype=dtype,
+            # )
+            # Z = torch.linspace(
+            #     reso_facts[2],
+            #     curr_reso[2] - reso_facts[2] - 0.5,
+            #     reso[2],
+            #     dtype=dtype,
+            # )
+
+            reso_facts = [0.5 * curr_reso[i] / reso[i] for i in range(3)]
             X = torch.linspace(
-                reso_facts[0],
-                curr_reso[0] - reso_facts[0] - 1,
+                reso_facts[0] - 0.5,
+                curr_reso[0] - reso_facts[0] - 0.5,
                 reso[0],
                 dtype=dtype,
             )
             Y = torch.linspace(
-                reso_facts[1],
-                curr_reso[1] - reso_facts[1] - 1,
+                reso_facts[1] - 0.5,
+                curr_reso[1] - reso_facts[1] - 0.5,
                 reso[1],
                 dtype=dtype,
             )
             Z = torch.linspace(
-                reso_facts[2],
-                curr_reso[2] - reso_facts[2] - 1,
+                reso_facts[2] - 0.5,
+                curr_reso[2] - reso_facts[2] - 0.5,
                 reso[2],
                 dtype=dtype,
             )
+
             X, Y, Z = torch.meshgrid(X, Y, Z)
             points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
 
@@ -3798,9 +3819,9 @@ class SparseGrid(nn.Module):
 
             sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
             sample_vals_surf = torch.cat(all_sample_vals_surf, dim=0) if len(all_sample_vals_surf) else torch.empty_like(self.surface_data[:0])
-            del self.density_data
-            del self.surface_data
-            del self.sh_data
+            # del self.density_data
+            # del self.surface_data
+            # del self.sh_data
             del all_sample_vals_sh
             del all_sample_vals_surf
 
@@ -3915,6 +3936,7 @@ class SparseGrid(nn.Module):
         """
         gsz = self._grid_size()
         offset = self._offset * gsz - 0.5
+        # offset = self._offset * gsz
         scaling = self._scaling * gsz
         return torch.addcmul(
             offset.to(device=points.device), points, scaling.to(device=points.device)
@@ -3930,6 +3952,7 @@ class SparseGrid(nn.Module):
         """
         gsz = self._grid_size()
         roffset = self.radius * (1.0 / gsz - 1.0) + self.center
+        # roffset = self.radius * (-1.0) + self.center
         rscaling = 2.0 * self.radius / gsz
         return torch.addcmul(
             roffset.to(device=points.device), points, rscaling.to(device=points.device)
