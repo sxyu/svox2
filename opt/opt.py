@@ -558,6 +558,24 @@ while True:
                     summary_writer.add_scalar("lr_sigma_bg", lr_sigma_bg, global_step=gstep_id)
                     summary_writer.add_scalar("lr_color_bg", lr_color_bg, global_step=gstep_id)
 
+                # log alpha inspect
+                coords = torch.tensor([[197, 300, 348]], device='cuda')
+                scale = grid.links.shape[0] / 512
+                coords = coords * scale
+                alpha_inspect = grid._C.sample_grid_raw_alpha(
+                    grid._to_cpp(grid_coords=True),
+                    coords,
+                    -20.
+                )
+                # link = grid.links[coords[0], coords[1], coords[2]]
+                # if link > 0:
+                #     alpha_inspect = grid.density_data[link]
+                # else:
+                #     alpha_inspect = -20
+                summary_writer.add_scalar("alpha_inspect", alpha_inspect, global_step=gstep_id)
+
+
+
                 if args.weight_decay_sh < 1.0:
                     grid.sh_data.data *= args.weight_decay_sigma
                 if args.weight_decay_sigma < 1.0:
@@ -759,6 +777,10 @@ while True:
                         args.lambda_tv_alpha *= args.tv_decay
                         args.lambda_tv_sh *= args.tv_decay
 
+                    # ckpt_path = path.join(args.train_dir, f'ckpt_{grid.links.shape[0]}_last.npz')
+                    # print('Saving', ckpt_path)
+                    # grid.save(ckpt_path, step_id=gstep_id)
+
                     reso_id += 1
                     use_sparsify = True
                     z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
@@ -783,6 +805,10 @@ while True:
 
                     if args.upsample_density_add:
                         grid.density_data.data[:] += args.upsample_density_add
+                    
+                    # ckpt_path = path.join(args.train_dir, f'ckpt_{grid.links.shape[0]}_begin.npz')
+                    # print('Saving', ckpt_path)
+                    # grid.save(ckpt_path, step_id=gstep_id)
 
                 if factor > 1 and reso_id < len(reso_list) - 1:
                     print('* Using higher resolution images due to large grid; new factor', factor)

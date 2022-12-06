@@ -455,7 +455,7 @@ def setup_train_conf(return_parpser=False):
                         help="Weight for sparsity loss on log surface. ")
     group.add_argument('--sparsify_surf_decrease', action='store_true', default=False,
                         help="Sparsifying surface by decreasing the values ")
-    group.add_argument('--sparsify_surf_thresh', type=float, default=0.1)
+    group.add_argument('--sparsify_surf_thresh', type=float, default=0.1, help='Alpha threshold for surface sparsity to be applied')
     group.add_argument('--alpha_surf_sparsify_sparsity', type=float, default=0.01)
     group.add_argument('--alpha_sparsify_bound', type=float, default=1e-6)
     group.add_argument('--surf_sparsify_bound', type=float, default=-10)

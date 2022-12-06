@@ -959,6 +959,7 @@ class SparseGrid(nn.Module):
             
             self.spc = _SPC(octree, length[0], feature, max_level, pyramids[0], exsum, point_hierarchy)
 
+        self._C = _C
 
         if self.links.is_cuda and use_sphere_bound and _C is not None:
             self.accelerate()
@@ -2726,6 +2727,8 @@ class SparseGrid(nn.Module):
             out['intersections'] = self.grid2world(intersects)
             out['intersect_alphas'] = intersect_alphas
 
+        # run_backward = True
+
         if run_backward:
             alpha.retain_grad()
             alpha_raw.retain_grad()
@@ -2733,8 +2736,8 @@ class SparseGrid(nn.Module):
             B_T.retain_grad()
             B_weights.retain_grad()
             samples.retain_grad()
-            B_rgb.retain_grad()
-            rgb.retain_grad()
+            # B_rgb.retain_grad()
+            # rgb.retain_grad()
             rgb_raw.retain_grad()
             ts.retain_grad()
             ts_raw.retain_grad()
@@ -2767,11 +2770,11 @@ class SparseGrid(nn.Module):
             surface101.retain_grad()
             surface110.retain_grad()
             surface111.retain_grad()
-            surface_scalar.retain_grad()
+            # surface_scalar.retain_grad()
 
-            alpha_before_rw.retain_grad()
-            n_surfaces.retain_grad()
-            surface_values.retain_grad()
+            # alpha_before_rw.retain_grad()
+            # n_surfaces.retain_grad()
+            # surface_values.retain_grad()
 
             s = torch.nn.functional.mse_loss(out['rgb'], torch.zeros_like(out['rgb']))
             s.backward()
@@ -3677,22 +3680,22 @@ class SparseGrid(nn.Module):
             self.capacity: int = reduce(lambda x, y: x * y, reso)
             curr_reso = self.links.shape
             dtype = torch.float32
-            reso_facts = [0.5 * curr_reso[i] / reso[i] for i in range(3)]
+            reso_facts = [0. * curr_reso[i] / reso[i] for i in range(3)]
             X = torch.linspace(
-                reso_facts[0] - 0.5,
-                curr_reso[0] - reso_facts[0] - 0.5,
+                reso_facts[0],
+                curr_reso[0] - reso_facts[0] - 1,
                 reso[0],
                 dtype=dtype,
             )
             Y = torch.linspace(
-                reso_facts[1] - 0.5,
-                curr_reso[1] - reso_facts[1] - 0.5,
+                reso_facts[1],
+                curr_reso[1] - reso_facts[1] - 1,
                 reso[1],
                 dtype=dtype,
             )
             Z = torch.linspace(
-                reso_facts[2] - 0.5,
-                curr_reso[2] - reso_facts[2] - 0.5,
+                reso_facts[2],
+                curr_reso[2] - reso_facts[2] - 1,
                 reso[2],
                 dtype=dtype,
             )
