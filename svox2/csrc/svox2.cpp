@@ -229,7 +229,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("use_spheric_clip", &RenderOptions::use_spheric_clip)
       .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque)
       .def_readwrite("surf_fake_sample", &RenderOptions::surf_fake_sample)
-      .def_readwrite("surf_fake_sample_min_vox_len", &RenderOptions::surf_fake_sample_min_vox_len);
+      .def_readwrite("surf_fake_sample_min_vox_len", &RenderOptions::surf_fake_sample_min_vox_len)
+      .def_readwrite("no_surf_grad_from_sh", &RenderOptions::no_surf_grad_from_sh);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
   // .def_readwrite("random_sigma_std_background",
