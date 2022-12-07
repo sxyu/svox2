@@ -452,6 +452,12 @@ while True:
                     init_alpha=0.1,
                     surface_rescale=args.surface_init_rescale,
                     )
+
+                # reset opt for surface rendering
+                grid.opt.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
+                grid.opt.step_size = args.step_size
+
+
                 eval_step(step_id=gstep_id)
                 if args.no_surface_init_debug_ckpt:
                     # also save a ckpt
@@ -461,9 +467,7 @@ while True:
 
                 gc.collect()
 
-                # reset opt for surface rendering
-                grid.opt.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
-                grid.opt.step_size = args.step_size
+
 
                 # torch.autograd.set_detect_anomaly(True)
 
