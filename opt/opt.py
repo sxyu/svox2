@@ -462,7 +462,7 @@ while True:
                 gc.collect()
 
                 # reset opt for surface rendering
-                grid.opt.sigma_thresh = args.sigma_thresh
+                grid.opt.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
                 grid.opt.step_size = args.step_size
 
                 # torch.autograd.set_detect_anomaly(True)
