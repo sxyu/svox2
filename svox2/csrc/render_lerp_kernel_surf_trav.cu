@@ -1291,19 +1291,21 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     // compute gradient to surface via sh
                     float grad_xyz [3] = {0,0,0}; // d_mse/d_pos[x,y,z]
-                    trilerp_backward_one_pos(
-                                grid.links,
-                                grid.sh_data,
-                                grid.stride_x,
-                                grid.size[2],
-                                grid.sh_data_dim,
-                                ray.l, ray.pos, lane_id,
-                                curr_grad_color, grad_xyz);
+                    if (!opt.no_surf_grad_from_sh){
+                        trilerp_backward_one_pos(
+                                    grid.links,
+                                    grid.sh_data,
+                                    grid.stride_x,
+                                    grid.size[2],
+                                    grid.sh_data_dim,
+                                    ray.l, ray.pos, lane_id,
+                                    curr_grad_color, grad_xyz);
 
-                    // use WarpReducef to sum up gradient to surface via different sh basis
-                    grad_xyz[0] = WarpReducef(temp_storage).Sum(grad_xyz[0]);
-                    grad_xyz[1] = WarpReducef(temp_storage).Sum(grad_xyz[1]);
-                    grad_xyz[2] = WarpReducef(temp_storage).Sum(grad_xyz[2]);
+                        // use WarpReducef to sum up gradient to surface via different sh basis
+                        grad_xyz[0] = WarpReducef(temp_storage).Sum(grad_xyz[0]);
+                        grad_xyz[1] = WarpReducef(temp_storage).Sum(grad_xyz[1]);
+                        grad_xyz[2] = WarpReducef(temp_storage).Sum(grad_xyz[2]);
+                    }
 
                     if (lane_id == 0) {
                         // compute gradient for sigmoid

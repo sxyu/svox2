@@ -171,6 +171,7 @@ struct RenderOptions {
   bool surf_fake_sample;
   float surf_fake_sample_min_vox_len;
 
+  bool no_surf_grad_from_sh;
   // bool randomize;
   // float random_sigma_std;
   // float random_sigma_std_background;

@@ -57,6 +57,7 @@ class RenderOptions:
 
     surf_fake_sample: bool = False
     surf_fake_sample_min_vox_len: float = 0.1
+    no_surf_grad_from_sh: bool = False
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -73,6 +74,7 @@ class RenderOptions:
         opt.last_sample_opaque = self.last_sample_opaque
         opt.surf_fake_sample = self.surf_fake_sample
         opt.surf_fake_sample_min_vox_len = self.surf_fake_sample_min_vox_len
+        opt.no_surf_grad_from_sh = self.no_surf_grad_from_sh
         #  opt.randomize = randomize
         #  opt.random_sigma_std = self.random_sigma_std
         #  opt.random_sigma_std_background = self.random_sigma_std_background

@@ -136,6 +136,10 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          type=float,
                          default=0.05,
                         help='minimum length for the ray in voxel to be considered for fake sampling')
+    group.add_argument('--no_surf_grad_from_sh', 
+                        action='store_true',
+                        default=False,
+                        help='Disable gradients flowing back to surface from sh')
 
 
 def build_data_options(args):
@@ -192,6 +196,7 @@ def setup_render_opts(opt, args):
     opt.use_spheric_clip = args.use_spheric_clip
     opt.surf_fake_sample = args.surf_fake_sample
     opt.surf_fake_sample_min_vox_len = args.surf_fake_sample_min_vox_len
+    opt.no_surf_grad_from_sh = args.no_surf_grad_from_sh
 
 
 def setup_train_conf(return_parpser=False):
