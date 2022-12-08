@@ -3803,7 +3803,9 @@ class SparseGrid(nn.Module):
             sample_vals_density = sample_vals_density[sample_vals_mask]
             cnz = torch.count_nonzero(sample_vals_mask).item()
 
-            print(f'{cnz / sample_vals_mask.numel()} of the grids are kept!')
+            grid_ratio = cnz / sample_vals_mask.numel()
+
+            print(f'{grid_ratio} of the grids are kept!')
 
             # Now we can get the colors for the sparse points
             points = points[sample_vals_mask]
@@ -3855,6 +3857,7 @@ class SparseGrid(nn.Module):
             if accelerate and self.links.is_cuda:
                 self.accelerate()
 
+            return grid_ratio
 
 
 

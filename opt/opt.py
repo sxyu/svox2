@@ -801,12 +801,14 @@ while True:
                                 cameras=resample_cameras if args.thresh_type == 'weight' else None,
                                 max_elements=args.max_grid_elements)
                     else:
-                        grid.resample_surface(reso=reso_list[reso_id],
+                        grid_ratio = grid.resample_surface(reso=reso_list[reso_id],
                                 alpha_thresh=args.alpha_upsample_thresh,
                                 weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
                                 dilate=2, #use_sparsify,
                                 cameras=resample_cameras if args.thresh_type == 'weight' else None,
                                 max_elements=args.max_grid_elements)
+
+                        summary_writer.add_scalar("grid_ratio", grid_ratio, global_step=gstep_id)
 
                     if grid.use_background and reso_id <= 1:
                         grid.sparsify_background(args.background_density_thresh)
