@@ -287,6 +287,8 @@ while True:
                     img_pred.clamp_max_(1.0)
                     summary_writer.add_image(f'test/image_{img_id:04d}',
                             img_pred, global_step=step_id, dataformats='HWC')
+                    # summary_writer.add_image(f'test/gt_image_{img_id:04d}',
+                    #         rgb_gt_test, global_step=step_id, dataformats='HWC')
                     if args.log_mse_image:
                         mse_img = all_mses / all_mses.max()
                         summary_writer.add_image(f'test/mse_map_{img_id:04d}',

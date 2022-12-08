@@ -123,7 +123,7 @@ class DTUDataset(DatasetBase):
                 im_mask = cv2.resize(im_mask, (rsz_w, rsz_h), interpolation=cv2.INTER_AREA)
 
             if apply_mask:
-                im_gt[im_mask==0] = 255 if white_bkgd else 0
+                im_gt[im_mask<50] = 255 if white_bkgd else 0
 
             all_gt.append(torch.from_numpy(im_gt))
             all_mask.append(torch.from_numpy(im_mask))
