@@ -240,6 +240,8 @@ def setup_train_conf(return_parpser=False):
                         help='Rescale the raw values of surfaces')
     group.add_argument('--surface_init_reset_alpha',action='store_true', default=False,
                         help='Reset alpha value after no surface init')
+    group.add_argument('--surf_init_reset_all',action='store_true', default=False,
+                        help='Reset all alpha and sh values after surface init')
     # group.add_argument('--init_surface_with_alpha',action='store_true', default=False,
     #                     help='During no surface init, directly train with alpha instead of density')
     group.add_argument('--upsample_density_add', type=float, default=

@@ -2811,7 +2811,14 @@ class SparseGrid(nn.Module):
         return out
 
 
-    def _init_surface_from_density(self, alpha_lv_sets=0.5, reset_alpha=False, init_alpha=0.1, surface_rescale=0.1, alpha_clip_thresh=1e-6):
+    def _init_surface_from_density(
+        self, 
+        alpha_lv_sets=0.5, 
+        reset_alpha=False, 
+        init_alpha=0.1, 
+        surface_rescale=0.1, 
+        alpha_clip_thresh=1e-6,
+        reset_all=False):
         '''
         Initialize surface data from density values
         '''
@@ -2831,7 +2838,11 @@ class SparseGrid(nn.Module):
 
             alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 0) * delta_scale * self.opt.step_size)
             raw_alpha_data = torch.logit(torch.clamp(alpha_data, 1e-10, 1-1e-7))
-            if reset_alpha:
+            if reset_all:
+                init_alpha = utils.logit_np(0.01)
+                self.density_data = nn.Parameter(torch.full_like(alpha_data, init_alpha))
+                self.sh_data = nn.Parameter(torch.zeros_like(self.sh_data.data))
+            elif reset_alpha:
                 # self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha).to(torch.float32))
                 
                 new_density_data = torch.full_like(alpha_data, utils.logit_np(0.1), dtype=torch.float32)
