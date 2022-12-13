@@ -1593,42 +1593,6 @@ class SparseGrid(nn.Module):
         no_surface: do not use surface to take samples. Use for no_surface_init_iters
         """
         
-        # # debug helpers:
-        # def pos():
-        #     return origins + t[:, None] * dirs
-        # def next_pos():
-        #     return origins + find_next_intersection(t, origins, dirs)[:, None] * dirs
-        # def global_id_to_current_id(global_id):
-        #     return torch.arange(good_indices.shape[0])[good_indices == global_id]
-        # def save_rays():
-        #     cache = {
-        #         'origins': origins_ini.cpu().detach().numpy(),
-        #         'dirs': dirs_ini.cpu().detach().numpy()
-        #     }
-        #     np.save('rays.npy', cache)
-        # def index(tensor, ele):
-        #     return torch.arange(tensor.shape[0])[tensor==ele]
-        # def save_vis_cache():
-        #     '''
-        #     Save parameters for visualization
-        #     '''
-        #     cache = {
-        #         'origins': origins.cpu().detach().numpy(),
-        #         'dirs': dirs.cpu().detach().numpy(),
-        #         'sdf000': sdf000.cpu().detach().numpy(),
-        #         'sdf001': sdf001.cpu().detach().numpy(),
-        #         'sdf010': sdf010.cpu().detach().numpy(),
-        #         'sdf011': sdf011.cpu().detach().numpy(),
-        #         'sdf100': sdf100.cpu().detach().numpy(),
-        #         'sdf101': sdf101.cpu().detach().numpy(),
-        #         'sdf110': sdf110.cpu().detach().numpy(),
-        #         'sdf111': sdf111.cpu().detach().numpy(),
-        #         'l': l.cpu().detach().numpy(),
-        #         't': t.cpu().detach().numpy(),
-        #     }
-
-        #     np.save('vis_cache.npy', cache)
-        
         ########### Preprocess Camera Rays ###########
         
         origins = self.world2grid(rays.origins).to(dtype)
@@ -2143,55 +2107,6 @@ class SparseGrid(nn.Module):
                     ret[x < 0] = torch.pow(torch.clamp_min_(-x[x < 0], eps), 1/3.) * -1
                     return ret
 
-                # f = ((3.*c/a) - ((b**2.) / (a**2.))) / 3.                      
-                # g = (((2.*(b**3.)) / (a**3.)) - ((9.*b*c) / (a**2.)) + (27.*d/a)) / 27.                 
-                # h = ((g**2.) / 4. + (f**3.) / 27.) 
-
-                # # all three roots are real and equal
-                # _mask = ((f == 0) & (g == 0) & (h == 0))
-                # ts[cubic_ids[_mask], 0] = cond_cbrt(d[_mask]/a[_mask])
-
-                # # all three roots are real 
-                # _mask = (h <= 0) & (~((f == 0) & (g == 0) & (h == 0)))
-                # _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
-                
-                # _i = torch.sqrt(((_g ** 2.) / 4.) - _h)   
-                # _j = _i ** (1 / 3.)
-                # eps = 1e-10
-                # _k = torch.acos(torch.clamp(-(_g / (2 * _i)), -1+eps, 1-eps))              
-                # # _k = torch.acos(-(_g / (2 * _i)))        
-                # _L = _j * -1                              
-                # _M = torch.cos(_k / 3.)       
-                # _N = np.sqrt(3) * torch.sin(_k / 3.)    
-                # _P = (_b / (3. * _a)) * -1
-
-                # ts[cubic_ids[_mask], 0] = _L * (_M + _N) + _P
-                # ts[cubic_ids[_mask], 1] = _L * (_M - _N) + _P
-                # ts[cubic_ids[_mask], 2] = -2 *_L * _M + _P # 2 * _j * torch.cos(_k / 3.) - (_b / (3. * _a))
-
-                # # only one root is real
-                # _mask = (h > 0)
-                # _a, _b, _g, _h = a[_mask], b[_mask], g[_mask], h[_mask]
-
-                # # _R = -(_g.detach().clone() / 2.) + torch.sqrt(_h)    
-                # # _S = cond_cbrt(_R)
-
-                # # _T = -(_g.detach().clone() / 2.) - torch.sqrt(_h)
-                # # _U = cond_cbrt(_T).detach().clone()
-
-                # _R = -(_g / 2.) + torch.sqrt(_h)    
-                # _S = cond_cbrt(_R)#.detach().clone()
-
-                # _T = -(_g / 2.) - torch.sqrt(_h)
-                # _U = cond_cbrt(_T)
-
-                # ts[cubic_ids[_mask], 0] = (_S + _U) - (_b / (3. * _a))
-                # # # the rest two are complex roots:
-                # # ts[cubic_ids[_mask], 1] = -(_S + _U) / 2 - (_b / (3. * _a)) + (_S - _U) * np.sqrt(3) * 0.5j
-                # # ts[cubic_ids[_mask], 2] = -(_S + _U) / 2 - (_b / (3. * _a)) - (_S - _U) * np.sqrt(3) * 0.5j
-
-
-
                 Q = ((b**2) - 3.*c) / 9.
                 R = (2.*(b**3) - 9.*b*c + 27.*d) /54.
 
@@ -2371,7 +2286,10 @@ class SparseGrid(nn.Module):
             c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
             alpha_raw = c0 * wa[:, :1] + c1 * wb[:, :1]
         # post sigmoid activation
-        alpha = torch.sigmoid(alpha_raw)
+        if self.opt.alpha_activation_type == SIGMOID_FN:
+            alpha = torch.sigmoid(alpha_raw)
+        else:
+            alpha = 1 - torch.exp(-torch.relu(alpha_raw))
         # alpha = alpha.detach().clone()
         # alpha.requires_grad = True
 
@@ -2458,90 +2376,6 @@ class SparseGrid(nn.Module):
         B_weights = B_alpha * B_T # [B, MS, 3]
         
         out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
-
-
-        if self.use_background:
-            raise NotImplementedError
-            # Render the MSI background model
-            csi = utils.ConcentricSpheresIntersector(
-                    gsz_cu,
-                    origins_ini,
-                    dirs_ini,
-                    delta_scale)
-            inner_radius = torch.cross(csi.origins, csi.dirs, dim=-1).norm(dim=-1) + 1e-3
-            inner_radius = inner_radius.clamp_min(1.0)
-            _, t_last = csi.intersect(inner_radius)
-            n_steps = int(self.background_nlayers / self.opt.step_size) + 2
-            layer_scale = (self.background_nlayers - 1) / (n_steps + 1)
-
-            def fetch_bg_link(lx, ly, lz):
-                results = torch.zeros([lx.shape[0], self.background_data.size(-1)],
-                                        device=lx.device)
-                lnk = self.background_links[lx, ly]
-                mask = lnk >= 0
-                results[mask] = self.background_data[lnk[mask].long(), lz[mask]]
-                return results
-
-            for i in range(n_steps):
-                r : float = n_steps / (n_steps - i - 0.5)
-                normalized_inv_radius = min((i + 1) * layer_scale, self.background_nlayers - 1)
-                layerid = min(int(normalized_inv_radius), self.background_nlayers - 2);
-                interp_wt = normalized_inv_radius - layerid;
-
-                active_mask, t = csi.intersect(r)
-                active_mask = active_mask & (r >= inner_radius)
-                if active_mask.count_nonzero() == 0:
-                    continue
-                t_sub = t[active_mask]
-                t_mid_sub = (t_sub + t_last[active_mask]) * 0.5
-                sphpos = csi.origins[active_mask] + \
-                         t_mid_sub.unsqueeze(-1) * csi.dirs[active_mask]
-                invr_mid = 1.0 / torch.norm(sphpos, dim=-1)
-                sphpos *= invr_mid.unsqueeze(-1)
-
-                xy = utils.xyz2equirect(sphpos, self.background_links.size(1))
-                z = torch.clamp((1.0 - invr_mid) * self.background_nlayers - 0.5, 0.0,
-                               self.background_nlayers - 1);
-                points = torch.cat([xy, z.unsqueeze(-1)], dim=-1)
-                l = points.to(torch.long)
-                l[..., 0].clamp_max_(self.background_links.size(0) - 1)
-                l[..., 1].clamp_max_(self.background_links.size(1) - 1)
-                l[..., 2].clamp_max_(self.background_nlayers - 2)
-
-                wb = points - l
-                wa = 1.0 - wb
-                lx, ly, lz = l.unbind(-1)
-                lnx = (lx + 1) % self.background_links.size(0)
-                lny = (ly + 1) % self.background_links.size(1)
-                lnz = lz + 1
-
-                v000 = fetch_bg_link(lx, ly, lz)
-                v001 = fetch_bg_link(lx, ly, lnz)
-                v010 = fetch_bg_link(lx, lny, lz)
-                v011 = fetch_bg_link(lx, lny, lnz)
-                v100 = fetch_bg_link(lnx, ly, lz)
-                v101 = fetch_bg_link(lnx, ly, lnz)
-                v110 = fetch_bg_link(lnx, lny, lz)
-                v111 = fetch_bg_link(lnx, lny, lnz)
-
-                c00 = v000 * wa[:, 2:] + v001 * wb[:, 2:]
-                c01 = v010 * wa[:, 2:] + v011 * wb[:, 2:]
-                c10 = v100 * wa[:, 2:] + v101 * wb[:, 2:]
-                c11 = v110 * wa[:, 2:] + v111 * wb[:, 2:]
-                c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
-                c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
-                rgba = c0 * wa[:, :1] + c1 * wb[:, :1]
-
-                log_att = -csi.world_step_scale[active_mask] * torch.relu(rgba[:, -1]) * (
-                            t_sub - t_last[active_mask]
-                        )
-                weight = torch.exp(log_light_intensity[active_mask]) * (
-                    1.0 - torch.exp(log_att)
-                )
-                rgb = torch.clamp_min(rgba[:, :3] * utils.SH_C0 + 0.5, 0.0)
-                out_rgb[active_mask] += rgb * weight[:, None]
-                log_light_intensity[active_mask] += log_att
-                t_last[active_mask] = t[active_mask]
 
         # Add background color
         if self.opt.background_brightness:
