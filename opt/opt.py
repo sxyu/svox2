@@ -568,23 +568,23 @@ while True:
                     summary_writer.add_scalar("lr_sigma_bg", lr_sigma_bg, global_step=gstep_id)
                     summary_writer.add_scalar("lr_color_bg", lr_color_bg, global_step=gstep_id)
 
-                # log alpha inspect
-                world_coords = torch.tensor([[-0.1152,  0.0859,  0.1797]], device='cuda:0')
-                # coords = torch.tensor([[197, 300, 348]], device='cuda')
-                # scale = grid.links.shape[0] / 512
-                # coords = coords * scale
-                coords = grid.world2grid(world_coords)
-                alpha_inspect = grid._C.sample_grid_raw_alpha(
-                    grid._to_cpp(grid_coords=True),
-                    coords,
-                    -20.
-                )
-                # link = grid.links[coords[0], coords[1], coords[2]]
-                # if link > 0:
-                #     alpha_inspect = grid.density_data[link]
-                # else:
-                #     alpha_inspect = -20
-                summary_writer.add_scalar("alpha_inspect", alpha_inspect, global_step=gstep_id)
+                # # log alpha inspect
+                # world_coords = torch.tensor([[-0.1152,  0.0859,  0.1797]], device='cuda:0')
+                # # coords = torch.tensor([[197, 300, 348]], device='cuda')
+                # # scale = grid.links.shape[0] / 512
+                # # coords = coords * scale
+                # coords = grid.world2grid(world_coords)
+                # alpha_inspect = grid._C.sample_grid_raw_alpha(
+                #     grid._to_cpp(grid_coords=True),
+                #     coords,
+                #     -20.
+                # )
+                # # link = grid.links[coords[0], coords[1], coords[2]]
+                # # if link > 0:
+                # #     alpha_inspect = grid.density_data[link]
+                # # else:
+                # #     alpha_inspect = -20
+                # summary_writer.add_scalar("alpha_inspect", alpha_inspect, global_step=gstep_id)
 
 
 
