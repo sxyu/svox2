@@ -58,6 +58,7 @@ class RenderOptions:
     surf_fake_sample: bool = False
     surf_fake_sample_min_vox_len: float = 0.1
     no_surf_grad_from_sh: bool = False
+    alpha_activation_type: int = EXP_FN
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -75,6 +76,7 @@ class RenderOptions:
         opt.surf_fake_sample = self.surf_fake_sample
         opt.surf_fake_sample_min_vox_len = self.surf_fake_sample_min_vox_len
         opt.no_surf_grad_from_sh = self.no_surf_grad_from_sh
+        opt.alpha_activation_type = self.alpha_activation_type
         #  opt.randomize = randomize
         #  opt.random_sigma_std = self.random_sigma_std
         #  opt.random_sigma_std_background = self.random_sigma_std_background
@@ -2823,39 +2825,102 @@ class SparseGrid(nn.Module):
         Initialize surface data from density values
         '''
         with torch.no_grad():
-            device = self.level_set_data.device
-            # reset surface level set
-            # currently only support UDF single lv set
-            self.level_set_data = torch.tensor([0. if self.surface_type == SURFACE_TYPE_SDF else 64.], device=device)
-            # convert alpha lv set into alpha raw values
-            alpha_lv_sets = torch.tensor(alpha_lv_sets, device=device)
-            alpha_lv_sets = torch.logit(alpha_lv_sets)
 
-            # convert density to alphas
-            d = torch.tensor([1.,1.,1.])
-            d = d / torch.norm(d)
-            delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
+            if self.opt.alpha_activation_type == SIGMOID_FN:
+                device = self.density_data.device
+                # reset surface level set
+                # currently only support single lv set
+                self.level_set_data = torch.tensor([0. if self.surface_type == SURFACE_TYPE_SDF else 64.], device=device)
+                # convert alpha lv set into alpha raw values
+                alpha_lv_sets = torch.tensor(alpha_lv_sets, device=device)
+                alpha_lv_sets = torch.logit(alpha_lv_sets)
 
-            alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 0) * delta_scale * self.opt.step_size)
-            raw_alpha_data = torch.logit(torch.clamp(alpha_data, 1e-10, 1-1e-7))
-            if reset_all:
-                init_alpha = utils.logit_np(0.01)
-                self.density_data = nn.Parameter(torch.full_like(alpha_data, init_alpha))
-                self.sh_data = nn.Parameter(torch.zeros_like(self.sh_data.data))
-            elif reset_alpha:
-                # self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha).to(torch.float32))
-                
-                new_density_data = torch.full_like(alpha_data, utils.logit_np(0.1), dtype=torch.float32)
-                new_density_data[alpha_data < alpha_clip_thresh] = -25.
-                self.density_data = nn.Parameter(new_density_data)
+                # convert density to alphas
+                d = torch.tensor([1.,1.,1.])
+                d = d / torch.norm(d)
+                delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
+
+                alpha_data = 1 - torch.exp(-torch.clamp_min(self.density_data.data, 0) * delta_scale * self.opt.step_size)
+                raw_alpha_data = torch.logit(torch.clamp(alpha_data, 1e-10, 1-1e-7))
+                if reset_all:
+                    init_alpha = utils.logit_np(0.01)
+                    self.density_data = nn.Parameter(torch.full_like(alpha_data, init_alpha))
+                    self.sh_data = nn.Parameter(torch.zeros_like(self.sh_data.data))
+                elif reset_alpha:
+                    # self.density_data = nn.Parameter(torch.logit(torch.ones_like(self.density_data.data) * init_alpha).to(torch.float32))
+                    
+                    new_density_data = torch.full_like(alpha_data, utils.logit_np(0.1), dtype=torch.float32)
+                    new_density_data[alpha_data < alpha_clip_thresh] = -25.
+                    self.density_data = nn.Parameter(new_density_data)
+                else:
+                    self.density_data = nn.Parameter(raw_alpha_data.detach().clone().to(torch.float32))
+
+
+                # copy alpha data then shift according to lv set
+                surface_data = raw_alpha_data.detach().clone()
+                surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
+                self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+
             else:
-                self.density_data = nn.Parameter(raw_alpha_data.detach().clone().to(torch.float32))
+                # alpha lv set is used as sigma lv set
+                device = self.density_data.device
+
+                self.level_set_data = torch.tensor([0. if self.surface_type == SURFACE_TYPE_SDF else 64.], device=device)
+
+                surface_data = self.density_data.detach().clone()
+                surface_data = (surface_data - alpha_lv_sets)
+                # surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
+                
+                # better rescale using average grad of surface data
+                rand_cells = self._get_rand_cells(0.1, contiguous=True)
+                xyz = rand_cells
+                z = (xyz % self.links.shape[2]).long()
+                xy = xyz / self.links.shape[2]
+                y = (xy % self.links.shape[1]).long()
+                x = (xy / self.links.shape[1]).long()
+
+                # filter out cells at the edge
+                edge_mask = (x >= self.links.shape[0] - 1) | (y >= self.links.shape[1] - 1) | (z >= self.links.shape[2] - 1)
+
+                x, y, z = x[~edge_mask], y[~edge_mask], z[~edge_mask]            
+
+                link000 = self.links[x,y,z]
+                link100 = self.links[x+1,y,z]
+                link010 = self.links[x,y+1,z]
+                link001 = self.links[x,y,z+1]
+
+                # filter out cells that are near empty cell
+                invalid_mask = (link000 < 0) | (link100 < 0) | (link010 < 0) | (link001 < 0)
+
+                x, y, z = x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]
+
+                link000 = link000[~invalid_mask].long()
+                link100 = link100[~invalid_mask].long()
+                link010 = link010[~invalid_mask].long()
+                link001 = link001[~invalid_mask].long()
+
+                surf000 = surface_data[link000]
+                surf100 = surface_data[link100]
+                surf010 = surface_data[link010]
+                surf001 = surface_data[link001]
+                
+                # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
+                # this allows fake sample distance to be calculated easier
+                gsz = self._grid_size().mean()
+                h = 2.0 * self.radius.mean() / gsz
+                h = h.to(device)
+
+                norm_grad = torch.sqrt(
+                    ((surf100 - surf000) / h) ** 2. + \
+                    ((surf010 - surf000) / h) ** 2. + \
+                    ((surf001 - surf000) / h) ** 2.
+                )
+
+                surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
+                self.surface_data = nn.Parameter(surface_data.to(torch.float32))
 
 
-            # copy alpha data then shift according to lv set
-            surface_data = raw_alpha_data.detach().clone()
-            surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
-            self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+
 
 
 
@@ -3693,6 +3758,12 @@ class SparseGrid(nn.Module):
             self.capacity: int = reduce(lambda x, y: x * y, reso)
             curr_reso = self.links.shape
             dtype = torch.float32
+
+            # upscale_factor = [reso[i] / curr_reso[i] for i in range(3)]
+            # assert upscale_factor[0] == upscale_factor[1] and upscale_factor[0] == upscale_factor[2], \
+            #     "Currently only support ratio invariant surface upsampling"
+
+
             reso_facts = [0. * curr_reso[i] / reso[i] for i in range(3)]
             X = torch.linspace(
                 reso_facts[0],
@@ -3750,7 +3821,7 @@ class SparseGrid(nn.Module):
                 sample_vals_density = _C.sample_grid_raw_alpha(
                     self._to_cpp(grid_coords=True),
                     points[i : i + batch_size],
-                    alpha_empty_val
+                    alpha_empty_val if self.opt.alpha_activation_type == SIGMOID_FN else 0.
                 )
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
@@ -3791,7 +3862,9 @@ class SparseGrid(nn.Module):
                     sample_vals_mask = max_wt_grid >= weight_thresh
                 del max_wt_grid
             else:
-                alpha_thresh = np.log(alpha_thresh / (1. - alpha_thresh))
+                if self.opt.alpha_activation_type == SIGMOID_FN:
+                    # convert alpha value to raw value
+                    alpha_thresh = np.log(alpha_thresh / (1. - alpha_thresh))
                 sample_vals_mask = sample_vals_density >= alpha_thresh
                 if max_elements > 0 and max_elements < sample_vals_density.numel() \
                                     and max_elements < torch.count_nonzero(sample_vals_mask):
@@ -4260,47 +4333,47 @@ class SparseGrid(nn.Module):
                     grad)
             self.sparse_grad_indexer : Optional[torch.Tensor] = None
 
-    def inplace_alpha_lap_grad(self, grad: torch.Tensor,
-                        scaling: float = 1.0,
-                        sparse_frac: float = 0.01,
-                        ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
-                        density_is_sigma: bool = False,
-                        contiguous: bool = True,
-                        use_kernel: bool = True
-                    ):
-        # if self.surface_type != SURFACE_TYPE_NONE:
-        #     raise NotImplementedError
+    # def inplace_alpha_lap_grad(self, grad: torch.Tensor,
+    #                     scaling: float = 1.0,
+    #                     sparse_frac: float = 0.01,
+    #                     ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
+    #                     density_is_sigma: bool = False,
+    #                     contiguous: bool = True,
+    #                     use_kernel: bool = True
+    #                 ):
+    #     # if self.surface_type != SURFACE_TYPE_NONE:
+    #     #     raise NotImplementedError
 
-        if not use_kernel:
-            raise NotImplementedError
+    #     if not use_kernel:
+    #         raise NotImplementedError
 
-        assert (
-            _C is not None and self.density_data.is_cuda and grad.is_cuda
-        ), "CUDA extension is currently required for alpha lap"
+    #     assert (
+    #         _C is not None and self.density_data.is_cuda and grad.is_cuda
+    #     ), "CUDA extension is currently required for alpha lap"
 
-        rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
-        if rand_cells is not None:
-            if rand_cells.size(0) > 0:
-                world_step = 0
-                if density_is_sigma:
-                    # density data stores sigma, need to give world step
+    #     rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+    #     if rand_cells is not None:
+    #         if rand_cells.size(0) > 0:
+    #             world_step = 0
+    #             if density_is_sigma:
+    #                 # density data stores sigma, need to give world step
 
-                    # note the world step would be incorrect if 3 dims of grid are not equal
+    #                 # note the world step would be incorrect if 3 dims of grid are not equal
 
-                    d = torch.tensor([1.,1.,1.])
-                    d = d / torch.norm(d)
-                    delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
-                    world_step = delta_scale * self.opt.step_size
+    #                 d = torch.tensor([1.,1.,1.])
+    #                 d = d / torch.norm(d)
+    #                 delta_scale = 1./(d * self._scaling * self._grid_size()).norm()
+    #                 world_step = delta_scale * self.opt.step_size
 
-                _C.alpha_lap_grad_sparse(self.links, self.density_data,
-                        rand_cells,
-                        self._get_sparse_grad_indexer(),
-                        0, 1, scaling,
-                        ndc_coeffs[0], ndc_coeffs[1],
-                        world_step,
-                        grad)
-        else:
-            raise NotImplementedError
+    #             _C.alpha_lap_grad_sparse(self.links, self.density_data,
+    #                     rand_cells,
+    #                     self._get_sparse_grad_indexer(),
+    #                     0, 1, scaling,
+    #                     ndc_coeffs[0], ndc_coeffs[1],
+    #                     world_step,
+    #                     grad)
+    #     else:
+    #         raise NotImplementedError
 
     def _alpha_surf_sparsify_grad_check(self, rand_cells, scale_alpha, scale_surf, surf_decrease, surf_thresh, device='cuda'):
         xyz = rand_cells
@@ -4688,6 +4761,75 @@ class SparseGrid(nn.Module):
         eikonal_loss.backward()
 
         return eikonal_loss
+
+
+    def _surface_viscosity_loss_grad_check(self, rand_cells, scaling, device='cuda', eta=1e-2):
+        xyz = rand_cells
+        z = (xyz % self.links.shape[2]).long()
+        xy = xyz / self.links.shape[2]
+        y = (xy % self.links.shape[1]).long()
+        x = (xy / self.links.shape[1]).long()
+
+        # filter out cells at the edge
+        edge_mask = (x < 1) | (y < 1) | (z < 1) | \
+                    (x >= self.links.shape[0] - 1) | (y >= self.links.shape[1] - 1) | (z >= self.links.shape[2] - 1)
+
+        x, y, z = x[~edge_mask], y[~edge_mask], z[~edge_mask]            
+
+        link000 = self.links[x,y,z]
+        link_100 = self.links[x-1,y,z]
+        link100 = self.links[x+1,y,z]
+        link0_10 = self.links[x,y-1,z]
+        link010 = self.links[x,y+1,z]
+        link00_1 = self.links[x,y,z-1]
+        link001 = self.links[x,y,z+1]
+
+        # filter out cells that are near empty cell
+        invalid_mask = (link000 < 0) | (link_100 < 0) | (link100 < 0) | \
+                       (link0_10 < 0) | (link010 < 0) | (link00_1 < 0) | (link001 < 0)
+
+        x, y, z = x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]
+
+        link000 = link000[~invalid_mask]
+        link_100 = link_100[~invalid_mask]
+        link100 = link100[~invalid_mask]
+        link0_10 = link0_10[~invalid_mask]
+        link010 = link010[~invalid_mask]
+        link00_1 = link00_1[~invalid_mask]
+        link001 = link001[~invalid_mask]
+
+
+        surf000 = self.surface_data[link000]
+        surf_100 = self.surface_data[link_100]
+        surf100 = self.surface_data[link100]
+        surf0_10 = self.surface_data[link0_10]
+        surf010 = self.surface_data[link010]
+        surf00_1 = self.surface_data[link00_1]
+        surf001 = self.surface_data[link001]
+
+        # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
+        # this allows fake sample distance to be calculated easier
+        gsz = self._grid_size().mean()
+        h = 2.0 * self.radius.mean() / gsz
+        h = h.to(device)
+
+        norm_grad = torch.sqrt(
+            ((surf100 - surf_100) / (2. * h)) ** 2. + \
+            ((surf010 - surf0_10) / (2. * h)) ** 2. + \
+            ((surf001 - surf00_1) / (2. * h)) ** 2.
+        )
+
+        lap = (surf100 + surf_100 - 2.*surf000) / (h ** 2.) + \
+              (surf010 + surf0_10 - 2.*surf000) / (h ** 2.) + \
+              (surf001 + surf00_1 - 2.*surf000) / (h ** 2.)
+
+
+        vis_loss = ((norm_grad - 1) * torch.sign(surf000) - eta * lap) ** 2.
+        vis_loss = scaling * torch.sum(vis_loss) / rand_cells.shape[0]
+
+        vis_loss.backward()
+
+        return vis_loss
 
 
 

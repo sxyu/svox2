@@ -82,6 +82,7 @@ class NeRFDataset(DatasetBase):
         )
         self.c2w = torch.stack(all_c2w)
         self.c2w[:, :3, 3] *= scene_scale
+        # self.c2w[:, :3, 3] gets the tranlations 
 
         self.gt = torch.stack(all_gt).float() / 255.0
         if self.gt.size(-1) == 4:

@@ -1320,49 +1320,49 @@ void surf_sign_change_grad_sparse(torch::Tensor links,
     CUDA_CHECK_ERRORS;
 }
 
-void alpha_lap_grad_sparse(torch::Tensor links,
-             torch::Tensor data,
-             torch::Tensor rand_cells,
-             torch::Tensor mask_out,
-             int start_dim, int end_dim,
-             float scale,
-             float ndc_coeffx,
-             float ndc_coeffy,
-             float sigma2alpha_step, // world step size used to convert sigma to alpha. set to <=0 to disable
-             torch::Tensor grad_data) {
-    DEVICE_GUARD(data);
-    CHECK_INPUT(data);
-    CHECK_INPUT(links);
-    CHECK_INPUT(grad_data);
-    CHECK_INPUT(rand_cells);
-    CHECK_INPUT(mask_out);
-    TORCH_CHECK(data.is_floating_point());
-    TORCH_CHECK(grad_data.is_floating_point());
-    TORCH_CHECK(!links.is_floating_point());
-    TORCH_CHECK(data.ndimension() == 2);
-    TORCH_CHECK(links.ndimension() == 3);
-    TORCH_CHECK(grad_data.ndimension() == 2);
+// void alpha_lap_grad_sparse(torch::Tensor links,
+//              torch::Tensor data,
+//              torch::Tensor rand_cells,
+//              torch::Tensor mask_out,
+//              int start_dim, int end_dim,
+//              float scale,
+//              float ndc_coeffx,
+//              float ndc_coeffy,
+//              float sigma2alpha_step, // world step size used to convert sigma to alpha. set to <=0 to disable
+//              torch::Tensor grad_data) {
+//     DEVICE_GUARD(data);
+//     CHECK_INPUT(data);
+//     CHECK_INPUT(links);
+//     CHECK_INPUT(grad_data);
+//     CHECK_INPUT(rand_cells);
+//     CHECK_INPUT(mask_out);
+//     TORCH_CHECK(data.is_floating_point());
+//     TORCH_CHECK(grad_data.is_floating_point());
+//     TORCH_CHECK(!links.is_floating_point());
+//     TORCH_CHECK(data.ndimension() == 2);
+//     TORCH_CHECK(links.ndimension() == 3);
+//     TORCH_CHECK(grad_data.ndimension() == 2);
 
-    int nl = rand_cells.size(0);
-    size_t Q = rand_cells.size(0) * size_t(end_dim - start_dim);
+//     int nl = rand_cells.size(0);
+//     size_t Q = rand_cells.size(0) * size_t(end_dim - start_dim);
 
-    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
-    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
-    device::alpha_lap_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
-            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
-            rand_cells.data_ptr<int32_t>(),
-            start_dim,
-            end_dim,
-            scale / nl,
-            Q,
-            ndc_coeffx, ndc_coeffy,
-            sigma2alpha_step,
-            // Output
-            (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
-            grad_data.data_ptr<float>());
-    CUDA_CHECK_ERRORS;
-}
+//     const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+//     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+//     device::alpha_lap_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
+//             links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+//             data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+//             rand_cells.data_ptr<int32_t>(),
+//             start_dim,
+//             end_dim,
+//             scale / nl,
+//             Q,
+//             ndc_coeffx, ndc_coeffy,
+//             sigma2alpha_step,
+//             // Output
+//             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
+//             grad_data.data_ptr<float>());
+//     CUDA_CHECK_ERRORS;
+// }
 
 void alpha_surf_sparsify_grad_sparse(torch::Tensor links,
              torch::Tensor alpha_data,

@@ -2011,5 +2011,45 @@ __device__ __inline__ void add_surface_normal_grad(
 
 
 
+
+__device__ __inline__ float surf_alpha_act(
+    const float raw,
+    uint8_t type
+){
+    /**
+     * Activation function for surface alpha (sigmoid/exp)
+     * 
+    */
+
+    switch (type){
+        case SIGMOID_FN:
+            return _SIGMOID(raw);
+        case EXP_FN:
+            return (raw >= 0.) ? 1 - exp(-raw) : 0.;
+    }
+
+    assert(false);
+}
+
+__device__ __inline__ float surf_alpha_act_grad(
+    const float alpha,
+    uint8_t type
+){
+    /**
+     * Gradient of activation function for surface alpha (sigmoid/exp)
+     * 
+    */
+
+    switch (type){
+        case SIGMOID_FN:
+            return (alpha * (1-alpha));
+        case EXP_FN:
+            return (alpha >= 0.) ? 1 - alpha : 0.;
+    }
+
+    assert(false);
+}
+
+
 } // namespace device
 } // namespace

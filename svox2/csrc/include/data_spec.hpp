@@ -31,6 +31,11 @@ enum BasisType {
   CUBIC_TYPE_CUBIC_ONE_R_ = 206, // cubic with a single real root
 };
 
+enum ActivationType {
+  SIGMOID_FN = 0,
+  EXP_FN = 1,
+};
+
 struct SparseGridSpec {
   Tensor density_data;
   Tensor surface_data;
@@ -172,6 +177,8 @@ struct RenderOptions {
   float surf_fake_sample_min_vox_len;
 
   bool no_surf_grad_from_sh;
+  // enum ActivationType alpha_activation_type;
+  uint8_t alpha_activation_type;
   // bool randomize;
   // float random_sigma_std;
   // float random_sigma_std_background;

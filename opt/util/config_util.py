@@ -83,6 +83,10 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          choices=['cuvol', 'svox1', 'nvol', 'surface', 'surf_trav'],
                          default='cuvol',
                          help="Renderer backend")
+    group.add_argument('--surf_alpha_sigmoid_act',
+                         action='store_true',
+                         default=False,
+                         help="Use exp activation for surf alpha")
     group.add_argument('--surface_type',
                         #  choices=['sdf', 'plane', 'udf', 'udf_alpha', 'udf_fake_sample'],
                          default=None,
@@ -181,7 +185,7 @@ def setup_render_opts(opt, args):
     opt.step_size = args.step_size
     
     # convert alpha threshold to raw alpha values
-    if args.renderer_backend in ['surface', 'surf_trav']:
+    if args.renderer_backend in ['surface', 'surf_trav'] and args.surf_alpha_sigmoid_act:
         opt.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
     else:
         opt.sigma_thresh = args.sigma_thresh
@@ -197,6 +201,7 @@ def setup_render_opts(opt, args):
     opt.surf_fake_sample = args.surf_fake_sample
     opt.surf_fake_sample_min_vox_len = args.surf_fake_sample_min_vox_len
     opt.no_surf_grad_from_sh = args.no_surf_grad_from_sh
+    opt.alpha_activation_type = 0 if args.surf_alpha_sigmoid_act else 1
 
 
 def setup_train_conf(return_parpser=False):

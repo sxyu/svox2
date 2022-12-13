@@ -457,8 +457,10 @@ while True:
                     )
 
                 # reset opt for surface rendering
-                grid.opt.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
-                grid.opt.step_size = args.step_size
+                config_util.setup_render_opts(grid.opt, args)
+                print(grid.opt)
+                # grid.opt.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
+                # grid.opt.step_size = args.step_size
 
 
                 eval_step(step_id=gstep_id)
@@ -669,15 +671,15 @@ while True:
 
                     assert not torch.isnan(grid.density_data.grad).any()
 
-            if args.lambda_alpha_lap_loss > 0.0:
-                grid.inplace_alpha_lap_grad(grid.density_data.grad,
-                        scaling=args.lambda_alpha_lap_loss,
-                        sparse_frac=args.alpha_lap_sparsity,
-                        ndc_coeffs=dset.ndc_coeffs,
-                        contiguous=args.tv_contiguous,
-                        # use_kernel=USE_KERNEL,
-                        density_is_sigma = grid.surface_data is None or no_surface 
-                        )
+            # if args.lambda_alpha_lap_loss > 0.0:
+            #     grid.inplace_alpha_lap_grad(grid.density_data.grad,
+            #             scaling=args.lambda_alpha_lap_loss,
+            #             sparse_frac=args.alpha_lap_sparsity,
+            #             ndc_coeffs=dset.ndc_coeffs,
+            #             contiguous=args.tv_contiguous,
+            #             # use_kernel=USE_KERNEL,
+            #             density_is_sigma = grid.surface_data is None or no_surface 
+            #             )
 
             if args.lambda_tv_sh > 0.0:
                 #  with Timing("tv_color_inpl"):

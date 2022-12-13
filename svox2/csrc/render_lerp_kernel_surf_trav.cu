@@ -275,7 +275,7 @@ __device__ __inline__ void trace_ray_surf_trav(
                         0);
 
                 if (alpha > opt.sigma_thresh) {
-                    alpha = _SIGMOID(alpha);
+                    alpha = surf_alpha_act(alpha, opt.alpha_activation_type);
                     float lane_color = trilerp_cuvol_one(
                                     grid.links,
                                     grid.sh_data,
@@ -342,7 +342,7 @@ __device__ __inline__ void trace_ray_surf_trav(
                             0);
 
                     if (alpha > opt.sigma_thresh) {
-                        alpha = _SIGMOID(alpha);
+                        alpha = surf_alpha_act(alpha, opt.alpha_activation_type);
 
                         // use distance to surface to re-weight alpha
                         // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
@@ -591,13 +591,13 @@ __device__ __inline__ void trace_ray_expected_term(
                 }
 
 
-                float alpha = _SIGMOID(trilerp_cuvol_one(
+                float alpha = surf_alpha_act(trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
                         grid.size[2],
                         1,
                         ray.l, ray.pos,
-                        0));
+                        0), opt.alpha_activation_type);
 
                 // if (sigma > opt.sigma_thresh) {
                 if (true) {
@@ -773,13 +773,13 @@ __device__ __inline__ void trace_ray_sigma_thresh(
                 }
 
 
-                float const alpha = _SIGMOID(trilerp_cuvol_one(
+                float const alpha = surf_alpha_act(trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
                         grid.size[2],
                         1,
                         ray.l, ray.pos,
-                        0));
+                        0), opt.alpha_activation_type);
 
                 if (alpha > sigma_thresh) {
                     *out = ((st[j]+t_close) / opt.step_size) * ray.world_step;
@@ -942,13 +942,13 @@ __device__ __inline__ void trace_ray_extract_pt(
                 }
 
 
-                float const alpha = _SIGMOID(trilerp_cuvol_one(
+                float const alpha = surf_alpha_act(trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
                         grid.size[2],
                         1,
                         ray.l, ray.pos,
-                        0));
+                        0), opt.alpha_activation_type);
 
                 if (alpha > alpha_thresh) {
                     *(out+sample_id) = ((st[j]+t_close) / opt.step_size) * ray.world_step;
@@ -1206,7 +1206,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         ray.l, ray.pos,
                         0);
 
-                float const  alpha = _SIGMOID(raw_alpha);
+                float const  alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);
 
                 if (raw_alpha > opt.sigma_thresh) {
                     float lane_color = trilerp_cuvol_one(
@@ -1309,7 +1309,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     if (lane_id == 0) {
                         // compute gradient for sigmoid
-                        float const  curr_grad_raw_alpha = curr_grad_alpha * _D_SIGMOID(raw_alpha);
+                        float const  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
                         ASSERT_NUM(curr_grad_raw_alpha);
                         trilerp_backward_cuvol_one_density(
                                 grid.links,
@@ -1403,7 +1403,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             0);
 
                     if (raw_alpha > opt.sigma_thresh) {
-                        float const  alpha = _SIGMOID(raw_alpha);
+                        float const  alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);;
 
                         // use distance to surface to re-weight alpha
                         // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
@@ -1530,7 +1530,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                         if (lane_id == 0) {
                             // compute gradient for sigmoid
-                            float const  curr_grad_raw_alpha = curr_grad_alpha * _D_SIGMOID(raw_alpha);
+                            float const  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
                             ASSERT_NUM(curr_grad_raw_alpha);
                             trilerp_backward_cuvol_one_density(
                                     grid.links,

@@ -102,8 +102,8 @@ void surface_normal_grad(Tensor, Tensor, float, int, int, float, float, float,
              Tensor);
 void surface_normal_grad_sparse(Tensor, Tensor, Tensor, Tensor, float, int, int, float, float, float, float, bool, bool,
              Tensor);
-void alpha_lap_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, float, float, float,
-             Tensor);
+// void alpha_lap_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, float, float, float,
+//              Tensor);
 void alpha_surf_sparsify_grad_sparse(Tensor, Tensor, Tensor, Tensor, Tensor, float, float, bool, float, float, float,
              Tensor, Tensor);
 void tv_grad_sparse(Tensor, Tensor, Tensor, Tensor, int, int, float, bool,
@@ -160,7 +160,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(tv_grad);
   _REG_FUNC(surface_normal_grad);
   _REG_FUNC(surface_normal_grad_sparse);
-  _REG_FUNC(alpha_lap_grad_sparse);
+  // _REG_FUNC(alpha_lap_grad_sparse);
   _REG_FUNC(alpha_surf_sparsify_grad_sparse);
   _REG_FUNC(tv_grad_sparse);
   _REG_FUNC(surf_sign_change_grad_sparse);
@@ -230,7 +230,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("last_sample_opaque", &RenderOptions::last_sample_opaque)
       .def_readwrite("surf_fake_sample", &RenderOptions::surf_fake_sample)
       .def_readwrite("surf_fake_sample_min_vox_len", &RenderOptions::surf_fake_sample_min_vox_len)
-      .def_readwrite("no_surf_grad_from_sh", &RenderOptions::no_surf_grad_from_sh);
+      .def_readwrite("no_surf_grad_from_sh", &RenderOptions::no_surf_grad_from_sh)
+      .def_readwrite("alpha_activation_type", &RenderOptions::alpha_activation_type);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
   // .def_readwrite("random_sigma_std_background",
