@@ -454,6 +454,7 @@ while True:
                     init_alpha=0.1,
                     surface_rescale=args.surface_init_rescale,
                     reset_all=args.surf_init_reset_all,
+                    prune_threshold=args.alpha_upsample_thresh
                     )
 
                 # reset opt for surface rendering

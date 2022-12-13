@@ -2820,7 +2820,10 @@ class SparseGrid(nn.Module):
         init_alpha=0.1, 
         surface_rescale=0.1, 
         alpha_clip_thresh=1e-6,
-        reset_all=False):
+        reset_all=False,
+        prune_threshold=1e-8,
+        dilate=2,
+        use_z_order=True):
         '''
         Initialize surface data from density values
         '''
@@ -2862,8 +2865,42 @@ class SparseGrid(nn.Module):
                 self.surface_data = nn.Parameter(surface_data.to(torch.float32))
 
             else:
+                # alpha_raw is activated via exp (similiar to density)
                 # alpha lv set is used as sigma lv set
                 device = self.density_data.device
+
+
+                # prune empty voxels
+                if prune_threshold is not None:
+                    reso = self.links.shape
+                    valid_mask = self.density_data.data > prune_threshold
+                    valid_mask = valid_mask.view(reso)
+                    for _ in range(int(dilate)):
+                        valid_mask = _C.dilate(valid_mask)
+
+                    valid_mask = valid_mask.view(-1)
+                    
+                    self.density_data = nn.Parameter(self.density_data.data[valid_mask])
+                    self.sh_data = nn.Parameter(self.sh_data.data[valid_mask])   
+
+                    if use_z_order:
+                        morton = utils.gen_morton(reso[0], dtype=torch.long).view(-1)
+                        inv_morton = torch.empty_like(morton)
+                        inv_morton[morton] = torch.arange(morton.size(0), dtype=morton.dtype)
+                        inv_idx = inv_morton[valid_mask]
+                        init_links = torch.full(
+                            (valid_mask.size(0),), fill_value=-1, dtype=torch.int32
+                        )
+                        init_links[inv_idx] = torch.arange(inv_idx.size(0), dtype=torch.int32)
+
+                    else:
+                        init_links = (
+                            torch.cumsum(valid_mask.to(torch.int32), dim=-1).int() - 1
+                        )
+                        init_links[~valid_mask] = -1
+                    self.links = init_links.view(reso).to(device=device)
+                    print(f'{torch.count_nonzero(valid_mask) / valid_mask.numel()} of the grids are kept after nerf init!')
+
 
                 self.level_set_data = torch.tensor([0. if self.surface_type == SURFACE_TYPE_SDF else 64.], device=device)
 
