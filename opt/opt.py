@@ -454,7 +454,7 @@ while True:
                     init_alpha=0.1,
                     surface_rescale=args.surface_init_rescale,
                     reset_all=args.surf_init_reset_all,
-                    prune_threshold=args.alpha_upsample_thresh
+                    prune_threshold=args.alpha_lv_sets / 2
                     )
 
                 # reset opt for surface rendering
@@ -671,6 +671,16 @@ while True:
                             )
 
                     assert not torch.isnan(grid.density_data.grad).any()
+
+                if args.lambda_viscosity_loss > 0.0:
+                    vis_l, grad_norm = grid._surface_viscosity_loss_grad_check(
+                                grid._get_rand_cells(args.viscosity_sparsity, contiguous=args.tv_contiguous),
+                                scaling=args.lambda_viscosity_loss,
+                                eta=args.viscosity_eta
+                                )
+                    if (gstep_id + 1) % args.print_every == 0:
+                        summary_writer.add_scalar("viscosity_loss", vis_l.item(), global_step=gstep_id)
+                        summary_writer.add_scalar("surf_grad_norm", grad_norm.item(), global_step=gstep_id)
 
             # if args.lambda_alpha_lap_loss > 0.0:
             #     grid.inplace_alpha_lap_grad(grid.density_data.grad,

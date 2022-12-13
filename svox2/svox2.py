@@ -2646,6 +2646,95 @@ class SparseGrid(nn.Module):
 
         return out
 
+    def prune_grid(
+            self,
+            density_raw_thres=1,
+            dilate=2,
+            prune_surf=True
+        ):
+        with torch.no_grad():
+            device = self.density_data.device
+            reso = self.links.shape
+            X = torch.arange(reso[0])
+            Y = torch.arange(reso[1])
+            Z = torch.arange(reso[2])
+            coords = torch.stack((torch.meshgrid(X, Y, Z)), dim=-1).view(-1, 3).to(device)
+
+            def safe_fetch_data(xyz, data, default=0):
+                out = torch.full([xyz.shape[0], data.shape[-1]], default, 
+                    device=data.device, dtype=data.dtype)
+                edge_mask = (xyz >= 0).all(axis=-1) & (xyz < torch.tensor(reso, device=xyz.device)[None, :]).all(axis=-1)
+
+                x, y, z = xyz[edge_mask].unbind(-1)
+                links = self.links[x,y,z]
+                valid_mask = links >= 0
+
+                idx = torch.arange(out.shape[0])[edge_mask][valid_mask]
+                out[idx] = data[links[valid_mask].long(), :]
+
+                return out
+
+            density_data = safe_fetch_data(coords, self.density_data.data)
+            sh_data = safe_fetch_data(coords, self.sh_data.data)
+            valid_mask = density_data > density_raw_thres
+            valid_mask = valid_mask.view(reso)
+
+            if self.surface_data is not None and prune_surf:
+                # prune vertex where the sign of surf is same as all its adjacent vertices
+                surface_data = safe_fetch_data(coords, self.surface_data.data)
+
+                X = torch.tensor([-1,0,1], device=device)
+                offset = torch.stack((torch.meshgrid(X, X, X)), dim=-1).view(-1, 3)
+
+                # def safe_fetch_surf(xyz, default=0):
+                #     out = torch.full([xyz.shape[0]], default, 
+                #         device=self.surface_data.device, dtype=self.surface_data.dtype)
+                #     edge_mask = (xyz >= 0).all(axis=-1) & (xyz < torch.tensor(reso, device=xyz.device)[None, :]).all(axis=-1)
+
+                #     x, y, z = xyz[edge_mask].unbind(-1)
+                #     links = self.links[x,y,z]
+
+                #     valid_mask = links >= 0
+
+                #     idx = torch.arange(out.shape[0])[edge_mask][valid_mask]
+                #     out[idx] = self.surface_data.data[links[valid_mask].long(), 0]
+
+                #     return out
+
+                def sign_not_equal(s1, s2):
+                    # if any of the s is 0, we assume the sign is not equal
+                    return (s1 == 0) | (s2 == 0) | (torch.sign(s1) != torch.sign(s2))
+
+                
+                valid_surf_mask = torch.zeros_like(coords[:, :1]).bool()
+                for i in range(offset.shape[0]):
+                    neighbors = safe_fetch_data(coords + offset[i, None, :], self.surface_data.data)
+                    valid_surf_mask |= sign_not_equal(surface_data, neighbors)
+
+                valid_mask &= valid_surf_mask.view(reso)
+
+
+            for _ in range(int(dilate)):
+                valid_mask = _C.dilate(valid_mask)
+
+            valid_mask = valid_mask.view(-1)
+            
+            self.density_data = nn.Parameter(density_data[valid_mask])
+            self.sh_data = nn.Parameter(sh_data[valid_mask])
+            if self.surface_data is not None: 
+                self.surface_data = nn.Parameter(surface_data[valid_mask])
+
+            init_links = (
+                torch.cumsum(valid_mask.to(torch.int32), dim=-1).int() - 1
+            )
+            init_links[~valid_mask] = -1
+
+            self.links = init_links.view(reso).to(device=device)
+            kept_ratio = torch.count_nonzero(valid_mask) / valid_mask.numel()
+            print(f'{kept_ratio} of the grids are kept after nerf init!')
+
+            return kept_ratio.item
+
 
     def _init_surface_from_density(
         self, 
@@ -2703,44 +2792,14 @@ class SparseGrid(nn.Module):
                 # alpha lv set is used as sigma lv set
                 device = self.density_data.device
 
-
-                # prune empty voxels
-                if prune_threshold is not None:
-                    reso = self.links.shape
-                    valid_mask = self.density_data.data > prune_threshold
-                    valid_mask = valid_mask.view(reso)
-                    for _ in range(int(dilate)):
-                        valid_mask = _C.dilate(valid_mask)
-
-                    valid_mask = valid_mask.view(-1)
-                    
-                    self.density_data = nn.Parameter(self.density_data.data[valid_mask])
-                    self.sh_data = nn.Parameter(self.sh_data.data[valid_mask])   
-
-                    if use_z_order:
-                        morton = utils.gen_morton(reso[0], dtype=torch.long).view(-1)
-                        inv_morton = torch.empty_like(morton)
-                        inv_morton[morton] = torch.arange(morton.size(0), dtype=morton.dtype)
-                        inv_idx = inv_morton[valid_mask]
-                        init_links = torch.full(
-                            (valid_mask.size(0),), fill_value=-1, dtype=torch.int32
-                        )
-                        init_links[inv_idx] = torch.arange(inv_idx.size(0), dtype=torch.int32)
-
-                    else:
-                        init_links = (
-                            torch.cumsum(valid_mask.to(torch.int32), dim=-1).int() - 1
-                        )
-                        init_links[~valid_mask] = -1
-                    self.links = init_links.view(reso).to(device=device)
-                    print(f'{torch.count_nonzero(valid_mask) / valid_mask.numel()} of the grids are kept after nerf init!')
-
-
                 self.level_set_data = torch.tensor([0. if self.surface_type == SURFACE_TYPE_SDF else 64.], device=device)
 
                 surface_data = self.density_data.detach().clone()
                 surface_data = (surface_data - alpha_lv_sets)
+                self.surface_data = nn.Parameter(surface_data.to(torch.float32))
                 # surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
+
+                self.prune_grid(prune_threshold, dilate, prune_surf=True)
                 
                 # better rescale using average grad of surface data
                 rand_cells = self._get_rand_cells(0.1, contiguous=True)
@@ -2762,7 +2821,6 @@ class SparseGrid(nn.Module):
 
                 # filter out cells that are near empty cell
                 invalid_mask = (link000 < 0) | (link100 < 0) | (link010 < 0) | (link001 < 0)
-
                 x, y, z = x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]
 
                 link000 = link000[~invalid_mask].long()
@@ -2770,10 +2828,10 @@ class SparseGrid(nn.Module):
                 link010 = link010[~invalid_mask].long()
                 link001 = link001[~invalid_mask].long()
 
-                surf000 = surface_data[link000]
-                surf100 = surface_data[link100]
-                surf010 = surface_data[link010]
-                surf001 = surface_data[link001]
+                surf000 = self.surface_data[link000]
+                surf100 = self.surface_data[link100]
+                surf010 = self.surface_data[link010]
+                surf001 = self.surface_data[link001]
                 
                 # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
                 # this allows fake sample distance to be calculated easier
@@ -2787,8 +2845,11 @@ class SparseGrid(nn.Module):
                     ((surf001 - surf000) / h) ** 2.
                 )
 
-                surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
-                self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+                # surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
+                # self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+                self.surface_data.data = self.surface_data.data/norm_grad.mean() + self.level_set_data[0]
+
+                pass
 
 
 
@@ -4661,13 +4722,13 @@ class SparseGrid(nn.Module):
 
         x, y, z = x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]
 
-        link000 = link000[~invalid_mask]
-        link_100 = link_100[~invalid_mask]
-        link100 = link100[~invalid_mask]
-        link0_10 = link0_10[~invalid_mask]
-        link010 = link010[~invalid_mask]
-        link00_1 = link00_1[~invalid_mask]
-        link001 = link001[~invalid_mask]
+        link000 = link000[~invalid_mask].long()
+        link_100 = link_100[~invalid_mask].long()
+        link100 = link100[~invalid_mask].long()
+        link0_10 = link0_10[~invalid_mask].long()
+        link010 = link010[~invalid_mask].long()
+        link00_1 = link00_1[~invalid_mask].long()
+        link001 = link001[~invalid_mask].long()
 
 
         surf000 = self.surface_data[link000]
@@ -4700,7 +4761,7 @@ class SparseGrid(nn.Module):
 
         vis_loss.backward()
 
-        return vis_loss
+        return vis_loss, norm_grad.mean()
 
 
 
