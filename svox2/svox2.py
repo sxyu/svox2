@@ -2802,7 +2802,7 @@ class SparseGrid(nn.Module):
                 self.prune_grid(prune_threshold, dilate, prune_surf=True)
                 
                 # better rescale using average grad of surface data
-                rand_cells = self._get_rand_cells(0.1, contiguous=True)
+                rand_cells = self._get_rand_cells_non_empty(0.1, contiguous=True)
                 xyz = rand_cells
                 z = (xyz % self.links.shape[2]).long()
                 xy = xyz / self.links.shape[2]
@@ -4756,6 +4756,7 @@ class SparseGrid(nn.Module):
               (surf001 + surf00_1 - 2.*surf000) / (h ** 2.)
 
 
+        # vis_loss = ((norm_grad - 1)) ** 2.
         vis_loss = ((norm_grad - 1) * torch.sign(surf000) - eta * lap) ** 2.
         vis_loss = scaling * torch.sum(vis_loss) / rand_cells.shape[0]
 
@@ -5474,6 +5475,29 @@ class SparseGrid(nn.Module):
                 return torch.randint(0, grid_size, (sparse_num,), dtype=torch.int32, device=
                                                 self.links.device)
         return None
+
+    def _get_rand_cells_non_empty(self, sparse_frac:float, frac_of_remaining:bool=True, contiguous:bool=True):
+        '''
+        frac_of_remaining: frac is on remain cells
+        '''
+        grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
+        non_empty_ids = torch.where(self.links.view(-1) >= 0)[0].int()
+        non_empty_num = len(non_empty_ids)
+        if frac_of_remaining:
+            sparse_num = int(non_empty_num * sparse_frac)
+        else:
+            sparse_num = int(sparse_frac * grid_size)
+            if sparse_num > non_empty_num:
+                sparse_num = int(non_empty_num)
+        if contiguous:
+            start = np.random.randint(0, non_empty_num - sparse_num)
+            arr = non_empty_ids[torch.arange(start, start + sparse_num, dtype=torch.long, device=
+                                                    self.links.device)]
+            return arr
+        else:
+            return non_empty_ids[torch.randint(0, non_empty_num, (sparse_num,), dtype=torch.long, device=
+                                                self.links.device)]
+        
 
     def _get_rand_cells_background(self, sparse_frac: float, contiguous:bool=True):
         assert self.use_background, "Can only use sparse background loss if using background"
