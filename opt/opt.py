@@ -194,13 +194,13 @@ ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
 lr_alpha_func = get_expon_lr_func(args.lr_alpha, args.lr_alpha_final, args.lr_alpha_delay_steps,
-                                  args.lr_alpha_delay_mult, args.lr_alpha_decay_steps)
+                                  args.lr_alpha_delay_mult, args.lr_alpha_decay_steps, args.lr_alpha_fix_delay)
 lr_surface_func = get_expon_lr_func(args.lr_surface, args.lr_surface_final, args.lr_surface_delay_steps,
-                                  args.lr_surface_delay_mult, args.lr_surface_decay_steps)
+                                  args.lr_surface_delay_mult, args.lr_surface_decay_steps, args.lr_surf_fix_delay)
 lr_fake_sample_std_func = get_expon_lr_func(args.lr_fake_sample_std, args.lr_fake_sample_std_final, args.lr_fake_sample_std_delay_steps,
                                   args.lr_fake_sample_std_delay_mult, args.lr_fake_sample_std_decay_steps)
 fake_sample_std_func = get_expon_lr_func(args.fake_sample_std, args.fake_sample_std_final, 0,
-                                  1., args.fake_sample_std_decay_steps)
+                                  1., args.fake_sample_std_decay_steps, args.fake_sample_std_delay)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_basis_func = get_expon_lr_func(args.lr_basis, args.lr_basis_final, args.lr_basis_delay_steps,
@@ -295,8 +295,7 @@ while True:
                                 mse_img, global_step=step_id, dataformats='HWC')
                     if args.log_depth_map:
                         depth_img = grid.volume_render_depth_image(cam,
-                                    args.log_depth_map_use_thresh if
-                                    args.log_depth_map_use_thresh else None,
+                                    None,
                                     batch_size=10000,
                                     no_surface=no_surface
                                 )
@@ -304,6 +303,17 @@ while True:
                         summary_writer.add_image(f'test/depth_map_{img_id:04d}',
                                 depth_img,
                                 global_step=step_id, dataformats='HWC')
+
+                        if args.log_depth_map_use_thresh is not None:
+                            depth_thresh_img = grid.volume_render_depth_image(cam,
+                                        args.log_depth_map_use_thresh,
+                                        batch_size=10000,
+                                        no_surface=no_surface
+                                        )
+                            depth_thresh_img = viridis_cmap(depth_thresh_img.cpu())
+                            summary_writer.add_image(f'test/depth_map_thresh_{img_id:04d}',
+                                    depth_thresh_img,
+                                    global_step=step_id, dataformats='HWC')
 
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
@@ -380,8 +390,7 @@ while True:
                                 mse_img, global_step=step_id, dataformats='HWC')
                     if args.log_depth_map:
                         depth_img = grid.volume_render_depth_image(cam,
-                                    args.log_depth_map_use_thresh if
-                                    args.log_depth_map_use_thresh else None,
+                                    None,
                                     batch_size=10000,
                                     no_surface=no_surface
                                 )
@@ -389,6 +398,16 @@ while True:
                         summary_writer.add_image(f'train/depth_map_{img_id:04d}',
                                 depth_img,
                                 global_step=step_id, dataformats='HWC')
+                        if args.log_depth_map_use_thresh is not None:
+                            depth_thresh_img = grid.volume_render_depth_image(cam,
+                                        args.log_depth_map_use_thresh,
+                                        batch_size=10000,
+                                        no_surface=no_surface
+                                        )
+                            depth_thresh_img = viridis_cmap(depth_thresh_img.cpu())
+                            summary_writer.add_image(f'train/depth_map_thresh_{img_id:04d}',
+                                    depth_thresh_img,
+                                    global_step=step_id, dataformats='HWC')
 
     # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0 or not args.tune_mode):
     # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0):

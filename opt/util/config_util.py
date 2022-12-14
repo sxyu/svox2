@@ -292,6 +292,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--alpha_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
     group.add_argument('--lr_alpha', type=float, default=3e1, help='SGD/rmsprop lr for alpha (surface optimization)')
     group.add_argument('--lr_alpha_final', type=float, default=5e-2)
+    group.add_argument('--lr_alpha_fix_delay', type=lambda x: int(float(x)), default=0)
     group.add_argument('--lr_alpha_decay_steps', type=lambda x: int(float(x)), default=250000)
     group.add_argument('--lr_alpha_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
@@ -301,6 +302,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surface_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Surface optimizer")
     group.add_argument('--lr_surface', type=float, default=3e1, help='SGD/rmsprop lr for surface')
     group.add_argument('--lr_surface_final', type=float, default=5e-2)
+    group.add_argument('--lr_surf_fix_delay', type=lambda x: int(float(x)), default=0)
     group.add_argument('--lr_surface_decay_steps', type=lambda x: int(float(x)), default=250000)
     group.add_argument('--lr_surface_delay_steps', type=lambda x: int(float(x)), default=15000,
                     help="Reverse cosine steps (0 means disable)")
@@ -320,6 +322,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--fake_sample_std', type=float, default=1, help='std for fake samples')
     group.add_argument('--fake_sample_std_final', type=float, default=0.05)
     group.add_argument('--fake_sample_std_decay_steps', type=lambda x: int(float(x)), default=50000)
+    group.add_argument('--fake_sample_std_delay', type=lambda x: int(float(x)), default=0)
 
 
     group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")

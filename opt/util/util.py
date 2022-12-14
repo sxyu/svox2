@@ -76,7 +76,7 @@ class Timing:
 
 
 def get_expon_lr_func(
-    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
+    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000, fix_delay_step=0
 ):
     """
     Continuous learning rate decay function. Adapted from JaxNeRF
@@ -94,9 +94,13 @@ def get_expon_lr_func(
     """
 
     def helper(step):
+        
         if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
             # Disable this parameter
             return 0.0
+        step -= fix_delay_step
+        if step < 0:
+            return lr_init * lr_delay_mult if lr_delay_mult > 0 else lr_init
         if lr_delay_steps > 0:
             # A kind of reverse cosine decay.
             delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
