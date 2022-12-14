@@ -556,8 +556,11 @@ while True:
                 summary_writer.add_scalar("lr_alpha", lr_alpha, global_step=gstep_id)
                 summary_writer.add_scalar("lr_surface", lr_surface, global_step=gstep_id)
                 summary_writer.add_scalar("lambda_surf_normal_loss", lambda_surf_normal_loss, global_step=gstep_id)
-                summary_writer.add_scalar("max_density", grid.density_data.max().cpu().detach().numpy(), global_step=gstep_id)
-                summary_writer.add_scalar("min_density", grid.density_data.min().cpu().detach().numpy(), global_step=gstep_id)
+                if not args.tune_mode:
+                    summary_writer.add_scalar("max_density", grid.density_data.max().cpu().detach().numpy(), global_step=gstep_id)
+                    summary_writer.add_scalar("min_density", grid.density_data.min().cpu().detach().numpy(), global_step=gstep_id)
+                    summary_writer.add_scalar("max_surface", grid.surface_data.max().cpu().detach().numpy(), global_step=gstep_id)
+                    summary_writer.add_scalar("min_surface", grid.surface_data.min().cpu().detach().numpy(), global_step=gstep_id)
                 if torch.is_tensor(grid.fake_sample_std):
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std.item(), global_step=gstep_id)
                 if grid.fake_sample_std is not None:
@@ -674,7 +677,7 @@ while True:
 
                 if args.lambda_viscosity_loss > 0.0:
                     vis_l, grad_norm = grid._surface_viscosity_loss_grad_check(
-                                grid._get_rand_cells(args.viscosity_sparsity, contiguous=args.tv_contiguous),
+                                grid._get_rand_cells_non_empty(args.viscosity_sparsity, contiguous=args.tv_contiguous),
                                 scaling=args.lambda_viscosity_loss,
                                 eta=args.viscosity_eta
                                 )

@@ -4745,11 +4745,12 @@ class SparseGrid(nn.Module):
         h = 2.0 * self.radius.mean() / gsz
         h = h.to(device)
 
-        norm_grad = torch.sqrt(
-            ((surf100 - surf_100) / (2. * h)) ** 2. + \
+        norm_grad = ((surf100 - surf_100) / (2. * h)) ** 2. + \
             ((surf010 - surf0_10) / (2. * h)) ** 2. + \
             ((surf001 - surf00_1) / (2. * h)) ** 2.
-        )
+
+        norm_grad = torch.sqrt(torch.clamp_min(norm_grad, 1e-8))
+        
 
         lap = (surf100 + surf_100 - 2.*surf000) / (h ** 2.) + \
               (surf010 + surf0_10 - 2.*surf000) / (h ** 2.) + \
@@ -5478,7 +5479,7 @@ class SparseGrid(nn.Module):
 
     def _get_rand_cells_non_empty(self, sparse_frac:float, frac_of_remaining:bool=True, contiguous:bool=True):
         '''
-        frac_of_remaining: frac is on remain cells
+        frac_of_remaining: frac is on remaining cells
         '''
         grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
         non_empty_ids = torch.where(self.links.view(-1) >= 0)[0].int()
@@ -5490,7 +5491,7 @@ class SparseGrid(nn.Module):
             if sparse_num > non_empty_num:
                 sparse_num = int(non_empty_num)
         if contiguous:
-            start = np.random.randint(0, non_empty_num - sparse_num)
+            start = np.random.randint(0, non_empty_num - sparse_num + 1)
             arr = non_empty_ids[torch.arange(start, start + sparse_num, dtype=torch.long, device=
                                                     self.links.device)]
             return arr
