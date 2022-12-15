@@ -4372,8 +4372,12 @@ class SparseGrid(nn.Module):
 
         # if start > grid_size - sparse_num:
         #     rand_cells[grid_size - sparse_num - start:] -= grid_size
-            
 
+        if self.opt.alpha_activation_type == SIGMOID_FN:
+            surf_sparse_thresh = utils.logit_np(surf_sparse_thresh)
+            alpha_sparsify_bound = utils.logit_np(alpha_sparsify_bound),
+
+            
         if rand_cells is not None:
             if rand_cells.size(0) > 0:
                 _C.alpha_surf_sparsify_grad_sparse(self.links, 
@@ -4383,8 +4387,8 @@ class SparseGrid(nn.Module):
                         self._get_sparse_grad_indexer(),
                         scaling_alpha, scaling_surf,
                         surf_sparse_decrease,
-                        utils.logit_np(surf_sparse_thresh),
-                        utils.logit_np(alpha_sparsify_bound),
+                        surf_sparse_thresh,
+                        alpha_sparsify_bound,
                         surf_sparsify_bound,
                         grad_alpha,
                         grad_surf)
