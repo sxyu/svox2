@@ -24,7 +24,7 @@ config_util.define_common_args(parser)
 
 parser.add_argument('--n_eval', '-n', type=int, default=100000, help='images to evaluate (equal interval), at most evals every image')
 parser.add_argument('--traj_type',
-                    choices=['spiral', 'circle', 'test'],
+                    choices=['spiral', 'circle', 'test', 'train'],
                     default='spiral',
                     help="Render a spiral (doubles length, using 2 elevations), or just a cirle")
 parser.add_argument(
@@ -168,6 +168,16 @@ elif args.traj_type == 'test':
         # test_cam_ids = np.array([24])
         print(f'Using test views with ids: {test_cam_ids}')
         c2ws = dset.c2w.numpy()[test_cam_ids, :4, :4]
+elif args.traj_type == 'train':
+    dset_train = datasets[args.dataset_type](args.data_dir, split="train",
+                                        **config_util.build_data_options(args))
+    if args.num_views >= dset_train.c2w.shape[0]:
+        c2ws = dset_train.c2w.numpy()[:, :4, :4]
+    else:
+        test_cam_ids = np.round(np.linspace(0, dset_train.c2w.shape[0] - 1, args.num_views)).astype(int)
+        # test_cam_ids = np.array([24])
+        print(f'Using training views with ids: {test_cam_ids}')
+        c2ws = dset_train.c2w.numpy()[test_cam_ids, :4, :4]
 else :
     c2ws = [
         pose_spherical(

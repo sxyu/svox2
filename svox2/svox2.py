@@ -4361,7 +4361,7 @@ class SparseGrid(nn.Module):
         if sparse_frac * self.links.size(0) * self.links.size(1) * self.links.size(2) < 1.:
             return
 
-        rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+        rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
 
         # grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
         # # sparse_num = max(int(sparse_frac * grid_size), 1)
@@ -4865,7 +4865,7 @@ class SparseGrid(nn.Module):
         
         if not use_kernel:
             # pytorch version
-            rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+            rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
             return self._surface_normal_loss_grad_check(rand_cells, scaling, connectivity_check=connectivity_check, ignore_empty=ignore_empty, **kwargs)
 
         else:
@@ -4873,7 +4873,7 @@ class SparseGrid(nn.Module):
                 _C is not None and self.surface_data.is_cuda and grad.is_cuda
             ), "CUDA extension is currently required for total variation"
 
-            rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+            rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
             if rand_cells is not None:
                 if rand_cells.size(0) > 0:
                     _C.surface_normal_grad_sparse(self.links, self.surface_data,
