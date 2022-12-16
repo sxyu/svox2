@@ -3108,6 +3108,8 @@ class SparseGrid(nn.Module):
         fused_surf_norm_reg_scale: float = 0.0,
         fused_surf_norm_reg_con_check: bool = True,
         fused_surf_norm_reg_ignore_empty: bool = False,
+        lambda_l2: float = 1.,
+        lambda_l1: float = 0.,
         no_surface: bool = False,
     ):
         """
@@ -3210,6 +3212,8 @@ class SparseGrid(nn.Module):
                 fused_surf_norm_reg_scale,
                 fused_surf_norm_reg_con_check,
                 fused_surf_norm_reg_ignore_empty,
+                lambda_l2,
+                lambda_l1,
                 rgb_out,
                 grad_holder
             )

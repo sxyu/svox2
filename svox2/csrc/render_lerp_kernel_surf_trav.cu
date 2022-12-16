@@ -792,6 +792,198 @@ __device__ __inline__ void trace_ray_sigma_thresh(
     *out = 0.f;
 }
 
+__device__ __inline__ void trace_ray_normal(
+        const PackedSparseGridSpec& __restrict__ grid,
+        SingleRaySpec& __restrict__ ray,
+        const RenderOptions& __restrict__ opt,
+        float* __restrict__ out) {
+    if (ray.tmin > ray.tmax) {
+        out[0] = 0.f;
+        out[1] = 0.f;
+        out[2] = 0.f;
+        return;
+    }
+
+    double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
+    double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
+
+    float t = ray.tmin;
+
+    // int32_t last_voxel[] = {-1,-1,-1};
+    int32_t voxel_l[] = {-1,-1,-1};
+
+    int32_t next_voxel[3];
+#pragma unroll 3
+    for (int j = 0; j < 3; ++j) {
+        next_voxel[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+        next_voxel[j] = min(max(next_voxel[j], 0), grid.size[j] - 2);
+    }
+
+    // if (lane_id==0){
+    //     printf("next_voxel: [%d, %d, %d]\n", next_voxel[0], next_voxel[1], next_voxel[2]);
+    // }
+
+
+    while (t <= ray.tmax) {
+
+        voxel_l[0] = next_voxel[0];
+        voxel_l[1] = next_voxel[1];
+        voxel_l[2] = next_voxel[2];
+
+        // Find close and far intersections between ray and voxel
+        int32_t const close_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+            ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+            ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+        };
+        int32_t const far_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+            ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+            ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+        };
+
+        // threshold t_close by 0.f to prevent cases where camera origin is within the voxel
+        float const t_close = max(max(
+            max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+            (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]), 0.f);
+        
+        float const t_fars [] = {
+            (static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0],
+            (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1],
+            (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]
+            };
+
+        float const t_far = min(min(t_fars[0], t_fars[1]), t_fars[2]);
+
+        t = t_far;
+
+        if (t_far == t_fars[0]){
+            next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
+            if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
+        }else if (t_far == t_fars[1]){
+            next_voxel[1] += (ray.dir[1] > 0.f) ?  1 : -1;
+            if ((next_voxel[1] < 0) || (next_voxel[1] >= grid.size[1]-1)) t = ray.tmax + 1.f;
+        }else{
+            next_voxel[2] += (ray.dir[2] > 0.f) ?  1 : -1;
+            if ((next_voxel[2] < 0) || (next_voxel[2] >= grid.size[2]-1)) t = ray.tmax + 1.f;
+        }
+
+        int const offx = grid.stride_x, offy = grid.size[2];
+        const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
+
+        // skip voxel if any of the vertices is turned off
+        if ((voxel_l[0] + 1 >= grid.size[0]) || (voxel_l[1] + 1 >= grid.size[1]) || (voxel_l[2] + 1 >= grid.size[2]) \
+            || (link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) \
+            || (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
+        ){
+            // const float skip = compute_skip_dist(ray,
+            //             grid.links, grid.stride_x,
+            //             grid.size[2], 0);
+
+            continue;
+        }
+
+        double const new_origin[] = {ray.origin[0] + t_close*ray.dir[0], ray.origin[1] + t_close*ray.dir[1], ray.origin[2] + t_close*ray.dir[2]};
+
+        // find intersections
+        double const surface[8] = {
+            grid.surface_data[link_ptr[0]],
+            grid.surface_data[link_ptr[1]],
+            grid.surface_data[link_ptr[offy]],
+            grid.surface_data[link_ptr[offy+1]],
+            grid.surface_data[link_ptr[offx]],
+            grid.surface_data[link_ptr[offx+1]],
+            grid.surface_data[link_ptr[offx+offy]],
+            grid.surface_data[link_ptr[offx+offy+1]],
+        };
+
+        double fs[4];
+        double const new_norm_origin[] = {new_origin[0] - voxel_l[0], new_origin[1] - voxel_l[1], new_origin[2] - voxel_l[2]};
+        // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
+        surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
+
+        // only supports single level set!
+        const int level_set_num = 1;
+        const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
+        for (int i=0; i < level_set_num; ++i){
+            double const lv_set = grid.level_set_data[i];
+            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+                continue;
+            }
+            ////////////// CUBIC ROOT SOLVING //////////////
+            double st[3] = {-1, -1, -1}; // sample t
+
+            cubic_equation_solver_vieta(
+                fs[0] - lv_set, fs[1], fs[2], fs[3],
+                1e-8, // float eps
+                1e-10, // double eps
+                st
+                );
+
+            
+            ////////////// TRILINEAR INTERPOLATE //////////////
+            for (int j=0; j < 3; ++j){
+                if (st[j] <= 0){
+                    // ignore intersection at negative direction
+                    continue;
+                }
+
+#pragma unroll 3
+                for (int k=0; k < 3; ++k){
+                    // assert(!isnan(st[j]));
+                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], static_cast<float>(new_origin[k])); // fmaf(x,y,z) = (x*y)+z
+                    ray.l[k] = voxel_l[k]; // get l
+                    ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
+                    ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
+                }
+
+                // check if intersection is within grid
+                if ((ray.pos[0] < 0) | (ray.pos[0] > 1) | (ray.pos[1] < 0) | (ray.pos[1] > 1) | (ray.pos[2] < 0) | (ray.pos[2] > 1)){
+                    continue;
+                }
+
+
+                float const alpha = surf_alpha_act(trilerp_cuvol_one(
+                        grid.links, grid.density_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        1,
+                        ray.l, ray.pos,
+                        0), opt.alpha_activation_type);
+
+                if (alpha > 0) {
+                    *out = ((st[j]+t_close) / opt.step_size) * ray.world_step;
+                    // determine normal
+                    const int32_t* __restrict__ link_ptr = grid.links + (grid.stride_x * ray.l[0] + grid.size[2] * ray.l[1] + ray.l[2]);
+                    #define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? grid.surface_data[link_ptr[u] * 1] : 0.f) 
+                        const float c00 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), ray.pos[2]); 
+                        const float c01 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), ray.pos[2]);
+                        const float c0 = lerp(c00, c01, ray.pos[1]);
+                        const float c10 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), ray.pos[2]);
+                        const float c11 = lerp(MAYBE_READ_LINK(offy + offx),
+                                                MAYBE_READ_LINK(offy + offx + 1), ray.pos[2]);
+                        const float c1 = lerp(c10, c11, ray.pos[1]);
+                    #undef MAYBE_READ_LINK
+
+                    out[0] = c1 - c0;
+                    out[1] = ray.pos[0]*(-c10 + c11) + (1. - ray.pos[0])*(-c00 + c01);
+                    out[2] = ray.pos[0]*(ray.pos[1]*(-surface[0b110] + surface[0b111]) + (1 - ray.pos[1])*(-surface[0b100] + surface[0b101])) + \
+                             (1 - ray.pos[0])*(ray.pos[1]*(-surface[0b010] + surface[0b011]) + (1 - ray.pos[1])*(-surface[0b000] + surface[0b001]));
+
+                    return;
+                }
+            }
+
+        }
+    }
+    out[0] = 0.f;
+    out[1] = 0.f;
+    out[2] = 0.f;
+}
+
+
+
+
 __device__ __inline__ void trace_ray_extract_pt(
         const PackedSparseGridSpec& __restrict__ grid,
         SingleRaySpec& __restrict__ ray,
@@ -1427,7 +1619,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         const float ix1y1 = lerp(_norm_surf(6),
                                                 _norm_surf(7), ray.pos[2]);
                         const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
-                        const float  fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
+                        const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
 
                         #undef _norm_surf
 
@@ -1995,6 +2187,8 @@ __global__ void render_ray_backward_kernel(
     float fused_surf_norm_reg_scale,
     bool fused_surf_norm_reg_con_check,
     bool fused_surf_norm_reg_ignore_empty,
+    float lambda_l2,
+    float lambda_l1,
     PackedGridOutputGrads grads,
     float* __restrict__ accum_out = nullptr, // left-over gradient for background?
     float* __restrict__ log_transmit_out = nullptr) {
@@ -2029,11 +2223,15 @@ __global__ void render_ray_backward_kernel(
 
     float grad_out[3]; // computes gradient for current ray
     if (grad_out_is_rgb) { // true for fused function (grad_output is rgb_gt)
-        const float norm_factor = 2.f / (3 * int(rays.origins.size(0))); // gradient of MSE
+        // const float norm_factor = 2.f / (3 * int(rays.origins.size(0))); // gradient divider of MSE
+        const float norm_factor_l2 = 2.f / (3 * int(rays.origins.size(0))); // gradient divider of L2
+        const float norm_factor_l1 = 1.f / (3 * int(rays.origins.size(0))); // gradient divider of L1
+
 #pragma unroll 3
         for (int i = 0; i < 3; ++i) {
-            const float resid = color_cache[ray_id * 3 + i] - grad_output[ray_id * 3 + i];
-            grad_out[i] = resid * norm_factor;
+            const float resid = color_cache[ray_id * 3 + i] - grad_output[ray_id * 3 + i]; // pred_c - gt_c
+            grad_out[i] = resid * norm_factor_l2 * lambda_l2;
+            grad_out[i] += (resid > 0.f) ? (norm_factor_l1 * lambda_l1) : (-norm_factor_l1 * lambda_l1);
         }
     } else { // for backward function (grad_output is grad for color)
 #pragma unroll 3
@@ -2198,6 +2396,22 @@ __global__ void render_ray_sigma_thresh_kernel(
         opt,
         sigma_thresh,
         out + ray_id);
+}
+
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void render_ray_normal_kernel(
+        PackedSparseGridSpec grid,
+        PackedRaysSpec rays,
+        RenderOptions opt,
+        torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out) {
+    CUDA_GET_THREAD_ID(ray_id, rays.origins.size(0));
+    SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
+    ray_find_bounds(ray_spec, grid, opt, ray_id);
+    trace_ray_normal(
+        grid,
+        ray_spec,
+        opt,
+        out[ray_id].data());
 }
 
 __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
@@ -2366,12 +2580,11 @@ void volume_render_surf_trav_backward(
                     nullptr,
                     0.f,
                     0.f,
-                    // fused_surf_norm_reg_scale,
-                    // fused_surf_norm_reg_con_check,
-                    // fused_surf_norm_reg_ignore_empty,
+                    0.f, // fused_surf_norm_reg_scale,
+                    false, // fused_surf_norm_reg_con_check,
+                    true, // fused_surf_norm_reg_ignore_empty,
                     0.f,
-                    false,
-                    true,
+                    0.f,
                     // Output
                     grads,
                     use_background ? accum.data_ptr<float>() : nullptr,
@@ -2407,6 +2620,8 @@ void volume_render_surf_trav_fused(
         float fused_surf_norm_reg_scale,
         bool fused_surf_norm_reg_con_check,
         bool fused_surf_norm_reg_ignore_empty,
+        float lambda_l2,
+        float lambda_l1,
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
 
@@ -2462,6 +2677,8 @@ void volume_render_surf_trav_fused(
                 fused_surf_norm_reg_scale / Q, // note that we normalize by #rays rather than #voxels 
                 fused_surf_norm_reg_con_check,
                 fused_surf_norm_reg_ignore_empty,
+                lambda_l2,
+                lambda_l1,
                 // Output
                 grads,
                 use_background ? accum.data_ptr<float>() : nullptr,
@@ -2526,6 +2743,27 @@ torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec& grid,
             opt,
             sigma_thresh,
             results.data_ptr<float>()
+        );
+    return results;
+}
+
+torch::Tensor render_normal_surf_trav(SparseGridSpec& grid,
+        RaysSpec& rays,
+        RenderOptions& opt) {
+    auto options =
+        torch::TensorOptions()
+        .dtype(rays.origins.dtype())
+        .layout(torch::kStrided)
+        .device(rays.origins.device())
+        .requires_grad(false);
+    torch::Tensor results = torch::empty({rays.origins.size(0), 3}, options);
+    const auto Q = rays.origins.size(0);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
+    device::render_ray_normal_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+            grid,
+            rays,
+            opt,
+            results.packed_accessor32<float, 2, torch::RestrictPtrTraits>()
         );
     return results;
 }

@@ -34,7 +34,7 @@ Tensor volume_render_surf_trav(SparseGridSpec &, RaysSpec &, RenderOptions &);
 void volume_render_surf_trav_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 void volume_render_surf_trav_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                               Tensor, float, float, float, bool, bool, Tensor, GridOutputGrads &);
+                               Tensor, float, float, float, bool, bool, float, float, Tensor, GridOutputGrads &);
 // // Expected termination (depth) rendering
 // torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
 //                                           RenderOptions &);
@@ -65,6 +65,7 @@ torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, float);
 std::tuple<torch::Tensor, torch::Tensor> extract_pts_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, int, float);
+std::tuple<torch::Tensor, torch::Tensor> render_normal_surf_trav(SparseGridSpec &, RaysSpec &,RenderOptions &);
 
 // ** NV rendering formula (trilerp)
 Tensor volume_render_nvol(SparseGridSpec &, RaysSpec &, RenderOptions &);
@@ -143,6 +144,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(volume_render_expected_term_surf_trav);
   _REG_FUNC(volume_render_sigma_thresh_surf_trav);
   _REG_FUNC(extract_pts_surf_trav);
+  _REG_FUNC(render_normal_surf_trav);
 
   _REG_FUNC(volume_render_nvol);
   _REG_FUNC(volume_render_nvol_backward);

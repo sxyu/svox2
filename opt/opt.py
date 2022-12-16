@@ -523,6 +523,8 @@ while True:
                         fused_surf_norm_reg_scale = lambda_surf_normal_loss if args.fused_surf_norm_reg else 0.0,
                         fused_surf_norm_reg_con_check = not args.no_surf_norm_con_check,
                         fused_surf_norm_reg_ignore_empty = args.surf_norm_reg_ignore_empty,
+                        lambda_l2 = args.img_lambda_l2,
+                        lambda_l1 = args.img_lambda_l1,
                         randomize=args.enable_random,
                         no_surface=no_surface)
             # with Timing("loss_comp"):
