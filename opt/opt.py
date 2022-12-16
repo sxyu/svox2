@@ -578,8 +578,9 @@ while True:
                 if not args.tune_mode:
                     summary_writer.add_scalar("max_density", grid.density_data.max().cpu().detach().numpy(), global_step=gstep_id)
                     summary_writer.add_scalar("min_density", grid.density_data.min().cpu().detach().numpy(), global_step=gstep_id)
-                    summary_writer.add_scalar("max_surface", grid.surface_data.max().cpu().detach().numpy(), global_step=gstep_id)
-                    summary_writer.add_scalar("min_surface", grid.surface_data.min().cpu().detach().numpy(), global_step=gstep_id)
+                    if grid.surface_data is not None:
+                        summary_writer.add_scalar("max_surface", grid.surface_data.max().cpu().detach().numpy(), global_step=gstep_id)
+                        summary_writer.add_scalar("min_surface", grid.surface_data.min().cpu().detach().numpy(), global_step=gstep_id)
                 if torch.is_tensor(grid.fake_sample_std):
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std.item(), global_step=gstep_id)
                 if grid.fake_sample_std is not None:
