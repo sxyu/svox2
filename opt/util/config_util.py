@@ -427,8 +427,9 @@ def setup_train_conf(return_parpser=False):
 
 
     group = parser.add_argument_group("losses")
-    group.add_argument('--img_lambda_l2', type=float, default=1)
-    group.add_argument('--img_lambda_l1', type=float, default=0)
+    # group.add_argument('--img_lambda_l2', type=float, default=1)
+    # group.add_argument('--img_lambda_l1', type=float, default=0)
+    group.add_argument('--img_lambda_l1_ratio', type=float, default=0)
 
     group.add_argument('--lambda_outside_loss', type=float, default=1e-3)
     group.add_argument('--lambda_udf_var_loss', type=float, default=0)
