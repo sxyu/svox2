@@ -223,7 +223,7 @@ with torch.no_grad():
     else:
         all_alphas = None
     #  if args.near_clip >= 0.0:
-    grid.opt.near_clip = 0.0 #args.near_clip
+    # grid.opt.near_clip = 0.0 #args.near_clip
     if args.width is None:
         args.width = dset.get_image_size(0)[1]
     if args.height is None:

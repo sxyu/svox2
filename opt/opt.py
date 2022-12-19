@@ -673,12 +673,14 @@ while True:
 
                 if args.lambda_surf_sign_loss > 0.0:
                     # with Timing("normal_loss"):
-                    grid.inplace_surface_sign_change_grad(grid.surface_data.grad,
+                    sign_loss = grid.inplace_surface_sign_change_grad(grid.surface_data.grad,
                             scaling=args.lambda_surf_sign_loss,
-                            sparse_frac=args.norm_surface_sparsity,
+                            sparse_frac=1,
                             contiguous=args.tv_contiguous,
-                            use_kernel=USE_KERNEL,
+                            use_kernel=False,
                             )
+                    if (gstep_id + 1) % args.print_every == 0 and sign_loss is not None:
+                        summary_writer.add_scalar("sign_loss", sign_loss.item() / args.lambda_surf_sign_loss, global_step=gstep_id)
 
                 if args.lambda_sparsify_alpha > 0.0 or args.lambda_sparsify_surf > 0.0:
                     # with Timing("normal_loss"):

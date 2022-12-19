@@ -14,6 +14,7 @@ import sympy
 from sympy.solvers import solve
 from sympy import Symbol
 import kaolin
+import mcubes
 
 _C = utils._get_c_extension()
 
@@ -2646,6 +2647,21 @@ class SparseGrid(nn.Module):
 
         return out
 
+    def safe_fetch_data(self, xyz, data, default=0):
+
+        out = torch.full([xyz.shape[0], data.shape[-1]], default, 
+            device=data.device, dtype=data.dtype)
+        edge_mask = (xyz >= 0).all(axis=-1) & (xyz < torch.tensor(self.links.shape, device=xyz.device)[None, :]).all(axis=-1)
+
+        x, y, z = xyz[edge_mask].unbind(-1)
+        links = self.links[x,y,z]
+        valid_mask = links >= 0
+
+        idx = torch.arange(out.shape[0])[edge_mask][valid_mask]
+        out[idx] = data[links[valid_mask].long(), :]
+
+        return out
+
     def prune_grid(
             self,
             density_raw_thres=1,
@@ -2660,28 +2676,16 @@ class SparseGrid(nn.Module):
             Z = torch.arange(reso[2])
             coords = torch.stack((torch.meshgrid(X, Y, Z)), dim=-1).view(-1, 3).to(device)
 
-            def safe_fetch_data(xyz, data, default=0):
-                out = torch.full([xyz.shape[0], data.shape[-1]], default, 
-                    device=data.device, dtype=data.dtype)
-                edge_mask = (xyz >= 0).all(axis=-1) & (xyz < torch.tensor(reso, device=xyz.device)[None, :]).all(axis=-1)
 
-                x, y, z = xyz[edge_mask].unbind(-1)
-                links = self.links[x,y,z]
-                valid_mask = links >= 0
 
-                idx = torch.arange(out.shape[0])[edge_mask][valid_mask]
-                out[idx] = data[links[valid_mask].long(), :]
-
-                return out
-
-            density_data = safe_fetch_data(coords, self.density_data.data)
-            sh_data = safe_fetch_data(coords, self.sh_data.data)
+            density_data = self.safe_fetch_data(coords, self.density_data.data)
+            sh_data = self.safe_fetch_data(coords, self.sh_data.data)
             valid_mask = density_data > density_raw_thres
             valid_mask = valid_mask.view(reso)
 
             if self.surface_data is not None and prune_surf:
                 # prune vertex where the sign of surf is same as all its adjacent vertices
-                surface_data = safe_fetch_data(coords, self.surface_data.data)
+                surface_data = self.safe_fetch_data(coords, self.surface_data.data)
 
                 X = torch.tensor([-1,0,1], device=device)
                 offset = torch.stack((torch.meshgrid(X, X, X)), dim=-1).view(-1, 3)
@@ -2708,7 +2712,7 @@ class SparseGrid(nn.Module):
                 
                 valid_surf_mask = torch.zeros_like(coords[:, :1]).bool()
                 for i in range(offset.shape[0]):
-                    neighbors = safe_fetch_data(coords + offset[i, None, :], self.surface_data.data)
+                    neighbors = self.safe_fetch_data(coords + offset[i, None, :], self.surface_data.data)
                     valid_surf_mask |= sign_not_equal(surface_data, neighbors)
 
                 valid_mask &= valid_surf_mask.view(reso)
@@ -3983,6 +3987,65 @@ class SparseGrid(nn.Module):
             roffset.to(device=points.device), points, rscaling.to(device=points.device)
         )
 
+    def extract_mesh(self, path:str = None, density_thresh:float = None):
+        with torch.no_grad():
+            device = self.density_data.device
+            X = torch.arange(self.links.shape[0])
+            Y = torch.arange(self.links.shape[1])
+            Z = torch.arange(self.links.shape[2])
+            X, Y, Z = torch.meshgrid(X, Y, Z)
+            points = torch.stack((X, Y, Z), dim=-1).view(-1, 3).to(device)
+
+            surf_data = self.safe_fetch_data(points, self.surface_data, -1).reshape(self.links.shape)
+            vertices, triangles = mcubes.marching_cubes(surf_data.cpu().detach().numpy(), 0)
+
+            if density_thresh is not None:
+                # remove vertices with lower density than threshold
+                all_sample_vals_density = []
+                batch_size = 5000
+                print('Pass 1/2 (density)')
+                for i in tqdm(range(0, len(vertices), batch_size)):
+                    sample_vals_density, _ = self.sample(
+                        torch.tensor(vertices[i : i + batch_size], device=device, dtype=torch.float32),
+                        grid_coords=True,
+                        want_colors=False
+                    )
+                    sample_vals_density = sample_vals_density
+                    all_sample_vals_density.append(sample_vals_density)
+
+                all_sample_vals_density = torch.cat(
+                        all_sample_vals_density, dim=0)
+
+                invalid_mask = all_sample_vals_density[:,0].cpu().detach().numpy() < density_thresh
+                id_remap = np.cumsum((~invalid_mask).astype(int)) - 1
+                id_remap[invalid_mask] = -1
+                triangles = id_remap[triangles]
+                triangles = triangles[(triangles >= 0).all(axis=-1)]
+                vertices = vertices[~invalid_mask]
+
+            def write_obj(filename, v_pos, t_pos_idx, v_tex=None, t_tex_idx=None):
+                with open(filename, "w") as f:
+                    for v in v_pos:
+                        f.write('v {} {} {} \n'.format(v[0], v[1], v[2]))
+                
+                    if v_tex is not None:
+                        assert(len(t_pos_idx) == len(t_tex_idx))
+                        for v in v_tex:
+                            f.write('vt {} {} \n'.format(v[0], 1.0 - v[1]))
+
+                    # Write faces
+                    for i in range(len(t_pos_idx)):
+                        f.write("f ")
+                        for j in range(3):
+                            f.write(' %s/%s' % (str(t_pos_idx[i][j]+1), '' if v_tex is None else str(t_tex_idx[i][j]+1)))
+                        f.write("\n")
+            if path is not None:
+                write_obj(path, vertices, triangles)
+
+            return vertices, triangles
+
+
+
     def save(self, path: str, compress: bool = False, step_id: int = 0):
         """
         Save to a path
@@ -4771,6 +4834,8 @@ class SparseGrid(nn.Module):
 
         vis_loss.backward()
 
+        self._get_sparse_grad_indexer()[:] = True
+
         return vis_loss, norm_grad.mean()
 
 
@@ -4787,25 +4852,29 @@ class SparseGrid(nn.Module):
         valid_count = torch.zeros_like(v0)
         L = torch.zeros_like(v0)
 
+        def loss_fn(s0, s1):
+            # return torch.abs(s0 - s1)
+            return s0 + s1
+
         invalid_mask = (torch.stack([x+1,y,z], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
         vx = v0.clone().detach()
         vx[~invalid_mask] = self.surface_data[self.links[x[~invalid_mask]+1, y[~invalid_mask], z[~invalid_mask]].long()]
         ss_mask = v0 * vx < 0.
-        L[ss_mask] += torch.abs(v0[ss_mask] - vx[ss_mask]) * self.links.shape[0] / 256.
+        L[ss_mask] += loss_fn(v0[ss_mask], vx[ss_mask]) * self.links.shape[0] / 256.
         valid_count[ss_mask] += 1.
         
         invalid_mask = (torch.stack([x,y+1,z], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
         vy = v0.clone().detach()
         vy[~invalid_mask] = self.surface_data[self.links[x[~invalid_mask], y[~invalid_mask]+1, z[~invalid_mask]].long()]
         ss_mask = v0 * vy < 0.
-        L[ss_mask] += torch.abs(v0[ss_mask] - vy[ss_mask]) * self.links.shape[1] / 256.
+        L[ss_mask] += loss_fn(v0[ss_mask], vy[ss_mask]) * self.links.shape[1] / 256.
         valid_count[ss_mask] += 1.
 
         invalid_mask = (torch.stack([x,y,z+1], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
         vz = v0.clone().detach()
         vz[~invalid_mask] = self.surface_data[self.links[x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]+1].long()]
         ss_mask = v0 * vz < 0.
-        L[ss_mask] += torch.abs(v0[ss_mask] - vz[ss_mask]) * self.links.shape[2] / 256.
+        L[ss_mask] += loss_fn(v0[ss_mask], vz[ss_mask]) * self.links.shape[2] / 256.
         valid_count[ss_mask] += 1.
 
         
@@ -4815,6 +4884,8 @@ class SparseGrid(nn.Module):
         sign_change_loss = scaling * torch.mean(L)
 
         sign_change_loss.backward()
+
+        self._get_sparse_grad_indexer()[:] = True
 
         return sign_change_loss
 
@@ -4834,17 +4905,18 @@ class SparseGrid(nn.Module):
         if self.surface_data is None:
             return
         
+        rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
+        
         if not use_kernel:
             # pytorch version
-            rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
-            return self._surface_sign_change_grad_check(rand_cells, scaling / rand_cells.shape[0])
+            return self._surface_sign_change_grad_check(rand_cells, scaling)
+            
 
         else:
             assert (
                 _C is not None and self.surface_data.is_cuda and grad.is_cuda
             ), "CUDA extension is currently required for total variation"
 
-            rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
             if rand_cells is not None:
                 if rand_cells.size(0) > 0:
                     _C.surf_sign_change_grad_sparse(self.links, self.surface_data,

@@ -704,7 +704,11 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
     const float alpha_raw = data_alpha[lnk000][idx];
     // const float grad = _EXP(-alpha_raw) / (1+ _EXP(-alpha_raw));
     // const float safe_grad = isnan(grad) ? 1.f : grad;
-    const float safe_grad = 1.f; // change to use L1 loss
+
+
+    const float safe_grad = 1.f/min(alpha_raw, 1e-5f);
+    ASSERT_NUM(safe_grad);
+    
 
     if (alpha_raw > alpha_bound){
         atomicAdd(&grad_alpha_out[lnk000 * data_alpha.size(1) + idx], scale_alpha * safe_grad);
