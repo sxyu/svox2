@@ -65,7 +65,7 @@ torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, float);
 std::tuple<torch::Tensor, torch::Tensor> extract_pts_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, int, float);
-std::tuple<torch::Tensor, torch::Tensor> render_normal_surf_trav(SparseGridSpec &, RaysSpec &,RenderOptions &);
+torch::Tensor render_normal_surf_trav(SparseGridSpec &, RaysSpec &,RenderOptions &);
 
 // ** NV rendering formula (trilerp)
 Tensor volume_render_nvol(SparseGridSpec &, RaysSpec &, RenderOptions &);

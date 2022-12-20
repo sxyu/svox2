@@ -127,7 +127,7 @@ else:
                             background_reso=args.background_reso,
                             surface_type=svox2.__dict__['SURFACE_TYPE_' + args.surface_type.upper()],
                             surface_init=args.surface_init,
-                            use_octree=args.renderer_backend != 'surf_trav',
+                            use_octree=args.renderer_backend != 'surf_trav' or not USE_KERNEL,
                             trainable_fake_sample_std=args.trainable_fake_sample_std,
                             force_alpha=args.force_alpha)
 
@@ -314,6 +314,20 @@ while True:
                             summary_writer.add_image(f'test/depth_map_thresh_{img_id:04d}',
                                     depth_thresh_img,
                                     global_step=step_id, dataformats='HWC')
+
+                    if args.log_normal_map and not no_surface and grid.opt.backend == 'surf_trav':
+                        normal_img = grid.volume_render_normal_image(cam,
+                                    # args.log_depth_map_use_thresh,
+                                    batch_size=10000
+                                )
+
+                        normal_img = normal_img / torch.clamp_min(torch.norm(normal_img, dim=-1, keepdim=True), 1e-8)
+                        normal_img = normal_img / 2. + 0.5
+                        normal_img = normal_img.cpu()
+
+                        summary_writer.add_image(f'test/normal_map_{img_id:04d}',
+                                normal_img,
+                                global_step=step_id, dataformats='HWC')
 
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
@@ -539,15 +553,13 @@ while True:
                 # # grid.surface_data.grad.max() / torch.prod((grid._scaling * grid._grid_size())).cuda()
                 # # grid.surface_data.grad = grid.surface_data.grad[:, 0] / (torch.prod(torch.stack(svox2.utils.inv_morton_code_3(torch.arange(grid.surface_data.shape[0]).cuda()),dim=-1),axis=-1)+1)
                 # grid.surface_data.grad = grid.surface_data.grad / torch.prod(torch.tensor(grid.links.shape, device=device))
-                loss = 0
-                loss = loss + mse
-                if 'extra_loss' in out:
+                # loss = 0
+                loss = F.mse_loss(out['rgb'], rgb_gt) * (1 - args.img_lambda_l1_ratio) + torch.abs(out['rgb'] - rgb_gt).mean() * args.img_lambda_l1_ratio
+                # if 'extra_loss' in out:
                     # for k in out['extra_loss'].keys():
                     #     loss += out['extra_loss'][k]
-                    loss += args.lambda_udf_var_loss * out['extra_loss'].get('udf_var_loss', 0.)
-                    # loss += args.lambda_alpha_lap_loss * out['extra_loss'].get('density_lap_loss', 0.)
-                    loss += args.lambda_no_surf_init_density_lap_loss * out['extra_loss'].get('no_surf_init_density_lap_loss', 0.)
-                    loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
+                    # loss += args.lambda_no_surf_init_density_lap_loss * out['extra_loss'].get('no_surf_init_density_lap_loss', 0.)
+                    # loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
                 
                 loss.backward()
 

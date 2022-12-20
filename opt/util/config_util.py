@@ -398,6 +398,7 @@ def setup_train_conf(return_parpser=False):
     # Extra logging
     group.add_argument('--log_mse_image', action='store_true', default=False)
     group.add_argument('--log_depth_map', action='store_true', default=False)
+    group.add_argument('--log_normal_map', action='store_true', default=False)
     group.add_argument('--log_depth_map_use_thresh', type=float, default=None,
             help="If specified, uses the Dex-neRF version of depth with given thresh; else returns expected term")
 
@@ -438,7 +439,6 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--img_lambda_l1_ratio', type=float, default=0)
 
     group.add_argument('--lambda_outside_loss', type=float, default=1e-3)
-    group.add_argument('--lambda_udf_var_loss', type=float, default=0)
     group.add_argument('--lambda_alpha_lap_loss', type=float, default=0)
     group.add_argument('--lambda_no_surf_init_density_lap_loss', type=float, default=0)
     group.add_argument('--lambda_normal_loss', type=float, default=0)

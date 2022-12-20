@@ -1595,6 +1595,8 @@ class SparseGrid(nn.Module):
         """
         
         ########### Preprocess Camera Rays ###########
+        self.sparse_grad_indexer = None
+        self.sparse_sh_grad_indexer = None
         
         origins = self.world2grid(rays.origins).to(dtype)
         dirs = rays.dirs / torch.norm(rays.dirs, dim=-1, keepdim=True).to(dtype)
@@ -2858,6 +2860,8 @@ class SparseGrid(nn.Module):
                 if alpha_rescale is not None:
                     self.density_data.data *= alpha_rescale
 
+                # self.density_data.data = self.density_data.data.max() - self.density_data.data
+
 
 
 
@@ -3341,6 +3345,30 @@ class SparseGrid(nn.Module):
                     self.opt._to_cpp(),
                     sigma_thresh)
 
+    def volume_render_normal(self, rays: Rays, **kwargs):
+        """
+        Volumetric depth rendering for rays
+
+        :param rays: Rays, (origins (N, 3), dirs (N, 3))
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: (N,)
+        """
+        backend = self.opt.backend
+        if kwargs.get('no_surface', False) and self.opt.backend in ['surface', 'surf_trav']:
+            backend = "cuvol"
+
+        if backend in ['surf_trav']:
+                cu_fn = _C.__dict__[f"render_normal_surf_trav"]
+                return cu_fn(
+                        self._to_cpp(),
+                        rays._to_cpp(),
+                        self.opt._to_cpp(),
+                        )
+
+
     def volume_render_depth_image(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
         """
         Volumetric depth rendering for full image
@@ -3359,6 +3387,26 @@ class SparseGrid(nn.Module):
             all_depths.append(depths)
         all_depth_out = torch.cat(all_depths, dim=0)
         return all_depth_out.view(camera.height, camera.width)
+
+
+    def volume_render_normal_image(self, camera: Camera, batch_size: int = 5000, **kwargs):
+        """
+        Volumetric depth rendering for full image
+
+        :param camera: Camera, a single camera
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: depth (H, W)
+        """
+        rays = camera.gen_rays()
+        all_normals = []
+        for batch_start in range(0, camera.height * camera.width, batch_size):
+            depths = self.volume_render_normal(rays[batch_start: batch_start + batch_size], **kwargs)
+            all_normals.append(depths)
+        all_normal_out = torch.cat(all_normals, dim=0)
+        return all_normal_out.view(camera.height, camera.width, 3)
 
 
     def volume_render_extract_pts(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):

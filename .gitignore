@@ -23,3 +23,5 @@ tb.sh
 *.npy
 
 .ipynb_checkpoints/
+
+*.sh
