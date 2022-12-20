@@ -706,7 +706,7 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
     // const float safe_grad = isnan(grad) ? 1.f : grad;
 
 
-    const float safe_grad = 1.f/min(alpha_raw, 1e-5f);
+    const float safe_grad = 1.f/max(alpha_raw, 1e-5f);
     ASSERT_NUM(safe_grad);
     
 
