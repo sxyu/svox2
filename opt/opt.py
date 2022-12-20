@@ -470,7 +470,7 @@ while True:
                 grid._init_surface_from_density(
                     alpha_lv_sets=args.alpha_lv_sets,
                     reset_alpha=args.surface_init_reset_alpha,
-                    init_alpha=0.1,
+                    alpha_rescale=args.surf_init_alpha_rescale,
                     surface_rescale=args.surface_init_rescale,
                     reset_all=args.surf_init_reset_all,
                     prune_threshold=args.alpha_lv_sets / 2
@@ -789,6 +789,11 @@ while True:
                 if not no_surface:
                     eval_step(step_id=gstep_id)
                     gc.collect()
+
+            if (gstep_id % args.extract_mesh_every == 0) and not no_surface and not args.tune_mode:
+                obj_path = path.join(args.train_dir, 'mesh', f'mesh_{gstep_id:05d}.obj')
+                os.makedirs(path.join(args.train_dir, 'mesh'), exist_ok=True)
+                grid.extract_mesh(obj_path, args.mesh_sigma_thresh)
 
             if gstep_id >= args.n_iters:
                 print('* Final eval and save')

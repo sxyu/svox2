@@ -2744,7 +2744,7 @@ class SparseGrid(nn.Module):
         self, 
         alpha_lv_sets=0.5, 
         reset_alpha=False, 
-        init_alpha=0.1, 
+        alpha_rescale=None, 
         surface_rescale=0.1, 
         alpha_clip_thresh=1e-6,
         reset_all=False,
@@ -2753,6 +2753,8 @@ class SparseGrid(nn.Module):
         use_z_order=True):
         '''
         Initialize surface data from density values
+        reset_alpha: resetting alpha values to binary
+        alpha_rescale: if not None, rescale the alpha raw values
         '''
         with torch.no_grad():
 
@@ -2853,7 +2855,8 @@ class SparseGrid(nn.Module):
                 # self.surface_data = nn.Parameter(surface_data.to(torch.float32))
                 self.surface_data.data = self.surface_data.data/norm_grad.mean() + self.level_set_data[0]
 
-                pass
+                if alpha_rescale is not None:
+                    self.density_data.data *= alpha_rescale
 
 
 

@@ -240,6 +240,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--alpha_lv_sets', type=float, default=
                         0.1,
                         help='Value of alpha used to init surface')
+    group.add_argument('--surf_init_alpha_rescale', type=float, default=None,
+                        help='Rescale the raw values of alpha after surface init from nerf')
     group.add_argument('--surface_init_rescale', type=float, default=
                         0.1,
                         help='Rescale the raw values of surfaces')
@@ -377,10 +379,14 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--print_every', type=lambda x: int(float(x)), default=20, help='print every iterations')
     group.add_argument('--save_every', type=lambda x: int(float(x)), default=10000,
                     help='save every x iterations')
-    group.add_argument('--eval_every', type=lambda x: int(float(x)), default=1,
+    group.add_argument('--eval_every', type=lambda x: int(float(x)), default=10000,
                     help='evaluate every x epochs')
     group.add_argument('--eval_every_iter', type=lambda x: int(float(x)), default=10000,
                     help='evaluate every x iterations')
+    group.add_argument('--extract_mesh_every', type=lambda x: int(float(x)), default=100000,
+                    help='extract mesh every x iterations')
+    group.add_argument('--mesh_sigma_thresh', type=float, default=None,
+                    help='extract mesh threshold')
 
     group.add_argument('--init_sigma', type=float,
                     default=0.1,
