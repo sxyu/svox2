@@ -3815,7 +3815,6 @@ class SparseGrid(nn.Module):
 
             
             all_sample_vals_density = []
-            print('Pass 1/2 (density)')
             for i in tqdm(range(0, len(points), batch_size)):
                 sample_vals_density = _C.sample_grid_raw_alpha(
                     self._to_cpp(grid_coords=True),
@@ -3888,7 +3887,6 @@ class SparseGrid(nn.Module):
 
             # Now we can get the colors for the sparse points
             points = points[sample_vals_mask]
-            print('Pass 2/2 (color), eval', cnz, 'sparse pts')
             all_sample_vals_sh = []
             all_sample_vals_surf = []
             for i in tqdm(range(0, len(points), batch_size)):
