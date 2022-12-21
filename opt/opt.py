@@ -843,12 +843,12 @@ while True:
                         args.lambda_tv_alpha *= args.tv_decay
                         args.lambda_tv_sh *= args.tv_decay
 
-                    ckpt_path = path.join(args.train_dir, f'ckpt_{grid.links.shape[0]}_last.npz')
-                    print('Saving', ckpt_path)
-                    grid.save(ckpt_path, step_id=gstep_id)
+                    # ckpt_path = path.join(args.train_dir, f'ckpt_{grid.links.shape[0]}_last.npz')
+                    # print('Saving', ckpt_path)
+                    # grid.save(ckpt_path, step_id=gstep_id)
 
-                    eval_step(step_id=gstep_id)
-                    gc.collect()
+                    # eval_step(step_id=gstep_id)
+                    # gc.collect()
 
                     reso_id += 1
                     use_sparsify = True
@@ -878,12 +878,12 @@ while True:
                     if args.upsample_density_add:
                         grid.density_data.data[:] += args.upsample_density_add
                     
-                    ckpt_path = path.join(args.train_dir, f'ckpt_{grid.links.shape[0]}_begin.npz')
-                    print('Saving', ckpt_path)
-                    grid.save(ckpt_path, step_id=gstep_id)
+                    # ckpt_path = path.join(args.train_dir, f'ckpt_{grid.links.shape[0]}_begin.npz')
+                    # print('Saving', ckpt_path)
+                    # grid.save(ckpt_path, step_id=gstep_id)
 
-                    eval_step(step_id=gstep_id+1)
-                    gc.collect()
+                    # eval_step(step_id=gstep_id+1)
+                    # gc.collect()
 
                 if factor > 1 and reso_id < len(reso_list) - 1:
                     print('* Using higher resolution images due to large grid; new factor', factor)
