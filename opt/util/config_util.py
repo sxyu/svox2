@@ -425,6 +425,8 @@ def setup_train_conf(return_parpser=False):
                         default=44_000_000,
                     help='Max items to store after upsampling '
                             '(the number here is given for 22GB memory)')
+    group.add_argument('--surf_non_expand', action='store_true', default=False,
+                    help='Do not expand to already turned-off voxel during upsampling')
 
     group.add_argument('--tune_mode', action='store_true', default=False,
                     help='hypertuning mode (do not save, for speed)')

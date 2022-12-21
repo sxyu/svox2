@@ -14,7 +14,7 @@ Tensor test_cubic_root_grad(Tensor, Tensor, Tensor, Tensor, bool);
 std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec &, Tensor,
                                                      bool);
 std::tuple<torch::Tensor, torch::Tensor> sample_grid_sh_surf(SparseGridSpec &, Tensor,
-                                                     bool, bool);
+                                                     bool, bool, float);
 torch::Tensor sample_grid_raw_alpha(SparseGridSpec &, Tensor, float);
 void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
                           Tensor, bool);

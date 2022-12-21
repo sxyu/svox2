@@ -115,6 +115,7 @@ __global__ void sample_grid_alpha_kernel(
 __global__ void sample_grid_surface_kernel(
         PackedSparseGridSpec grid,
         const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> points,
+        float const default_surf,
         // Output
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out) {
     CUDA_GET_THREAD_ID(tid, points.size(0));
@@ -133,7 +134,7 @@ __global__ void sample_grid_surface_kernel(
     const int offy = grid.size[2], offx = grid.size[1] * grid.size[2];
     const int32_t* __restrict__ link_ptr = &grid.links[l[0] * offx + l[1] * offy + l[2]];
 
-#define MAYBE_READ_LINK_D(u) ((link_ptr[u] >= 0) ? grid.surface_data[link_ptr[u]] : -1.f)
+#define MAYBE_READ_LINK_D(u) ((link_ptr[u] >= 0) ? grid.surface_data[link_ptr[u]] : default_surf)
 
     const float ix0y0 = lerp(MAYBE_READ_LINK_D(0), MAYBE_READ_LINK_D(1), point[2]);
     const float ix0y1 = lerp(MAYBE_READ_LINK_D(offy), MAYBE_READ_LINK_D(offy + 1), point[2]);
@@ -286,7 +287,7 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid(SparseGridSpec& grid, torch
 
 
 std::tuple<torch::Tensor, torch::Tensor> sample_grid_sh_surf(SparseGridSpec& grid, torch::Tensor points,
-                                                             bool want_colors, bool want_surfaces) {
+                                                             bool want_colors, bool want_surfaces, float default_surf) {
     DEVICE_GUARD(points);
     grid.check();
     CHECK_INPUT(points);
@@ -315,6 +316,7 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid_sh_surf(SparseGridSpec& gri
         device::sample_grid_surface_kernel<<<blocks_surface, cuda_n_threads, 0, stream_2>>>(
                 grid,
                 points.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                default_surf,
                 // Output
                 result_surf.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
     }

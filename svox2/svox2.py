@@ -1102,7 +1102,8 @@ class SparseGrid(nn.Module):
                         use_kernel: bool = True,
                         grid_coords: bool = False,
                         want_colors: bool = True,
-                        want_surfaces: bool = True):
+                        want_surfaces: bool = True,
+                        default_surf: float = -1):
         """
         Grid sampling with trilinear interpolation.
         Behaves like torch.nn.functional.grid_sample
@@ -1127,7 +1128,13 @@ class SparseGrid(nn.Module):
         if use_kernel and self.links.is_cuda and _C is not None:
             assert points.is_cuda
 
-            return _C.sample_grid_sh_surf(self._to_cpp(grid_coords=grid_coords), points, want_colors, want_surfaces)
+            return _C.sample_grid_sh_surf(
+                self._to_cpp(grid_coords=grid_coords), 
+                points, 
+                want_colors, 
+                want_surfaces,
+                default_surf,
+                )
         else:
             raise NotImplementedError()
             if not grid_coords:
@@ -3713,7 +3720,8 @@ class SparseGrid(nn.Module):
         weight_render_stop_thresh: float = 0.2, # SHOOT, forgot to turn this off for main exps..
         max_elements:int=0,
         batch_size:int=720720,
-        alpha_empty_val:float = -20. 
+        alpha_empty_val:float = -20.,
+        non_expanding:bool = False,
     ):
         """
         Resample and sparsify the grid; used to increase the resolution
@@ -3876,11 +3884,7 @@ class SparseGrid(nn.Module):
             sample_vals_mask = sample_vals_mask.view(-1)
             sample_vals_density = sample_vals_density.view(-1)
             sample_vals_density = sample_vals_density[sample_vals_mask]
-            cnz = torch.count_nonzero(sample_vals_mask).item()
 
-            grid_ratio = cnz / sample_vals_mask.numel()
-
-            print(f'{grid_ratio} of the grids are kept!')
 
             # Now we can get the colors for the sparse points
             points = points[sample_vals_mask]
@@ -3891,7 +3895,8 @@ class SparseGrid(nn.Module):
                 sample_vals_sh, sample_vals_surf = self.sample_surface(
                     points[i : i + batch_size],
                     grid_coords=True,
-                    want_colors=True
+                    want_colors=True,
+                    default_surf=torch.nan if non_expanding else -1.
                 )
                 all_sample_vals_sh.append(sample_vals_sh)
                 all_sample_vals_surf.append(sample_vals_surf)
@@ -3903,6 +3908,25 @@ class SparseGrid(nn.Module):
             # del self.sh_data
             del all_sample_vals_sh
             del all_sample_vals_surf
+
+            if non_expanding:
+                # remove samples that are near the ones that were already pruned
+                valid_mask = ~torch.isnan(sample_vals_surf)[:,0]
+                valid_ids = torch.arange(sample_vals_mask.shape[0])[sample_vals_mask]
+                sample_vals_mask[valid_ids] = valid_mask
+                sample_vals_sh = sample_vals_sh[valid_mask]
+                sample_vals_surf = sample_vals_surf[valid_mask]
+                points = points[valid_mask]
+                sample_vals_density = sample_vals_density[valid_mask]
+
+                del valid_ids
+                del valid_mask
+            
+            cnz = torch.count_nonzero(sample_vals_mask)
+            grid_ratio = cnz / sample_vals_mask.numel()
+            print(f'{grid_ratio} of the grids are kept!')
+
+
 
             if use_z_order:
                 inv_morton = torch.empty_like(morton)
