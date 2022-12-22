@@ -175,6 +175,7 @@ struct RenderOptions {
 
   bool surf_fake_sample;
   float surf_fake_sample_min_vox_len;
+  bool limited_fake_sample;
 
   bool no_surf_grad_from_sh;
   // enum ActivationType alpha_activation_type;

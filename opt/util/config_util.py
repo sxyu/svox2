@@ -136,9 +136,13 @@ def define_common_args(parser : configargparse.ArgumentParser):
                         action='store_true',
                         default=False,
                         help='Render with fake sample for surface')
+    group.add_argument('--limited_fake_sample', 
+                        action='store_true',
+                        default=False,
+                        help='Only apply fake sample if the voxel contains a surface')
     group.add_argument('--surf_fake_sample_min_vox_len', 
                          type=float,
-                         default=0.05,
+                         default=0.,
                         help='minimum length for the ray in voxel to be considered for fake sampling')
     group.add_argument('--no_surf_grad_from_sh', 
                         action='store_true',
@@ -200,6 +204,7 @@ def setup_render_opts(opt, args):
     opt.use_spheric_clip = args.use_spheric_clip
     opt.surf_fake_sample = args.surf_fake_sample
     opt.surf_fake_sample_min_vox_len = args.surf_fake_sample_min_vox_len
+    opt.limited_fake_sample = args.limited_fake_sample
     opt.no_surf_grad_from_sh = args.no_surf_grad_from_sh
     opt.alpha_activation_type = 0 if args.surf_alpha_sigmoid_act else 1
 

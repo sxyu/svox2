@@ -58,6 +58,7 @@ class RenderOptions:
 
     surf_fake_sample: bool = False
     surf_fake_sample_min_vox_len: float = 0.1
+    limited_fake_sample: bool = False
     no_surf_grad_from_sh: bool = False
     alpha_activation_type: int = EXP_FN
 
@@ -76,6 +77,7 @@ class RenderOptions:
         opt.last_sample_opaque = self.last_sample_opaque
         opt.surf_fake_sample = self.surf_fake_sample
         opt.surf_fake_sample_min_vox_len = self.surf_fake_sample_min_vox_len
+        opt.limited_fake_sample = self.limited_fake_sample
         opt.no_surf_grad_from_sh = self.no_surf_grad_from_sh
         opt.alpha_activation_type = self.alpha_activation_type
         #  opt.randomize = randomize
@@ -1999,7 +2001,7 @@ class SparseGrid(nn.Module):
             lv_set_mask = (self.level_set_data >= surface_values.min(axis=-1).values) & \
                 (self.level_set_data <= surface_values.max(axis=-1).values) # [VEV, N_level_sets]
 
-            if self.opt.surf_fake_sample:
+            if self.opt.surf_fake_sample and not self.opt.limited_fake_sample:
                 # do not filter out voxels by surface scalars if we render fake samples
                 lv_set_mask = torch.ones_like(lv_set_mask).bool()
 
