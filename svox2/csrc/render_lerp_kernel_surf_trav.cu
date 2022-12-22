@@ -233,6 +233,13 @@ __device__ __inline__ void trace_ray_surf_trav(
                     1e-10, // double eps
                     st
                     );
+            } else {
+                // No valid surface present in voxel
+                // if we don't use fake sample, then skip
+
+                if ((!opt.surf_fake_sample) || (opt.surf_fake_sample && opt.limited_fake_sample)){
+                    continue;
+                }
             }
 
 
@@ -1358,6 +1365,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     1e-10, // double eps
                     st
                     );
+            } else {
+                // No valid surface present in voxel
+                // if we don't use fake sample, then skip
+                if ((!opt.surf_fake_sample) || (opt.surf_fake_sample && opt.limited_fake_sample)){
+                    continue;
+                }
             }
             
 
