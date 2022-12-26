@@ -3377,6 +3377,30 @@ class SparseGrid(nn.Module):
                         self.opt._to_cpp(),
                         )
 
+    def volume_render_alpha_map(self, rays: Rays, thresh: float, **kwargs):
+        """
+        Volumetric depth rendering for rays
+
+        :param rays: Rays, (origins (N, 3), dirs (N, 3))
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: (N,)
+        """
+        backend = self.opt.backend
+        if kwargs.get('no_surface', False) and self.opt.backend in ['surface', 'surf_trav']:
+            backend = "cuvol"
+
+        if backend in ['surf_trav']:
+                cu_fn = _C.__dict__[f"volume_render_alpha_surf_trav"]
+                return cu_fn(
+                        self._to_cpp(),
+                        rays._to_cpp(),
+                        self.opt._to_cpp(),
+                        thresh
+                        )
+
 
     def volume_render_depth_image(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
         """
@@ -3416,6 +3440,25 @@ class SparseGrid(nn.Module):
             all_normals.append(depths)
         all_normal_out = torch.cat(all_normals, dim=0)
         return all_normal_out.view(camera.height, camera.width, 3)
+
+    def volume_render_alpha_image(self, camera: Camera, thresh:float = -1, batch_size: int = 5000, **kwargs):
+        """
+        Volumetric depth rendering for full image
+
+        :param camera: Camera, a single camera
+        :param sigma_thresh: Optional[float]. If None then finds the standard expected termination
+                                              (NOTE: this is the absolute length along the ray, not the z-depth as usually expected);
+                                              else then finds the first point where sigma strictly exceeds sigma_thresh
+
+        :return: depth (H, W)
+        """
+        rays = camera.gen_rays()
+        all_alphas = []
+        for batch_start in range(0, camera.height * camera.width, batch_size):
+            depths = self.volume_render_alpha_map(rays[batch_start: batch_start + batch_size], thresh, **kwargs)
+            all_alphas.append(depths)
+        all_alpha_out = torch.cat(all_alphas, dim=0)
+        return all_alpha_out.view(camera.height, camera.width, 1)
 
 
     def volume_render_extract_pts(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
