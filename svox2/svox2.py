@@ -4062,41 +4062,76 @@ class SparseGrid(nn.Module):
             roffset.to(device=points.device), points, rscaling.to(device=points.device)
         )
 
-    def extract_mesh(self, path:str = None, density_thresh:float = None):
+    def extract_mesh(
+        self, 
+        out_path:str = None, 
+        density_thresh:float = None, 
+        n_sample:int = 512,
+        batch_size:int = 10000, 
+        scene_scale:float = 1.,
+        to_world:bool = False,
+        ):
         with torch.no_grad():
             device = self.density_data.device
-            X = torch.arange(self.links.shape[0])
-            Y = torch.arange(self.links.shape[1])
-            Z = torch.arange(self.links.shape[2])
-            X, Y, Z = torch.meshgrid(X, Y, Z)
-            points = torch.stack((X, Y, Z), dim=-1).view(-1, 3).to(device)
+            dtype = torch.float32
+            X = torch.linspace(0, self.links.shape[0] - 1, n_sample, dtype=dtype)
+            Y = torch.linspace(0, self.links.shape[1] - 1, n_sample, dtype=dtype)
+            Z = torch.linspace(0, self.links.shape[2] - 1, n_sample, dtype=dtype)
+            points = torch.stack((torch.meshgrid(X, Y, Z)), dim=-1).view(-1, 3).to(device)
 
-            surf_data = self.safe_fetch_data(points, self.surface_data, -1).reshape(self.links.shape)
-            vertices, triangles = mcubes.marching_cubes(surf_data.cpu().detach().numpy(), 0)
 
-            if density_thresh is not None:
-                # remove vertices with lower density than threshold
-                all_sample_vals_density = []
-                batch_size = 5000
-                print('Pass 1/2 (density)')
-                for i in tqdm(range(0, len(vertices), batch_size)):
-                    sample_vals_density, _ = self.sample(
-                        torch.tensor(vertices[i : i + batch_size], device=device, dtype=torch.float32),
+            if self.surface_data is not None:
+                # extracting surface
+                sample_vals_surf = []
+                for i in tqdm(range(0, len(points), batch_size)):
+                    _, sample_vals_surf_batch = self.sample_surface(
+                        points[i : i + batch_size],
+                        grid_coords=True,
+                        want_colors=False,
+                        default_surf= -1.
+                    )
+                    sample_vals_surf.append(sample_vals_surf_batch)
+                sample_vals_surf = torch.cat(sample_vals_surf, dim=0).view([n_sample, n_sample, n_sample])
+
+                vertices, triangles = mcubes.marching_cubes(sample_vals_surf.cpu().detach().numpy(), 0)
+
+                vertices = vertices * self.links.shape / np.array([n_sample, n_sample, n_sample])
+
+                if density_thresh is not None:
+                    # remove vertices with lower density than threshold
+                    sample_vals_density = []
+                    for i in tqdm(range(0, len(vertices), batch_size)):
+                        sample_vals_density_batch, _ = self.sample(
+                            torch.tensor(vertices[i : i + batch_size], device=device, dtype=torch.float32),
+                            grid_coords=True,
+                            want_colors=False
+                        )
+                        sample_vals_density.append(sample_vals_density_batch)
+
+                    sample_vals_density = torch.cat(
+                            sample_vals_density, dim=0)
+
+                    invalid_mask = sample_vals_density[:,0].cpu().detach().numpy() < density_thresh
+                    id_remap = np.cumsum((~invalid_mask).astype(int)) - 1
+                    id_remap[invalid_mask] = -1
+                    triangles = id_remap[triangles]
+                    triangles = triangles[(triangles >= 0).all(axis=-1)]
+                    vertices = vertices[~invalid_mask]
+            else:
+                # extracting based on nerf density
+                sample_vals_density = []
+                for i in tqdm(range(0, len(points), batch_size)):
+                    sample_vals_density_batch, _ = self.sample(
+                        torch.tensor(points[i : i + batch_size], device=device, dtype=torch.float32),
                         grid_coords=True,
                         want_colors=False
                     )
-                    sample_vals_density = sample_vals_density
-                    all_sample_vals_density.append(sample_vals_density)
+                    sample_vals_density.append(sample_vals_density_batch)
+                sample_vals_density = torch.cat(sample_vals_density, dim=0).view([n_sample, n_sample, n_sample])
 
-                all_sample_vals_density = torch.cat(
-                        all_sample_vals_density, dim=0)
+                vertices, triangles = mcubes.marching_cubes(sample_vals_density.cpu().detach().numpy(), 0 if density_thresh is None else density_thresh)
+                vertices = vertices * self.links.shape / np.array([n_sample, n_sample, n_sample])
 
-                invalid_mask = all_sample_vals_density[:,0].cpu().detach().numpy() < density_thresh
-                id_remap = np.cumsum((~invalid_mask).astype(int)) - 1
-                id_remap[invalid_mask] = -1
-                triangles = id_remap[triangles]
-                triangles = triangles[(triangles >= 0).all(axis=-1)]
-                vertices = vertices[~invalid_mask]
 
             def write_obj(filename, v_pos, t_pos_idx, v_tex=None, t_tex_idx=None):
                 with open(filename, "w") as f:
@@ -4114,8 +4149,11 @@ class SparseGrid(nn.Module):
                         for j in range(3):
                             f.write(' %s/%s' % (str(t_pos_idx[i][j]+1), '' if v_tex is None else str(t_tex_idx[i][j]+1)))
                         f.write("\n")
-            if path is not None:
-                write_obj(path, vertices, triangles)
+            if to_world:
+                vertices = self.grid2world(torch.from_numpy(vertices.astype('float32'))).numpy() / scene_scale
+            if out_path is not None:
+                mcubes.export_obj(vertices, triangles, out_path)
+                # write_obj(out_path, vertices, triangles)
 
             return vertices, triangles
 

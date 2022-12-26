@@ -67,10 +67,9 @@ config_util.setup_render_opts(grid.opt, args)
 if args.extract_nerf:
     grid.surface_data = None
     grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
-    grid.opt.backend = 'cuvol'
 
 print('Render options', grid.opt)
 
 # grid.extract_mesh(args.out_path, args.intersect_th)
-grid.extract_mesh(args.out_path, None)
+grid.extract_mesh(args.out_path, args.intersect_th, scene_scale=2./3., to_world=True)
 
