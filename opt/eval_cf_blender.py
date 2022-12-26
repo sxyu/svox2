@@ -163,7 +163,8 @@ if __name__ == '__main__':
             'Chamfer/s2d': mean_s2d,
             'Chamfer/mean': over_all,
         }
-        summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.input_path)}/../'))
+        # summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.input_path)}/../'))
+        summary_writer.add_hparams(hparams, metrics, run_name='hparam')
         summary_writer.flush()
     else:
 
