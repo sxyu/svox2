@@ -769,7 +769,7 @@ class SparseGrid(nn.Module):
                 grid_center = (torch.tensor(reso)) / 2
                 rs = torch.sqrt(torch.sum((coords - grid_center)**2, axis=-1)).to(device)
 
-                sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 6) + 0.5
+                sphere_rs = torch.arange(0, torch.sqrt(torch.sum((torch.tensor(reso)/2) ** 2)) , 2) + 0.5
                 sphere_rs = sphere_rs.to(device)
                 dists = rs[:, None] - sphere_rs[None, :]
 
@@ -4621,6 +4621,7 @@ class SparseGrid(nn.Module):
         connectivity_check=True, 
         alpha_weighted_norm_loss=False,
         ignore_empty=False,
+        use_l1=False
         ):
         xyz = rand_cells
         z = (xyz % self.links.shape[2]).long()
@@ -4720,9 +4721,14 @@ class SparseGrid(nn.Module):
         Norm010 = norm010 / torch.clamp(torch.norm(norm010, dim=-1, keepdim=True), 1e-10)
         Norm100 = norm100 / torch.clamp(torch.norm(norm100, dim=-1, keepdim=True), 1e-10)
 
-        norm_dz = torch.norm(Norm001 - Norm000, dim=-1)**2
-        norm_dy = torch.norm(Norm010 - Norm000, dim=-1)**2
-        norm_dx = torch.norm(Norm100 - Norm000, dim=-1)**2
+        if use_l1:
+            norm_dz = torch.sum(torch.abs(Norm001 - Norm000), dim=-1)
+            norm_dy = torch.sum(torch.abs(Norm010 - Norm000), dim=-1)
+            norm_dx = torch.sum(torch.abs(Norm100 - Norm000), dim=-1)
+        else:
+            norm_dz = torch.norm(Norm001 - Norm000, dim=-1)**2
+            norm_dy = torch.norm(Norm010 - Norm000, dim=-1)**2
+            norm_dx = torch.norm(Norm100 - Norm000, dim=-1)**2
 
         norm_count = torch.ones_like(norm_dz) * 3
 
@@ -5051,6 +5057,7 @@ class SparseGrid(nn.Module):
                                 use_kernel: bool = True,
                                 connectivity_check: bool = True,
                                 ignore_empty: bool = False,
+                                use_l1: bool = False,
                                 **kwargs
                             ):
         if self.surface_data is None:
@@ -5077,8 +5084,10 @@ class SparseGrid(nn.Module):
                             ndc_coeffs[0], ndc_coeffs[1],
                             connectivity_check,
                             ignore_empty,
+                            use_l1,
                             grad)
             else:
+                raise NotImplementedError
                 _C.surface_normal_grad(self.links, self.surface_data, self.level_set_data[0],
                         0, 1, scaling,
                         ndc_coeffs[0], ndc_coeffs[1],

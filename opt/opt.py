@@ -678,6 +678,7 @@ while True:
                             # use_kernel=not args.py_surf_norm_reg,
                             connectivity_check=not args.no_surf_norm_con_check,
                             ignore_empty=args.surf_norm_reg_ignore_empty,
+                            use_l1=args.surf_norm_reg_l1,
                             )
 
                     if (gstep_id + 1) % args.print_every == 0 and norm_loss is not None:

@@ -473,6 +473,8 @@ def setup_train_conf(return_parpser=False):
                     help='Do not check surface connectivity when computing surface norm regularization')
     group.add_argument('--surf_norm_reg_ignore_empty', action='store_true', default=False,
                     help='Do not apply surface normal reg if two voxels are both empty')
+    group.add_argument('--surf_norm_reg_l1', action='store_true', default=False,
+                    help='Do not apply surface normal reg if two voxels are both empty')
     group.add_argument('--fused_surf_norm_reg', action='store_true', default=False,
                     help='Used fused surface normal regularization')
     group.add_argument('--tv_logalpha', action='store_true', default=False,

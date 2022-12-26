@@ -1820,6 +1820,7 @@ __device__ __inline__ void add_surface_normal_grad(
         float scale,
         bool con_check,
         bool ignore_empty,
+        bool use_l1,
         // Output
         bool* __restrict__ mask_out,
         float* __restrict__ grad_data) {
@@ -1930,56 +1931,119 @@ __device__ __inline__ void add_surface_normal_grad(
         float const *_n1 = (i==0) ? _norm100 : ((i==1) ? _norm010 : _norm001);
         float const N1 = _NORM3(_n1);
         ASSERT_NUM(N1);
+        if (use_l1){
+            float const L[] = {
+                _norm000[0]/N0 - _n1[0]/N1,
+                _norm000[1]/N0 - _n1[1]/N1,
+                _norm000[2]/N0 - _n1[2]/N1
+            };
 
-        // dE/d0x, dE/d0y, dE/d0z
-        float const d0[] = {
-                (_norm000[0]/N0 - _n1[0]/N1) * \
-                (-2.f*_SQR(_norm000[0])/_CUBIC(N0) + 2.f/N0) \ 
-                + -2.f*_norm000[0]*_norm000[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0) \
-                + -2.f*_norm000[0]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
-                (_norm000[1]/N0 - _n1[1]/N1) * \ 
-                (-2.f*_SQR(_norm000[1])/_CUBIC(N0) + 2.f/N0) \ 
-                + -2.f*_norm000[0]*_norm000[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
-                + -2.f*_norm000[1]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
-                (_norm000[2]/N0 - _n1[2]/N1) * \ 
-                (-2.f*_SQR(_norm000[2])/_CUBIC(N0) + 2.f/N0) \ 
-                + -2.f*_norm000[0]*_norm000[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
-                + -2.f*_norm000[1]*_norm000[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0)
-        };
+            float const dL1_dL[] = {
+                (L[0] > 0.f) ? (1.f) : (L[0] == 0.f ? 0.f : -1.f),
+                (L[1] > 0.f) ? (1.f) : (L[1] == 0.f ? 0.f : -1.f),
+                (L[2] > 0.f) ? (1.f) : (L[2] == 0.f ? 0.f : -1.f)
+            };
 
-        ASSERT_NUM(d0[0]);
-        ASSERT_NUM(d0[1]);
-        ASSERT_NUM(d0[2]);
+            // dE/d0x, dE/d0y, dE/d0z
+            float const d0[] = {
+                dL1_dL[0] * (-_SQR(_norm000[0])/_CUBIC(N0) + 1.f/N0) + \
+                dL1_dL[1] * (-_norm000[0]*_norm000[1]/_CUBIC(N0)) + \
+                dL1_dL[2] * (-_norm000[0]*_norm000[2]/_CUBIC(N0)),
 
-        _split_add_surface_norm_grad(x, y, z, d0, 
-                          scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
-        
+                dL1_dL[0] * (-_norm000[0]*_norm000[1]/_CUBIC(N0)) + \
+                dL1_dL[1] * (-_SQR(_norm000[1])/_CUBIC(N0) + 1.f/N0) + \
+                dL1_dL[2] * (-_norm000[1]*_norm000[2]/_CUBIC(N0)),
 
-        float const d1[] = {
-                (_norm000[0]/N0 - _n1[0]/N1) * \ 
-                (2.f*_SQR(_n1[0])/_CUBIC(N1) - 2.f/N1) \
-                + 2.f*_n1[0]*_n1[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1) \
-                + 2.f*_n1[0]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
-                (_norm000[1]/N0 - _n1[1]/N1) * \ 
-                (2.f*_SQR(_n1[1])/_CUBIC(N1) - 2.f/N1) \ 
-                + 2.f*_n1[0]*_n1[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
-                + 2.f*_n1[1]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
-                (_norm000[2]/N0 - _n1[2]/N1) * \ 
-                (2.f*_SQR(_n1[2])/_CUBIC(N1) - 2.f/N1) \ 
-                + 2.f*_n1[0]*_n1[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
-                + 2.f*_n1[1]*_n1[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1)
-        };
+                dL1_dL[0] * (-_norm000[0]*_norm000[2]/_CUBIC(N0)) + \
+                dL1_dL[1] * (-_norm000[1]*_norm000[2]/_CUBIC(N0)) + \
+                dL1_dL[2] * (-_SQR(_norm000[2])/_CUBIC(N0) + 1.f/N0)
+            };
 
-        ASSERT_NUM(d1[0]);
-        ASSERT_NUM(d1[1]);
-        ASSERT_NUM(d1[2]);
+            ASSERT_NUM(d0[0]);
+            ASSERT_NUM(d0[1]);
+            ASSERT_NUM(d0[2]);
 
-        float const ux = (i==0) ? x+1:x,
-                    uy = (i==1) ? y+1:y,
-                    uz = (i==2) ? z+1:z;
+            _split_add_surface_norm_grad(x, y, z, d0, 
+                            scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
+            
 
-        _split_add_surface_norm_grad(ux, uy, uz, d1,
-                          scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
+            float const d1[] = {
+                dL1_dL[0] * (_SQR(_n1[0])/_CUBIC(N1) - 1.f/N1) + \
+                dL1_dL[1] * (_n1[0]*_n1[1]/_CUBIC(N1)) + \
+                dL1_dL[2] * (_n1[0]*_n1[2]/_CUBIC(N1)),
+
+                dL1_dL[0] * (_n1[0]*_n1[1]/_CUBIC(N1)) + \
+                dL1_dL[1] * (_SQR(_n1[1])/_CUBIC(N1) - 1.f/N1) + \
+                dL1_dL[2] * (_n1[1]*_n1[2]/_CUBIC(N1)),
+
+                dL1_dL[0] * (_n1[0]*_n1[2]/_CUBIC(N1)) + \
+                dL1_dL[1] * (_n1[1]*_n1[2]/_CUBIC(N1)) + \
+                dL1_dL[2] * (_SQR(_n1[2])/_CUBIC(N1) - 1.f/N1)
+            };
+
+            ASSERT_NUM(d1[0]);
+            ASSERT_NUM(d1[1]);
+            ASSERT_NUM(d1[2]);
+
+            float const ux = (i==0) ? x+1:x,
+                        uy = (i==1) ? y+1:y,
+                        uz = (i==2) ? z+1:z;
+
+            _split_add_surface_norm_grad(ux, uy, uz, d1,
+                            scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
+        }else{
+            // dE/d0x, dE/d0y, dE/d0z
+            float const d0[] = {
+                    (_norm000[0]/N0 - _n1[0]/N1) * \
+                    (-2.f*_SQR(_norm000[0])/_CUBIC(N0) + 2.f/N0) \ 
+                    + -2.f*_norm000[0]*_norm000[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0) \
+                    + -2.f*_norm000[0]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
+                    (_norm000[1]/N0 - _n1[1]/N1) * \ 
+                    (-2.f*_SQR(_norm000[1])/_CUBIC(N0) + 2.f/N0) \ 
+                    + -2.f*_norm000[0]*_norm000[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
+                    + -2.f*_norm000[1]*_norm000[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N0),
+                    (_norm000[2]/N0 - _n1[2]/N1) * \ 
+                    (-2.f*_SQR(_norm000[2])/_CUBIC(N0) + 2.f/N0) \ 
+                    + -2.f*_norm000[0]*_norm000[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N0) \
+                    + -2.f*_norm000[1]*_norm000[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N0)
+            };
+
+            ASSERT_NUM(d0[0]);
+            ASSERT_NUM(d0[1]);
+            ASSERT_NUM(d0[2]);
+
+            _split_add_surface_norm_grad(x, y, z, d0, 
+                            scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
+            
+
+            float const d1[] = {
+                    (_norm000[0]/N0 - _n1[0]/N1) * \ 
+                    (2.f*_SQR(_n1[0])/_CUBIC(N1) - 2.f/N1) \
+                    + 2.f*_n1[0]*_n1[1]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1) \
+                    + 2.f*_n1[0]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
+                    (_norm000[1]/N0 - _n1[1]/N1) * \ 
+                    (2.f*_SQR(_n1[1])/_CUBIC(N1) - 2.f/N1) \ 
+                    + 2.f*_n1[0]*_n1[1]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
+                    + 2.f*_n1[1]*_n1[2]*(_norm000[2]/N0 - _n1[2]/N1) / _CUBIC(N1),
+                    (_norm000[2]/N0 - _n1[2]/N1) * \ 
+                    (2.f*_SQR(_n1[2])/_CUBIC(N1) - 2.f/N1) \ 
+                    + 2.f*_n1[0]*_n1[2]*(_norm000[0]/N0 - _n1[0]/N1) / _CUBIC(N1) \
+                    + 2.f*_n1[1]*_n1[2]*(_norm000[1]/N0 - _n1[1]/N1) / _CUBIC(N1)
+            };
+
+            ASSERT_NUM(d1[0]);
+            ASSERT_NUM(d1[1]);
+            ASSERT_NUM(d1[2]);
+
+            float const ux = (i==0) ? x+1:x,
+                        uy = (i==1) ? y+1:y,
+                        uz = (i==2) ? z+1:z;
+
+            _split_add_surface_norm_grad(ux, uy, uz, d1,
+                            scale * 1.f/norm_count, links, offx, offy, ddim, idx, mask_out, grad_data);
+
+        }
+
 
     }
 

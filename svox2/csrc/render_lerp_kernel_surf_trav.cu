@@ -1846,6 +1846,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     fused_surf_norm_reg_scale,
                     fused_surf_norm_reg_con_check,
                     fused_surf_norm_reg_ignore_empty,
+                    false,
                     // Output
                     grads.mask_out,
                     grads.grad_surface_out

@@ -408,6 +408,7 @@ __global__ void surface_normal_grad_sparse_kernel(
         float ndc_coeffx, float ndc_coeffy,
         bool con_check,
         bool ignore_empty,
+        bool use_l1,
         // Output
         bool* __restrict__ mask_out,
         float* __restrict__ grad_data) {
@@ -421,7 +422,6 @@ __global__ void surface_normal_grad_sparse_kernel(
 
     const int size[3] = {links.size(0), links.size(1), links.size(2)};
 
-
     add_surface_normal_grad(
         links.data(),
         data.data(),
@@ -432,6 +432,7 @@ __global__ void surface_normal_grad_sparse_kernel(
         scale,
         con_check,
         ignore_empty,
+        use_l1,
         // Output
         mask_out,
         grad_data
@@ -1438,6 +1439,7 @@ void surface_normal_grad_sparse(torch::Tensor links,
              float ndc_coeffy,
              bool con_check, // check surface connectivity
              bool ignore_empty, // ignore empty voxels
+             bool use_l1, // use l1 loss
              torch::Tensor grad_data) {
     DEVICE_GUARD(data);
     CHECK_INPUT(data);
@@ -1470,6 +1472,7 @@ void surface_normal_grad_sparse(torch::Tensor links,
             ndc_coeffx, ndc_coeffy,
             con_check,
             ignore_empty,
+            use_l1,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
             grad_data.data_ptr<float>());
