@@ -172,10 +172,10 @@ if __name__ == '__main__':
         }
         summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.pts_dir)}/../'))
         summary_writer.flush()
-    else:
+        
 
-        summary_writer.add_scalar('Chamfer/d2s', mean_d2s, global_step=0)
-        summary_writer.add_scalar('Chamfer/s2d', mean_s2d, global_step=0)
-        summary_writer.add_scalar('Chamfer/mean', over_all, global_step=0)
-        summary_writer.flush()
+    summary_writer.add_scalar('Chamfer/d2s', mean_d2s, global_step=0)
+    summary_writer.add_scalar('Chamfer/s2d', mean_s2d, global_step=0)
+    summary_writer.add_scalar('Chamfer/mean', over_all, global_step=0)
+    summary_writer.flush()
     summary_writer.close()
