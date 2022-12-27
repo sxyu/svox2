@@ -63,6 +63,8 @@ torch::Tensor volume_render_expected_term_surf_trav(SparseGridSpec &, RaysSpec &
 // Depth rendering based on sigma-threshold as in Dex-NeRF
 torch::Tensor volume_render_sigma_thresh_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, float);
+torch::Tensor volume_render_alpha_surf_trav(SparseGridSpec &, RaysSpec &,
+                                         RenderOptions &, float);
 std::tuple<torch::Tensor, torch::Tensor> extract_pts_surf_trav(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, int, float);
 torch::Tensor render_normal_surf_trav(SparseGridSpec &, RaysSpec &,RenderOptions &);
@@ -143,6 +145,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(volume_render_sigma_thresh);
   _REG_FUNC(volume_render_expected_term_surf_trav);
   _REG_FUNC(volume_render_sigma_thresh_surf_trav);
+  _REG_FUNC(volume_render_alpha_surf_trav);
   _REG_FUNC(extract_pts_surf_trav);
   _REG_FUNC(render_normal_surf_trav);
 

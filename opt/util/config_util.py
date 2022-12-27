@@ -404,6 +404,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--log_mse_image', action='store_true', default=False)
     group.add_argument('--log_depth_map', action='store_true', default=False)
     group.add_argument('--log_normal_map', action='store_true', default=False)
+    group.add_argument('--log_alpha_map', action='store_true', default=False)
     group.add_argument('--log_depth_map_use_thresh', type=float, default=None,
             help="If specified, uses the Dex-neRF version of depth with given thresh; else returns expected term")
 

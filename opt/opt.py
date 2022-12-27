@@ -329,6 +329,19 @@ while True:
                                 normal_img,
                                 global_step=step_id, dataformats='HWC')
 
+                    if args.log_alpha_map and not no_surface and grid.opt.backend == 'surf_trav':
+                        alpha_img = grid.volume_render_alpha_image(cam,
+                                    thresh=args.log_depth_map_use_thresh,
+                                    # args.log_depth_map_use_thresh,
+                                    batch_size=10000
+                                )
+
+                        alpha_img = alpha_img.cpu()
+
+                        summary_writer.add_image(f'test/alpha_map_{img_id:04d}',
+                                alpha_img,
+                                global_step=step_id, dataformats='HWC')
+
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
                 psnr = -10.0 * math.log10(mse_num)
@@ -604,24 +617,18 @@ while True:
                 if grid.use_background:
                     summary_writer.add_scalar("lr_sigma_bg", lr_sigma_bg, global_step=gstep_id)
                     summary_writer.add_scalar("lr_color_bg", lr_color_bg, global_step=gstep_id)
-
-                # # log alpha inspect
-                # world_coords = torch.tensor([[-0.1152,  0.0859,  0.1797]], device='cuda:0')
-                # # coords = torch.tensor([[197, 300, 348]], device='cuda')
-                # # scale = grid.links.shape[0] / 512
-                # # coords = coords * scale
-                # coords = grid.world2grid(world_coords)
-                # alpha_inspect = grid._C.sample_grid_raw_alpha(
-                #     grid._to_cpp(grid_coords=True),
-                #     coords,
-                #     -20.
-                # )
-                # # link = grid.links[coords[0], coords[1], coords[2]]
-                # # if link > 0:
-                # #     alpha_inspect = grid.density_data[link]
-                # # else:
-                # #     alpha_inspect = -20
-                # summary_writer.add_scalar("alpha_inspect", alpha_inspect, global_step=gstep_id)
+                
+                # if not args.tune_mode:
+                #     # log alpha inspect
+                #     # world_coords = torch.tensor([[-0.1152,  0.0859,  0.1797]], device='cuda:0')
+                #     # coords = grid.world2grid(world_coords)
+                #     coords = torch.tensor([[101, 135, 161]], device='cuda', dtype=torch.float)
+                #     alpha_inspect = grid._C.sample_grid_raw_alpha(
+                #         grid._to_cpp(grid_coords=True),
+                #         coords,
+                #         -20.
+                #     )
+                #     summary_writer.add_scalar("alpha_inspect", alpha_inspect, global_step=gstep_id)
 
 
 
