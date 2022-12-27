@@ -114,6 +114,30 @@ def get_expon_lr_func(
 
     return helper
 
+def get_linear_expon_lr_func(
+    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000, fix_delay_step=0,
+):
+
+    def helper(step):
+        
+        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
+            # Disable this parameter
+            return 0.0
+        step -= fix_delay_step
+        if step < 0:
+            return lr_init * lr_delay_mult if lr_delay_mult > 0 else lr_init
+
+        if step < lr_delay_steps:
+            return ((1 - lr_delay_mult) * step / lr_delay_steps + lr_delay_mult) * lr_init
+
+        else:
+            step -= lr_delay_steps
+            t = np.clip(step / max_steps, 0, 1)
+            log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+            return log_lerp
+
+    return helper
+
 def get_linear_lr_func(
     lr_init, lr_final, lr_delay_steps=0, max_steps=1000000
 ):

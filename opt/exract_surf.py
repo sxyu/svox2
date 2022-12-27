@@ -26,7 +26,7 @@ config_util.define_common_args(parser)
 parser.add_argument(
     "--intersect_th",
     type=float,
-    default=0.1,
+    default=None,
     help="alpha threshold for determining intersections"
 )
 parser.add_argument(

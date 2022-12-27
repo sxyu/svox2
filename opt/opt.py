@@ -203,6 +203,8 @@ fake_sample_std_func = get_expon_lr_func(args.fake_sample_std, args.fake_sample_
                                   1., args.fake_sample_std_decay_steps, args.fake_sample_std_delay)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
+lr_sh_surf_func = get_expon_lr_func(args.lr_sh_surf, args.lr_sh_surf_final, args.lr_sh_surf_delay_steps,
+                               args.lr_sh_surf_delay_mult, args.lr_sh_surf_decay_steps, args.lr_sh_surf_fix_delay)
 lr_basis_func = get_expon_lr_func(args.lr_basis, args.lr_basis_final, args.lr_basis_delay_steps,
                                args.lr_basis_delay_mult, args.lr_basis_decay_steps)
 lr_sigma_bg_func = get_expon_lr_func(args.lr_sigma_bg, args.lr_sigma_bg_final, args.lr_sigma_bg_delay_steps,
@@ -455,13 +457,18 @@ while True:
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
+            
+            no_surface = gstep_id < args.no_surface_init_iters
             if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
                 grid.density_data.data[:] = args.init_sigma
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_alpha = lr_alpha_func(gstep_id)
             lr_surface = lr_surface_func(gstep_id) * lr_surface_factor
             lr_fake_sample_std = lr_fake_sample_std_func(gstep_id) * lr_fake_sample_std_factor
-            lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
+            if grid.surface_data is None or no_surface:
+                lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
+            else:
+                lr_sh = lr_sh_surf_func(gstep_id) * lr_sh_factor
             lr_basis = lr_basis_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             lr_sigma_bg = lr_sigma_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
             lr_color_bg = lr_color_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
@@ -483,7 +490,7 @@ while True:
                 # device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
                 grid.fake_sample_std = fake_sample_std_func(gstep_id)
 
-            no_surface = gstep_id < args.no_surface_init_iters
+            
 
             ############ Density Based Surface Init #################
             if (gstep_id == args.no_surface_init_iters) and (args.no_surface_init_iters > 0):

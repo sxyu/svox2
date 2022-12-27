@@ -344,6 +344,18 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--lr_sh_delay_steps', type=lambda x: int(float(x)), default=0, help="Reverse cosine steps (0 means disable)")
     group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 
+    group.add_argument('--lr_sh_surf', type=float, default=
+                        1e-2,
+                    help='SGD/rmsprop lr for SH')
+    group.add_argument('--lr_sh_surf_final', type=float,
+                        default=
+                        5e-6
+                        )
+    group.add_argument('--lr_sh_surf_decay_steps', type=lambda x: int(float(x)), default=250000)
+    group.add_argument('--lr_sh_surf_delay_steps', type=lambda x: int(float(x)), default=0, help="Reverse cosine steps (0 means disable)")
+    group.add_argument('--lr_sh_surf_delay_mult', type=float, default=1e-2)
+    group.add_argument('--lr_sh_surf_fix_delay', type=lambda x: int(float(x)), default=0)
+
     group.add_argument('--lr_fg_begin_step', type=lambda x: int(float(x)), default=0, help="Foreground begins training at given step number")
 
     # BG LRs
