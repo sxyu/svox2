@@ -55,7 +55,7 @@ if __name__ == '__main__':
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=thresh, algorithm='kd_tree', n_jobs=-1)
     summary_writer = SummaryWriter(f'{os.path.dirname(args.input_path)}/../')
 
-    if args.input_path.endswith('.obj'):
+    if args.input_path.endswith('.obj') or args.input_path.endswith('.ply'):
         # read from mesh
         data_mesh = o3d.io.read_triangle_mesh(args.input_path)
         vertices = np.asarray(data_mesh.vertices)
