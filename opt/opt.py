@@ -563,6 +563,9 @@ while True:
                         no_surface=no_surface)
             # with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, out['rgb'])
+            if args.sparsify_only_trained_cells:
+                trained_cells_mask = grid.sparse_grad_indexer.clone()
+                # trained_cells_mask = grid.sparse_grad_indexer
 
             # eval_step(step_id=gstep_id)
 
@@ -721,6 +724,8 @@ while True:
                             surf_sparse_thresh = args.sparsify_surf_thresh,
                             alpha_sparsify_bound = args.alpha_sparsify_bound,
                             surf_sparsify_bound = args.surf_sparsify_bound,
+                            only_trained_cells = args.sparsify_only_trained_cells,
+                            trained_cells_mask = trained_cells_mask if args.sparsify_only_trained_cells else None,
                             contiguous=args.tv_contiguous,
                             )
 

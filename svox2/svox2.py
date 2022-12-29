@@ -946,6 +946,7 @@ class SparseGrid(nn.Module):
 
         self.opt = RenderOptions() # set up outside of initializer
         self.sparse_grad_indexer: Optional[torch.Tensor] = None
+        self._data_to_links: Optional[torch.Tensor] = None
         self.sparse_sh_grad_indexer: Optional[torch.Tensor] = None
         self.sparse_background_indexer: Optional[torch.Tensor] = None
         self.density_rms: Optional[torch.Tensor] = None
@@ -4564,6 +4565,8 @@ class SparseGrid(nn.Module):
                         surf_sparse_thresh: float = 0.01,
                         alpha_sparsify_bound: float = 1e-6,
                         surf_sparsify_bound: float = -1,
+                        only_trained_cells: bool = False,
+                        trained_cells_mask: torch.Tensor = None,
                         contiguous: bool = True
                     ):
         '''
@@ -4581,10 +4584,12 @@ class SparseGrid(nn.Module):
             _C is not None and self.density_data.is_cuda
         ), "CUDA extension is currently required for alpha lap"
 
-        if sparse_frac * self.links.size(0) * self.links.size(1) * self.links.size(2) < 1.:
-            return
+        if only_trained_cells:
+            # only use cells that are visited during training
+            rand_cells = self._get_data_to_links()[trained_cells_mask].to(self.density_data.device)
 
-        rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
+        else:
+            rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
 
         # grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
         # # sparse_num = max(int(sparse_frac * grid_size), 1)
@@ -5743,6 +5748,12 @@ class SparseGrid(nn.Module):
         else:
             return non_empty_ids[torch.randint(0, non_empty_num, (sparse_num,), dtype=torch.long, device=
                                                 self.links.device)]
+
+    def _get_data_to_links(self):
+        if self._data_to_links is None or self._data_to_links.numel() != self.density_data.numel():
+            self._data_to_links = torch.arange(self.links.numel(), dtype=torch.int)[self.links.view(-1) >=0]
+
+        return self._data_to_links
         
 
     def _get_rand_cells_background(self, sparse_frac: float, contiguous:bool=True):

@@ -506,6 +506,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--alpha_surf_sparsify_sparsity', type=float, default=0.01)
     group.add_argument('--alpha_sparsify_bound', type=float, default=1e-6)
     group.add_argument('--surf_sparsify_bound', type=float, default=-10)
+    group.add_argument('--sparsify_only_trained_cells', action='store_true', default=False)
 
     group.add_argument('--lambda_viscosity_loss', type=float, default=0)
     group.add_argument('--viscosity_sparsity', type=float, default=0.1)
