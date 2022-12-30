@@ -61,8 +61,10 @@ if __name__ == '__main__':
         stl = np.load(f'{args.gt_path}/shape.npy')
     else:
         stl = np.load(args.gt_path)
+    mesh_eval = False
 
     if args.input_path.endswith('.obj') or args.input_path.endswith('.ply'):
+        mesh_eval = True
         # read from mesh
         with Timing('Point Sampling'):
             data_mesh = o3d.io.read_triangle_mesh(args.input_path)
@@ -116,7 +118,6 @@ if __name__ == '__main__':
         data_pcd = np.load(f'{args.input_path}/pts.npy')
     else:
         data_pcd = np.load(args.input_path)
-
 
 
 
@@ -184,7 +185,7 @@ if __name__ == '__main__':
             'Chamfer/mean': over_all,
         }
         # summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.input_path)}/../'))
-        summary_writer.add_hparams(hparams, metrics, run_name='hparam')
+        summary_writer.add_hparams(hparams, metrics, run_name='hparam_mesh' if mesh_eval else 'hparam_pts')
         summary_writer.flush()
     else:
 
