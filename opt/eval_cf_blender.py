@@ -12,6 +12,8 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 import json
 from util import config_util
+# import trimesh
+from util.util import Timing
 
 def sample_single_tri(input_):
     n1, n2, v1, v2, tri_vert = input_
@@ -55,43 +57,62 @@ if __name__ == '__main__':
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=thresh, algorithm='kd_tree', n_jobs=-1)
     summary_writer = SummaryWriter(f'{os.path.dirname(args.input_path)}/../')
 
+    if os.path.isdir(args.gt_path):
+        stl = np.load(f'{args.gt_path}/shape.npy')
+    else:
+        stl = np.load(args.gt_path)
     mesh_eval = False
 
     if args.input_path.endswith('.obj') or args.input_path.endswith('.ply'):
         mesh_eval = True
         # read from mesh
-        data_mesh = o3d.io.read_triangle_mesh(args.input_path)
-        vertices = np.asarray(data_mesh.vertices)
-        triangles = np.asarray(data_mesh.triangles)
-        tri_vert = vertices[triangles]
-        v1 = tri_vert[:,1] - tri_vert[:,0]
-        v2 = tri_vert[:,2] - tri_vert[:,0]
-        l1 = np.linalg.norm(v1, axis=-1, keepdims=True)
-        l2 = np.linalg.norm(v2, axis=-1, keepdims=True)
-        area2 = np.linalg.norm(np.cross(v1, v2), axis=-1, keepdims=True)
-        non_zero_area = (area2 > 0)[:,0]
-        l1, l2, area2, v1, v2, tri_vert = [
-            arr[non_zero_area] for arr in [l1, l2, area2, v1, v2, tri_vert]
-        ]
-        thr = thresh * np.sqrt(l1 * l2 / area2)
-        n1 = np.floor(l1 / thr)
-        n2 = np.floor(l2 / thr)
+        with Timing('Point Sampling'):
+            data_mesh = o3d.io.read_triangle_mesh(args.input_path)
+            vertices = np.asarray(data_mesh.vertices)
+            triangles = np.asarray(data_mesh.triangles)
+            tri_vert = vertices[triangles]
+            v1 = tri_vert[:,1] - tri_vert[:,0]
+            v2 = tri_vert[:,2] - tri_vert[:,0]
+            l1 = np.linalg.norm(v1, axis=-1, keepdims=True)
+            l2 = np.linalg.norm(v2, axis=-1, keepdims=True)
+            area2 = np.linalg.norm(np.cross(v1, v2), axis=-1, keepdims=True)
+            non_zero_area = (area2 > 0)[:,0]
+            l1, l2, area2, v1, v2, tri_vert = [
+                arr[non_zero_area] for arr in [l1, l2, area2, v1, v2, tri_vert]
+            ]
+            thr = thresh * np.sqrt(l1 * l2 / area2)
+            n1 = np.floor(l1 / thr)
+            n2 = np.floor(l2 / thr)
 
-        with mp.Pool() as mp_pool:
-            new_pts = mp_pool.map(sample_single_tri, ((n1[i,0], n2[i,0], v1[i:i+1], v2[i:i+1], tri_vert[i:i+1,0]) for i in range(len(n1))), chunksize=1024)
+            with mp.Pool() as mp_pool:
+                new_pts = mp_pool.map(sample_single_tri, ((n1[i,0], n2[i,0], v1[i:i+1], v2[i:i+1], tri_vert[i:i+1,0]) for i in range(len(n1))), chunksize=1024)
 
-        new_pts = np.concatenate(new_pts, axis=0)
-        data_pcd = np.concatenate([vertices, new_pts], axis=0)
+            new_pts = np.concatenate(new_pts, axis=0)
+            data_pcd = np.concatenate([vertices, new_pts], axis=0)
+
+            # mesh = trimesh.load_mesh(args.input_path)
+            # data_pcd, _ = trimesh.sample.sample_surface_even(mesh, len(stl), thresh)
+            # data_pcd = np.array(data_pcd)
+
 
         # downsample
-        nn_engine.fit(data_pcd)
-        rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
-        mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
-        for curr, idxs in enumerate(rnn_idxs):
-            if mask[curr]:
-                mask[idxs] = 0
-                mask[curr] = 1
-        data_pcd = data_pcd[mask]
+        with Timing('Point Down-sampling'):
+            nn_engine.fit(data_pcd)
+            rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
+            mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
+            for curr, idxs in enumerate(rnn_idxs):
+                if mask[curr]:
+                    mask[idxs] = 0
+                    mask[curr] = 1
+            data_pcd = data_pcd[mask]
+
+            # pcd = o3d.geometry.PointCloud()
+            # pcd.points = o3d.utility.Vector3dVector(data_pcd)
+            # downpcd = pcd.voxel_down_sample(voxel_size=thresh)
+
+            # data_pcd = np.array(downpcd.points)
+
+
 
     elif os.path.isdir(args.input_path):
         data_pcd = np.load(f'{args.input_path}/pts.npy')
@@ -99,21 +120,18 @@ if __name__ == '__main__':
         data_pcd = np.load(args.input_path)
 
 
-    if os.path.isdir(args.gt_path):
-        stl = np.load(f'{args.gt_path}/shape.npy')
-    else:
-        stl = np.load(args.gt_path)
 
 
+    with Timing('d2s'):
+        nn_engine.fit(stl)
+        dist_d2s, idx_d2s = nn_engine.kneighbors(data_pcd, n_neighbors=1, return_distance=True)
+        max_dist = args.max_dist
+        mean_d2s = dist_d2s[dist_d2s < max_dist].mean()
 
-    nn_engine.fit(stl)
-    dist_d2s, idx_d2s = nn_engine.kneighbors(data_pcd, n_neighbors=1, return_distance=True)
-    max_dist = args.max_dist
-    mean_d2s = dist_d2s[dist_d2s < max_dist].mean()
-
-    nn_engine.fit(data_pcd)
-    dist_s2d, idx_s2d = nn_engine.kneighbors(stl, n_neighbors=1, return_distance=True)
-    mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
+    with Timing('s2d'):
+        nn_engine.fit(data_pcd)
+        dist_s2d, idx_s2d = nn_engine.kneighbors(stl, n_neighbors=1, return_distance=True)
+        mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
 
     vis_dist = args.visualize_threshold
     R = np.array([[1,0,0]], dtype=np.float64)
