@@ -18,6 +18,8 @@ std::tuple<torch::Tensor, torch::Tensor> sample_grid_sh_surf(SparseGridSpec &, T
 torch::Tensor sample_grid_raw_alpha(SparseGridSpec &, Tensor, float);
 void sample_grid_backward(SparseGridSpec &, Tensor, Tensor, Tensor, Tensor,
                           Tensor, bool);
+torch::Tensor cubic_extract_iso_pts(Tensor, Tensor, Tensor, Tensor,
+                          int, float);
 
 // ** Surface rendering formula (trilerp)
 Tensor volume_render_surface(SparseGridSpec &, RaysSpec &, RayVoxIntersecSpec&, RenderOptions &);
@@ -127,6 +129,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(test_cubic_root_grad);
   _REG_FUNC(sample_grid);
   _REG_FUNC(sample_grid_backward);
+  _REG_FUNC(cubic_extract_iso_pts);
   _REG_FUNC(sample_grid_sh_surf);
   _REG_FUNC(sample_grid_raw_alpha);
   _REG_FUNC(volume_render_surface);

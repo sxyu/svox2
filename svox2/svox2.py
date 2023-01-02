@@ -4106,6 +4106,61 @@ class SparseGrid(nn.Module):
             roffset.to(device=points.device), points, rscaling.to(device=points.device)
         )
 
+
+    def sample_surf_pts(
+        self,
+        cell_ids,
+        n_sample:int = 5, # number of sample per verext = 3*n_sample
+        density_thresh:float = 0,
+    ):
+        '''
+            Find iso-surface pts within the voxels by shooting rays perpendicular to x,y,z axis
+        '''
+
+        pts = _C.__dict__[f"cubic_extract_iso_pts"](
+            self.links,
+            self.surface_data,
+            self.density_data,
+            cell_ids.to(torch.int),
+            n_sample,
+            density_thresh,
+        )
+
+        pts = pts.view([-1, 3])
+
+        # return pts[~torch.isnan(pts).any(axis=-1)]
+        return pts[~((pts == 0.).all(axis=-1))]
+
+
+    def extract_pts(
+        self,
+        density_thresh:float = 0, 
+        n_sample:int = 5, # number of sample per verext = 3*n_sample
+        batch_size:int = 100000, 
+        scene_scale:float = 1.,
+        to_world:bool = False,
+    ):
+        with torch.no_grad():
+            cell_ids = torch.arange(self.links.numel())[self.links.view(-1) >= 0]
+            all_pts = []
+            for i in tqdm(range(0, len(cell_ids), batch_size)):
+                pts = self.sample_surf_pts(
+                    cell_ids[i : i + batch_size].to(self.density_data.device),
+                    n_sample,
+                    density_thresh
+                    )
+                all_pts.append(pts)
+
+            all_pts = torch.cat(all_pts, dim=0)
+
+            if to_world:
+                all_pts = self.grid2world(all_pts) / scene_scale
+
+
+            return all_pts
+        
+
+
     def extract_mesh(
         self, 
         out_path:str = None, 
