@@ -25,7 +25,7 @@ parser.add_argument('ckpt', type=str)
 parser.add_argument(
     "--intersect_th",
     type=float,
-    default=None,
+    default=0.,
     help="alpha threshold for determining intersections"
 )
 parser.add_argument(
@@ -60,7 +60,7 @@ parser.add_argument(
 parser.add_argument(
     "--n_sample",
     type=int,
-    default=3,
+    default=10,
     help="density for downsampling the pts, set to 0 to disable"
 )
 

@@ -4119,11 +4119,11 @@ class SparseGrid(nn.Module):
 
         pts = _C.__dict__[f"cubic_extract_iso_pts"](
             self.links,
-            self.surface_data,
+            self.surface_data if self.surface_data is not None else (self.density_data - density_thresh),
             self.density_data,
             cell_ids.to(torch.int),
             n_sample,
-            density_thresh,
+            density_thresh if self.surface_data is not None else -100.,
         )
 
         pts = pts.view([-1, 3])
