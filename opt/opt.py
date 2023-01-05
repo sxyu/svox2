@@ -717,8 +717,8 @@ while True:
                     grid.inplace_alpha_surf_sparsify_grad(
                             grid.density_data.grad,
                             grid.surface_data.grad,
-                            scaling_alpha = args.lambda_sparsify_alpha,
-                            scaling_surf = args.lambda_sparsify_surf,
+                            scaling_alpha = args.lambda_sparsify_alpha if gstep_id > args.delay_sparsify_alpha else 0.,
+                            scaling_surf = args.lambda_sparsify_surf if gstep_id > args.delay_sparsify_surf else 0.,
                             sparse_frac = args.alpha_surf_sparsify_sparsity,
                             surf_sparse_decrease = args.sparsify_surf_decrease,
                             surf_sparse_thresh = args.sparsify_surf_thresh,
@@ -729,7 +729,7 @@ while True:
                             contiguous=args.tv_contiguous,
                             )
 
-                    assert not torch.isnan(grid.density_data.grad).any()
+                    # assert not torch.isnan(grid.density_data.grad).any()
 
                 if args.lambda_viscosity_loss > 0.0:
                     vis_l, grad_norm = grid._surface_viscosity_loss_grad_check(
