@@ -517,7 +517,7 @@ while True:
                 # grid.opt.step_size = args.step_size
 
 
-                eval_step(step_id=gstep_id)
+                # eval_step(step_id=gstep_id)
                 if args.no_surface_init_debug_ckpt:
                     # also save a ckpt
                     ckpt_path = path.join(args.train_dir, f'ckpt_surface_init.npz')
@@ -578,9 +578,8 @@ while True:
                 # grid.surface_data.grad = grid.surface_data.grad / torch.prod(torch.tensor(grid.links.shape, device=device))
                 # loss = 0
                 loss = F.mse_loss(out['rgb'], rgb_gt) * (1 - args.img_lambda_l1_ratio) + torch.abs(out['rgb'] - rgb_gt).mean() * args.img_lambda_l1_ratio
-                # if 'extra_loss' in out:
-                    # for k in out['extra_loss'].keys():
-                    #     loss += out['extra_loss'][k]
+                if 'extra_loss' in out:
+                    loss += args.lambda_l_dist * out['extra_loss'].get('l_dist', 0.)
                     # loss += args.lambda_no_surf_init_density_lap_loss * out['extra_loss'].get('no_surf_init_density_lap_loss', 0.)
                     # loss += args.lambda_normal_loss * out['extra_loss'].get('normal_loss', 0.)
                 
@@ -794,7 +793,7 @@ while True:
                 if not no_surface:
                     if gstep_id < args.surface_init_freeze + args.no_surface_init_iters:
                         grid.surface_data.grad[:] = 0.
-                    else: 
+                    else:
                         if args.surf_grad_abs_max is not None:
                             # apply gradient clipping
                             thresh = np.abs(args.surf_grad_abs_max)

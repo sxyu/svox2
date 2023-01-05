@@ -1949,14 +1949,6 @@ class SparseGrid(nn.Module):
                     [surface000, surface001, surface010, surface011, surface100, surface101, surface110, surface111],
                     dim=-1)
 
-            # re-scale all coordinates to [0,1]
-            # this prevents grad scale issue
-            grid_rescale = 256. / gsz_cu
-            grid_rescale = gsz_cu / gsz_cu
-            # scale = 256. / gsz_cu
-            l = l * grid_rescale
-            origins = origins * grid_rescale
-            dirs = dirs * grid_rescale
             lx, ly, lz = (l).unbind(-1)
             ox, oy, oz = (origins[ray_ids].to(dtype)).unbind(-1)
             vx, vy, vz = (dirs[ray_ids].to(dtype)).unbind(-1)
@@ -2180,7 +2172,7 @@ class SparseGrid(nn.Module):
                 invalid_sample_mask = ~self.within_grid(samples) | (torch.isnan(samples)).any(axis=-1)
             else:
                 # remove all samples outside of the voxel
-                invalid_sample_mask = (samples < l[l_ids]).any(axis=-1) | (samples > l[l_ids]+grid_rescale).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
+                invalid_sample_mask = (samples < l[l_ids]).any(axis=-1) | (samples > l[l_ids]+1.).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
             
             valid_sample_mask = (~neg_roots_mask) & (~invalid_sample_mask)
 
@@ -2273,7 +2265,7 @@ class SparseGrid(nn.Module):
         ########### Interpolate Alpha & SH ###########
 
         def check_sample_surface(samples=samples, l=l, l_ids=l_ids):
-            wa, wb = grid_rescale - (samples - l), (samples - l)
+            wa, wb = 1. - (samples - l), (samples - l)
             wa, wb = wa / (wa + wb), wb / (wa + wb)
             c00 = surface000[l_ids] * wa[:, 2:] + surface001[l_ids] * wb[:, 2:]
             c01 = surface010[l_ids] * wa[:, 2:] + surface011[l_ids] * wb[:, 2:]
@@ -2285,8 +2277,8 @@ class SparseGrid(nn.Module):
             return surface
  
         # interpolate opacity
-        wa, wb = grid_rescale - (samples - l), (samples - l)
-        # wa, wb = grid_rescale - (samples.detach().clone() - l), (samples.detach().clone() - l)
+        wa, wb = 1. - (samples - l), (samples - l)
+        # wa, wb = 1. - (samples.detach().clone() - l), (samples.detach().clone() - l)
         wa, wb = wa / (wa + wb), wb / (wa + wb)
         if self.surface_type == SURFACE_TYPE_UDF_ALPHA:
             alpha = self.density_data[lv_set_ids]
@@ -2338,8 +2330,8 @@ class SparseGrid(nn.Module):
             alpha = _alpha
 
         # interpolate rgb
-        wa, wb = grid_rescale - (samples - l), (samples - l)
-        # wa, wb = grid_rescale - (samples.detach().clone() - l), (samples.detach().clone() - l)
+        wa, wb = 1. - (samples - l), (samples - l)
+        # wa, wb = 1. - (samples.detach().clone() - l), (samples.detach().clone() - l)
         wa, wb = wa / (wa + wb), wb / (wa + wb)
         c00 = rgb000[l_ids] * wa[:, 2:] + rgb001[l_ids] * wb[:, 2:]
         c01 = rgb010[l_ids] * wa[:, 2:] + rgb011[l_ids] * wb[:, 2:]
@@ -2407,6 +2399,22 @@ class SparseGrid(nn.Module):
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
 
             out['depth'] = out_depth
+
+
+        # computer entropy loss (mipnerf 360)
+        B_ts = torch.zeros((B, MS), device=origins.device)
+        B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
+        B_nts = torch.clamp_min(B_ts - B_ts[:,:1], 0.) /  \
+            torch.clamp_min(B_ts.max(axis=-1, keepdim=True).values - B_ts[:,:1], 1e-8)
+        
+        l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
+            torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
+        l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
+        
+        l_dist = l_dist.sum()
+        out['extra_loss']['l_dist'] = l_dist
+        out['log_stats']['l_dist'] = l_dist
+
         
         if reg:
             if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
@@ -2439,7 +2447,7 @@ class SparseGrid(nn.Module):
             if alpha.numel() == 0:
                 normal_loss = 0.
             else:
-                x,y,z = (l/grid_rescale).long().unbind(-1)
+                x,y,z = (l).long().unbind(-1)
                 x,y,z = torch.clamp(x.long(), 0, self.links.shape[0]-3), \
                         torch.clamp(y.long(), 0, self.links.shape[1]-3), \
                         torch.clamp(z.long(), 0, self.links.shape[2]-3)
@@ -2566,7 +2574,7 @@ class SparseGrid(nn.Module):
             out['intersect_alphas'] = torch.ones((0), device=origins.device)
         else:
             B_samples = torch.ones((B, MS, 3), device=origins.device) * -1.
-            B_samples[B_to_sample_mask] = (samples / grid_rescale).to(B_samples.dtype)
+            B_samples[B_to_sample_mask] = (samples).to(B_samples.dtype)
             sample_mask = B_alpha > intersect_th
             B_samples[~sample_mask, :] = -1.
             # ids = torch.argmax(sample_mask.long(), dim=-1)
