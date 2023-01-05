@@ -2402,16 +2402,19 @@ class SparseGrid(nn.Module):
 
 
         # computer entropy loss (mipnerf 360)
-        B_ts = torch.zeros((B, MS), device=origins.device)
-        B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
-        B_nts = torch.clamp_min(B_ts - B_ts[:,:1], 0.) /  \
-            torch.clamp_min(B_ts.max(axis=-1, keepdim=True).values - B_ts[:,:1], 1e-8)
-        
-        l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
-            torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
-        l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
-        
-        l_dist = l_dist.sum()
+        if B_weights.numel() > 0:
+            B_ts = torch.zeros((B, MS), device=origins.device)
+            B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
+            B_nts = torch.clamp_min(B_ts - B_ts[:,:1], 0.) /  \
+                torch.clamp_min(B_ts.max(axis=-1, keepdim=True).values - B_ts[:,:1], 1e-8)
+            
+            l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
+                torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
+            l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
+            
+            l_dist = l_dist.mean()
+        else:
+            l_dist = 0.
         out['extra_loss']['l_dist'] = l_dist
         out['log_stats']['l_dist'] = l_dist
 
