@@ -683,6 +683,7 @@ while True:
                             sparse_frac=args.tv_surface_sparsity,
                             ndc_coeffs=dset.ndc_coeffs,
                             contiguous=args.tv_contiguous)
+
                 if lambda_surf_normal_loss > 0.0 and not args.fused_surf_norm_reg:
                     # with Timing("normal_loss"):
                     norm_loss = grid.inplace_surface_normal_grad(grid.surface_data.grad,
@@ -710,6 +711,19 @@ while True:
                             )
                     if (gstep_id + 1) % args.print_every == 0 and sign_loss is not None:
                         summary_writer.add_scalar("sign_loss", sign_loss.item() / args.lambda_surf_sign_loss, global_step=gstep_id)
+
+                if args.lambda_l_dist > 0.:
+                    py_out = grid._surface_render_gradcheck_lerp(rays, rgb_gt,
+                            beta_loss=args.lambda_beta,
+                            sparsity_loss=args.lambda_sparsity,
+                            randomize=args.enable_random,
+                            alpha_weighted_norm_loss=args.alpha_weighted_norm_loss,
+                            no_surface=no_surface)
+                    loss = args.lambda_l_dist * py_out['extra_loss'].get('l_dist', 0.)
+                    loss.backward()
+                    if (gstep_id + 1) % args.print_every == 0:
+                        summary_writer.add_scalar("l_dist", py_out['extra_loss']['l_dist'].item(), global_step=gstep_id)
+
 
                 if args.lambda_sparsify_alpha > 0.0 or args.lambda_sparsify_surf > 0.0:
                     # with Timing("normal_loss"):
