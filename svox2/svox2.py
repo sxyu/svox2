@@ -61,6 +61,7 @@ class RenderOptions:
     limited_fake_sample: bool = False
     no_surf_grad_from_sh: bool = False
     alpha_activation_type: int = EXP_FN
+    fake_sample_l_dist: bool = True
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -80,6 +81,7 @@ class RenderOptions:
         opt.limited_fake_sample = self.limited_fake_sample
         opt.no_surf_grad_from_sh = self.no_surf_grad_from_sh
         opt.alpha_activation_type = self.alpha_activation_type
+        opt.fake_sample_l_dist = self.fake_sample_l_dist
         #  opt.randomize = randomize
         #  opt.random_sigma_std = self.random_sigma_std
         #  opt.random_sigma_std_background = self.random_sigma_std_background
@@ -2407,12 +2409,16 @@ class SparseGrid(nn.Module):
             B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
             B_nts = torch.clamp_min(B_ts - B_ts[:,:1], 0.) /  \
                 torch.clamp_min(B_ts.max(axis=-1, keepdim=True).values - B_ts[:,:1], 1e-8)
+            B_nts = B_ts
             
-            l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
+            # l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
+            #     torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
+            l_dist = (B_alpha[:, :, None] * B_alpha[:, None, :]) * \
                 torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
-            l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
+            # l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
+            l_dist = l_dist.sum(axis=-1).sum(axis=-1)
             
-            l_dist = l_dist.mean()
+            l_dist = l_dist.mean() / 2.
         else:
             l_dist = 0.
         out['extra_loss']['l_dist'] = l_dist
@@ -2637,8 +2643,16 @@ class SparseGrid(nn.Module):
             # alpha_before_rw.retain_grad()
             # n_surfaces.retain_grad()
             # surface_values.retain_grad()
+            B_ts.retain_grad()
+            B_weights.retain_grad()
+            B_alpha.retain_grad()
 
-            s = torch.nn.functional.mse_loss(out['rgb'], torch.zeros_like(out['rgb']))
+            # s = torch.nn.functional.mse_loss(out['rgb'], torch.zeros_like(out['rgb']))
+            lambda_l2 = 0.
+            lambda_l1 = 1.
+            s = F.mse_loss(out['rgb'], torch.zeros_like(out['rgb'])) * lambda_l2 + \
+                torch.abs(out['rgb'] - torch.zeros_like(out['rgb'])).mean() * lambda_l1
+            s += l_dist
             s.backward()
 
             # accum = torch.sum(out['rgb'] * out['rgb'].grad)
@@ -3142,6 +3156,8 @@ class SparseGrid(nn.Module):
         fused_surf_norm_reg_ignore_empty: bool = False,
         lambda_l2: float = 1.,
         lambda_l1: float = 0.,
+        lambda_l_dist: float = 1.,
+        l_dist_max_sample: int = 64,
         no_surface: bool = False,
     ):
         """
@@ -3246,6 +3262,8 @@ class SparseGrid(nn.Module):
                 fused_surf_norm_reg_ignore_empty,
                 lambda_l2,
                 lambda_l1,
+                lambda_l_dist,
+                l_dist_max_sample,
                 rgb_out,
                 grad_holder
             )

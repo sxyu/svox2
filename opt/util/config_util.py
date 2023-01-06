@@ -148,6 +148,9 @@ def define_common_args(parser : configargparse.ArgumentParser):
                         action='store_true',
                         default=False,
                         help='Disable gradients flowing back to surface from sh')
+    group.add_argument('--no_fake_sample_l_dist', 
+                        action='store_true',
+                        default=False)
 
 
 def build_data_options(args):
@@ -207,6 +210,7 @@ def setup_render_opts(opt, args):
     opt.limited_fake_sample = args.limited_fake_sample
     opt.no_surf_grad_from_sh = args.no_surf_grad_from_sh
     opt.alpha_activation_type = 0 if args.surf_alpha_sigmoid_act else 1
+    opt.fake_sample_l_dist = not args.no_fake_sample_l_dist
 
 
 def setup_train_conf(return_parpser=False):

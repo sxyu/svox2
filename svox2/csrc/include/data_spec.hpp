@@ -180,6 +180,7 @@ struct RenderOptions {
   bool no_surf_grad_from_sh;
   // enum ActivationType alpha_activation_type;
   uint8_t alpha_activation_type;
+  bool fake_sample_l_dist;
   // bool randomize;
   // float random_sigma_std;
   // float random_sigma_std_background;

@@ -36,7 +36,7 @@ Tensor volume_render_surf_trav(SparseGridSpec &, RaysSpec &, RenderOptions &);
 void volume_render_surf_trav_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 void volume_render_surf_trav_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                               Tensor, float, float, float, bool, bool, float, float, Tensor, GridOutputGrads &);
+                               Tensor, float, float, float, bool, bool, float, float, float, int, Tensor, GridOutputGrads &);
 // // Expected termination (depth) rendering
 // torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
 //                                           RenderOptions &);
@@ -240,7 +240,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("surf_fake_sample_min_vox_len", &RenderOptions::surf_fake_sample_min_vox_len)
       .def_readwrite("limited_fake_sample", &RenderOptions::limited_fake_sample)
       .def_readwrite("no_surf_grad_from_sh", &RenderOptions::no_surf_grad_from_sh)
-      .def_readwrite("alpha_activation_type", &RenderOptions::alpha_activation_type);
+      .def_readwrite("alpha_activation_type", &RenderOptions::alpha_activation_type)
+      .def_readwrite("fake_sample_l_dist", &RenderOptions::fake_sample_l_dist);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
   // .def_readwrite("random_sigma_std_background",

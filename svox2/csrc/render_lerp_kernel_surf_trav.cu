@@ -35,15 +35,20 @@ namespace device {
 __device__ __inline__ void trace_ray_surf_trav(
         const PackedSparseGridSpec& __restrict__ grid,
         SingleRaySpec& __restrict__ ray,
-        // const PackedRayVoxIntersecSpec& __restrict__ ray_vox,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
         float* __restrict__ sphfunc_val,
         WarpReducef::TempStorage& __restrict__ temp_storage,
         float* __restrict__ out,
-        float* __restrict__ out_log_transmit) {
+        float* __restrict__ out_log_transmit,
+        int const l_dist_max_sample,
+        float* __restrict__ sample_weights,
+        float* __restrict__ sample_ts
+        ) {
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim; // (9) every basis in SH has a lane
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
+
+    int sample_i = 0;
 
     double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
 
@@ -60,7 +65,6 @@ __device__ __inline__ void trace_ray_surf_trav(
 
     float log_transmit = 0.f;
 
-    // int32_t last_voxel[] = {-1,-1,-1};
     int32_t voxel_l[] = {-1,-1,-1};
 
     int32_t next_voxel[3];
@@ -131,14 +135,6 @@ __device__ __inline__ void trace_ray_surf_trav(
         // }
         
 
-        // if ((voxel_l[0] == last_voxel[0]) && (voxel_l[1] == last_voxel[1]) && (voxel_l[2] == last_voxel[2])){
-        //     // const float skip = compute_skip_dist(ray,
-        //     //             grid.links, grid.stride_x,
-        //     //             grid.size[2], 0);
-
-        //     t += opt.step_size;
-        //     continue;
-        // }
 
         int const offx = grid.stride_x, offy = grid.size[2];
         const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
@@ -148,17 +144,8 @@ __device__ __inline__ void trace_ray_surf_trav(
             || (link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) \
             || (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
         ){
-            // const float skip = compute_skip_dist(ray,
-            //             grid.links, grid.stride_x,
-            //             grid.size[2], 0);
-
-            // t += opt.step_size;
             continue;
         }
-
-        // last_voxel[0] = voxel_l[0];
-        // last_voxel[1] = voxel_l[1];
-        // last_voxel[2] = voxel_l[2];
 
 
         // check minimal of alpha raw
@@ -170,11 +157,6 @@ __device__ __inline__ void trace_ray_surf_trav(
             (grid.density_data[link_ptr[offx+1]] < opt.sigma_thresh) && \
             (grid.density_data[link_ptr[offx+offy]] < opt.sigma_thresh) && \
             (grid.density_data[link_ptr[offx+offy+1]] < opt.sigma_thresh)){
-                // const float skip = compute_skip_dist(ray,
-                //             grid.links, grid.stride_x,
-                //             grid.size[2], 0);
-
-                // t += opt.step_size;
                 continue;
             }
 
@@ -301,6 +283,14 @@ __device__ __inline__ void trace_ray_surf_trav(
                     float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                                 lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
                     outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
+
+                    // save weights and sample dist for l_dist gradient
+                    if ((lane_id==0) && (sample_weights != nullptr) && (sample_i < l_dist_max_sample)){
+                        // save alpha for now
+                        sample_weights[sample_i] = alpha;
+                        sample_ts[sample_i] = t_close + st[j];
+                        sample_i += 1;
+                    }
                 }
             }
 
@@ -325,7 +315,7 @@ __device__ __inline__ void trace_ray_surf_trav(
 #pragma unroll 3
                     for (int k=0; k < 3; ++k){
                         // assert(!isnan(st[j]));
-                        ray.pos[k] = fmaf((t_far + t_close) / 2, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                        ray.pos[k] = fmaf((t_far + t_close) / 2.f, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
                         ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                         ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
 
@@ -408,6 +398,14 @@ __device__ __inline__ void trace_ray_surf_trav(
                         float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
                                                     lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
                         outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
+
+                        // save weights and sample dist for l_dist gradient
+                        if ((lane_id==0) && (sample_weights != nullptr) && (sample_i < l_dist_max_sample) && (opt.fake_sample_l_dist)){
+                            // save alpha for now
+                            sample_weights[sample_i] = alpha;
+                            sample_ts[sample_i] = (t_far + t_close) / 2.f;
+                            sample_i += 1;
+                        }
                     }
 
                 }
@@ -1354,6 +1352,10 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         float fused_surf_norm_reg_scale,
         bool fused_surf_norm_reg_con_check,
         bool fused_surf_norm_reg_ignore_empty,
+        float const lambda_l_dist,
+        int const l_dist_max_sample,
+        float* __restrict__ const sample_weights,
+        float* __restrict__ const sample_ts,
         PackedGridOutputGrads& __restrict__ grads,
         float* __restrict__ accum_out,
         float* __restrict__ log_transmit_out
@@ -1363,6 +1365,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     const uint32_t leader_mask = 1U | (1U << grid.basis_dim) | (1U << (2 * grid.basis_dim)); // mask for RGB channels of same basis
     double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
     // double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
+
+    int sample_i = 0;
 
     float accum = fmaf(color_cache[0], grad_output[0],
                       fmaf(color_cache[1], grad_output[1],
@@ -1684,7 +1688,18 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     }
 
                     if (lane_id == 0) {
-                        // compute gradient for sigmoid
+
+                        // add grad to alpha from l_dist
+                        float l_dist_grad_alpha = 0.;
+                        for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                            // // skip non-intersection
+                            // if (sample_ts[sample_j] == 0.f) continue;
+                            l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                        }
+                        curr_grad_alpha += lambda_l_dist * l_dist_grad_alpha;
+                        
+
+                        // compute gradient for activation
                         float const  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
                         ASSERT_NUM(curr_grad_raw_alpha);
                         trilerp_backward_cuvol_one_density(
@@ -1704,11 +1719,26 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                     1,
                                     ray.l, ray.pos, 0,
                                     curr_grad_raw_alpha, grad_xyz);
-
                         // grad_xyz is now d_mse/d_xyz
-                        float const grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
+                        float grad_st = grad_xyz[0]*ray.dir[0] + grad_xyz[1]*ray.dir[1] + grad_xyz[2]*ray.dir[2];
                         ASSERT_NUM(grad_st);
                         // grad_st is now d_mse/d_t
+                        
+                        // add grad to t from l_dist
+                        float l_dist_grad_st = 0.;
+                        for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                            float abs_sign; // abs sign of |sample_ts[sample_i] - sample_ts[sample_j]|
+                            if (sample_ts[sample_i] > sample_ts[sample_j]){
+                                abs_sign = 1.f;
+                            } else if (sample_ts[sample_i] < sample_ts[sample_j]){
+                                abs_sign = -1.f;
+                            } else {
+                                abs_sign = 0.f;
+                            }
+                            l_dist_grad_st += abs_sign * sample_weights[sample_i] * sample_weights[sample_j];
+                        }
+                        grad_st += lambda_l_dist * l_dist_grad_st;
+
 
                         float grad_fs[4] = {grad_st, grad_st, grad_st, grad_st};
                         // calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
@@ -1731,6 +1761,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             ray.l,
                             grad_surface
                         );
+                        sample_i += 1;
                     }
 
 
@@ -1872,8 +1903,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-9f) + total_color_fs * _EXP(log_transmit); 
                         log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
 
-                        // curr_grad_alpha is now d_mse/d_alpha_i
-                        float curr_grad_alpha = curr_grad_rwalpha * reweight;
+
                         // if (sparsity_loss > 0.f) {
                         //     // Cauchy version (from SNeRG)
                         //     // TODO: check if expected!
@@ -1905,7 +1935,23 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
 
                         if (lane_id == 0) {
-                            // compute gradient for sigmoid
+                            if (opt.fake_sample_l_dist){
+                                // add grad to alpha from l_dist
+                                float l_dist_grad_alpha = 0.;
+                                for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                                    // // skip non-intersection
+                                    // if (sample_ts[sample_j] == 0.f) continue;
+                                    l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                                }
+                                curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
+                                sample_i += 1;
+                                // note that for fake sample, we don't have grad to st
+                            }
+
+                            // curr_grad_alpha is now d_mse/d_alpha_i
+                            float curr_grad_alpha = curr_grad_rwalpha * reweight;
+                            
+                            // compute gradient for activation
                             float const  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
                             ASSERT_NUM(curr_grad_raw_alpha);
                             trilerp_backward_cuvol_one_density(
@@ -2278,7 +2324,11 @@ __global__ void render_ray_kernel(
         PackedRaysSpec rays,
         RenderOptions opt,
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out,
-        float* __restrict__ log_transmit_out = nullptr) {
+        float* __restrict__ log_transmit_out,
+        int const l_dist_max_sample,
+        torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
+        torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_ts
+        ) {
     CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)) * WARP_SIZE);
     const int ray_id = tid >> 5; // same as / 32, which is the WARP_SIZE
     const int ray_blk_id = threadIdx.x >> 5; // difference between tid and threadIdx.x? --> tid is the total id (batch/ray id)
@@ -2312,7 +2362,13 @@ __global__ void render_ray_kernel(
         sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
         out[ray_id].data(),
-        log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
+        log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id,
+        // sample_weights == nullptr ? nullptr : sample_weights[ray_id].data(),
+        // sample_ts == nullptr ? nullptr : sample_ts[ray_id].data()
+        l_dist_max_sample,
+        sample_weights[ray_id].data(),
+        sample_ts[ray_id].data()
+        );
 
 }
 
@@ -2355,7 +2411,10 @@ __global__ void render_ray_image_kernel(
         sphfunc_val[ray_blk_id],
         temp_storage[ray_blk_id],
         out + ray_id * 3,
-        log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
+        log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id,
+        0,
+        nullptr,
+        nullptr);
 }
 
 __launch_bounds__(TRACE_RAY_BKWD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
@@ -2374,6 +2433,10 @@ __global__ void render_ray_backward_kernel(
     bool fused_surf_norm_reg_ignore_empty,
     float lambda_l2,
     float lambda_l1,
+    float lambda_l_dist,
+    int l_dist_max_sample,
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_ts,
     PackedGridOutputGrads grads,
     float* __restrict__ accum_out = nullptr, // left-over gradient for background?
     float* __restrict__ log_transmit_out = nullptr) {
@@ -2442,6 +2505,10 @@ __global__ void render_ray_backward_kernel(
         fused_surf_norm_reg_scale,
         fused_surf_norm_reg_con_check,
         fused_surf_norm_reg_ignore_empty,
+        lambda_l_dist,
+        l_dist_max_sample,
+        sample_weights[ray_id].data(),
+        sample_ts[ray_id].data(),
         grads,
         accum_out == nullptr ? nullptr : accum_out + ray_id,
         log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id);
@@ -2675,6 +2742,17 @@ torch::Tensor volume_render_surf_trav(SparseGridSpec& grid, RaysSpec& rays, Rend
         log_transmit = _get_empty_1d(rays.origins);
     }
 
+    auto options =
+        torch::TensorOptions()
+        .dtype(rays.origins.dtype())
+        .layout(torch::kStrided)
+        .device(rays.origins.device())
+        .requires_grad(false);
+    torch::Tensor sample_weights;
+    torch::Tensor sample_ts;
+    sample_weights = torch::zeros({rays.origins.size(0), 0}, options);
+    sample_ts = torch::zeros({rays.origins.size(0), 0}, options);
+
     {
         const int cuda_n_threads = TRACE_RAY_CUDA_THREADS;
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads);
@@ -2682,7 +2760,11 @@ torch::Tensor volume_render_surf_trav(SparseGridSpec& grid, RaysSpec& rays, Rend
                 grid, rays, opt,
                 // Output
                 results.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-                use_background ? log_transmit.data_ptr<float>() : nullptr);
+                use_background ? log_transmit.data_ptr<float>() : nullptr,
+                0,
+                sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>()
+                );
     }
 
     if (use_background) {
@@ -2774,6 +2856,17 @@ void volume_render_surf_trav_backward(
         accum = _get_empty_1d(rays.origins);
     }
 
+    auto options =
+        torch::TensorOptions()
+        .dtype(rays.origins.dtype())
+        .layout(torch::kStrided)
+        .device(rays.origins.device())
+        .requires_grad(false);
+    torch::Tensor sample_weights;
+    torch::Tensor sample_ts;
+    sample_weights = torch::zeros({rays.origins.size(0), 0}, options);
+    sample_ts = torch::zeros({rays.origins.size(0), 0}, options);
+
     {
         const int cuda_n_threads_render_backward = TRACE_RAY_BKWD_CUDA_THREADS;
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, cuda_n_threads_render_backward);
@@ -2792,6 +2885,10 @@ void volume_render_surf_trav_backward(
                     true, // fused_surf_norm_reg_ignore_empty,
                     0.f,
                     0.f,
+                    0.f,
+                    0,
+                    sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                    sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     // Output
                     grads,
                     use_background ? accum.data_ptr<float>() : nullptr,
@@ -2829,6 +2926,8 @@ void volume_render_surf_trav_fused(
         bool fused_surf_norm_reg_ignore_empty,
         float lambda_l2,
         float lambda_l1,
+        float lambda_l_dist, // l_dist loss from mipnerf 360
+        int const l_dist_max_sample, // maximum number of samples for each ray considered for l_dist
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
 
@@ -2851,13 +2950,29 @@ void volume_render_surf_trav_fused(
         accum = _get_empty_1d(rays.origins);
     }
 
+    auto options =
+        torch::TensorOptions()
+        .dtype(rays.origins.dtype())
+        .layout(torch::kStrided)
+        .device(rays.origins.device())
+        .requires_grad(false);
+    torch::Tensor sample_weights;
+    torch::Tensor sample_ts;
+    sample_weights = torch::zeros({rays.origins.size(0), l_dist_max_sample}, options);
+    sample_ts = torch::zeros({rays.origins.size(0), l_dist_max_sample}, options);
+
+
     {
         const int blocks = CUDA_N_BLOCKS_NEEDED(Q * WARP_SIZE, TRACE_RAY_CUDA_THREADS);
         device::render_ray_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
                 grid, rays, opt,
                 // Output
                 rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(), // <dtype, dim, __restrict__>
-                need_log_transmit ? log_transmit.data_ptr<float>() : nullptr);
+                need_log_transmit ? log_transmit.data_ptr<float>() : nullptr,
+                l_dist_max_sample,
+                sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>()
+                );
     }
 
     if (use_background) {
@@ -2886,6 +3001,10 @@ void volume_render_surf_trav_fused(
                 fused_surf_norm_reg_ignore_empty,
                 lambda_l2,
                 lambda_l1,
+                lambda_l_dist / Q,
+                l_dist_max_sample,
+                sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+                sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 // Output
                 grads,
                 use_background ? accum.data_ptr<float>() : nullptr,
