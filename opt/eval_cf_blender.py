@@ -32,6 +32,16 @@ def write_vis_pcd(file, points, colors):
     pcd.colors = o3d.utility.Vector3dVector(colors)
     o3d.io.write_point_cloud(file, pcd)
 
+def eval_cf(pred, gt, radius=0.001):
+    nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=radius, algorithm='kd_tree', n_jobs=-1)
+    nn_engine.fit(gt)
+    dist_d2s, idx_d2s = nn_engine.kneighbors(pred, n_neighbors=1, return_distance=True)
+
+    nn_engine.fit(pred)
+    dist_s2d, idx_s2d = nn_engine.kneighbors(gt, n_neighbors=1, return_distance=True)
+
+    return dist_d2s, dist_s2d
+
 if __name__ == '__main__':
     mp.freeze_support()
 
@@ -121,17 +131,21 @@ if __name__ == '__main__':
 
 
 
+    # with Timing('d2s'):
+    #     nn_engine.fit(stl)
+    #     dist_d2s, idx_d2s = nn_engine.kneighbors(data_pcd, n_neighbors=1, return_distance=True)
+    #     max_dist = args.max_dist
+    #     mean_d2s = dist_d2s[dist_d2s < max_dist].mean()
 
-    with Timing('d2s'):
-        nn_engine.fit(stl)
-        dist_d2s, idx_d2s = nn_engine.kneighbors(data_pcd, n_neighbors=1, return_distance=True)
-        max_dist = args.max_dist
-        mean_d2s = dist_d2s[dist_d2s < max_dist].mean()
+    # with Timing('s2d'):
+    #     nn_engine.fit(data_pcd)
+    #     dist_s2d, idx_s2d = nn_engine.kneighbors(stl, n_neighbors=1, return_distance=True)
+    #     mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
 
-    with Timing('s2d'):
-        nn_engine.fit(data_pcd)
-        dist_s2d, idx_s2d = nn_engine.kneighbors(stl, n_neighbors=1, return_distance=True)
-        mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
+    dist_d2s, dist_s2d = eval_cf(data_pcd, stl, thresh)
+    max_dist = args.max_dist
+    mean_d2s = dist_d2s[dist_d2s < max_dist].mean()
+    mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
 
     vis_dist = args.visualize_threshold
     R = np.array([[1,0,0]], dtype=np.float64)

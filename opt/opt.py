@@ -27,6 +27,8 @@ from util.dataset import datasets
 from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap, get_linear_lr_func
 from util import config_util
 import ast
+import sklearn.neighbors as skln
+from eval_cf_blender import eval_cf
 
 from warnings import warn
 from datetime import datetime
@@ -380,11 +382,7 @@ while True:
 
             stats_test['mse'] /= n_images_gen
             stats_test['psnr'] /= n_images_gen
-            for stat_name in stats_test:
-                summary_writer.add_scalar('test/' + stat_name,
-                        stats_test[stat_name], global_step=step_id)
-            summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=step_id)
-            print('eval stats:', stats_test)
+
 
             # log train imgs
             if args.n_eval_train > 0:
@@ -437,6 +435,42 @@ while True:
                             summary_writer.add_image(f'train/depth_map_thresh_{img_id:04d}',
                                     depth_thresh_img,
                                     global_step=step_id, dataformats='HWC')
+
+            if args.eval_cf and grid.surface_data is not None and not no_surface:
+                pred_pts = grid.extract_pts(n_sample=args.surf_eval_n_sample, density_thresh=args.surf_eval_intersect_th, scene_scale=2./3., to_world=True)
+                pred_pts = pred_pts.cpu().detach().numpy()
+                
+                # downsample points
+                nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=0.001, algorithm='kd_tree', n_jobs=-1)
+                nn_engine.fit(pred_pts)
+                rnn_idxs = nn_engine.radius_neighbors(pred_pts, radius=0.001, return_distance=False)
+                mask = np.ones(pred_pts.shape[0], dtype=np.bool_)
+                for curr, idxs in enumerate(rnn_idxs):
+                    if mask[curr]:
+                        mask[idxs] = 0
+                        mask[curr] = 1
+                pred_pts = pred_pts[mask]
+
+                # load gt
+                surf_gt = np.load(f'{args.data_dir}/shape.npy')
+                # compute cf
+                dist_d2s, dist_s2d = eval_cf(pred_pts, surf_gt, 0.001)
+                mean_d2s = dist_d2s.mean()
+                mean_s2d = dist_s2d.mean()
+
+                stats_test['cf_d2s'] = mean_d2s
+                stats_test['cf_s2d'] = mean_s2d
+                stats_test['cf_mean'] = (mean_d2s + mean_s2d) / 2.
+
+            for stat_name in stats_test:
+                summary_writer.add_scalar('test/' + stat_name,
+                        stats_test[stat_name], global_step=step_id)
+            # summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=step_id)
+            print('eval stats:', stats_test)
+
+
+
+
 
     # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0 or not args.tune_mode):
     # if epoch_id % max(factor, args.eval_every) == 0 and (epoch_id > 0):

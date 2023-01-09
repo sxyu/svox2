@@ -576,6 +576,12 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surface_init', type=str, default=None)
 
 
+
+    group.add_argument('--eval_cf', action='store_true', default=False)
+    group.add_argument('--surf_eval_n_sample', type=int, default=10)
+    group.add_argument('--surf_eval_intersect_th', type=float, default=0.1)
+
+
     # group.add_argument('--log_tune_hparam_config_path', type=str, default=None,
     #                    help='Log hyperparamters being tuned to tensorboard based on givn config.json path')
 
