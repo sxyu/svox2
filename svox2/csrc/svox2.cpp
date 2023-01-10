@@ -36,7 +36,7 @@ Tensor volume_render_surf_trav(SparseGridSpec &, RaysSpec &, RenderOptions &);
 void volume_render_surf_trav_backward(SparseGridSpec &, RaysSpec &, RenderOptions &,
                                   Tensor, Tensor, GridOutputGrads &);
 void volume_render_surf_trav_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
-                               Tensor, float, float, float, bool, bool, float, float, float, int, Tensor, GridOutputGrads &);
+                               Tensor, float, float, float, bool, bool, float, float, float, float, int, Tensor, GridOutputGrads &);
 // // Expected termination (depth) rendering
 // torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
 //                                           RenderOptions &);

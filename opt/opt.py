@@ -594,6 +594,7 @@ while True:
                         lambda_l2 = 1 - args.img_lambda_l1_ratio,
                         lambda_l1 = args.img_lambda_l1_ratio,
                         lambda_l_dist = args.lambda_l_dist,
+                        lambda_l_entropy = args.lambda_l_entropy,
                         l_dist_max_sample = 64,
                         randomize=args.enable_random,
                         no_surface=no_surface)

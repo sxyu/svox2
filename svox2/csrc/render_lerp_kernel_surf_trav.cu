@@ -1353,6 +1353,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         bool fused_surf_norm_reg_con_check,
         bool fused_surf_norm_reg_ignore_empty,
         float const lambda_l_dist,
+        float const lambda_l_entropy,
         int const l_dist_max_sample,
         float* __restrict__ const sample_weights,
         float* __restrict__ const sample_ts,
@@ -1367,6 +1368,18 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     // double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
 
     int sample_i = 0;
+
+    float sample_weight_sum = 0.f;
+    for (int i=0; i<l_dist_max_sample; ++i){
+        sample_weight_sum += sample_weights[i];
+    }
+    sample_weight_sum = max(sample_weight_sum, 1e-8); // prevent 0
+
+    float Den_Dwsum = 0.f;
+    for (int i=0; i<l_dist_max_sample; ++i){
+        Den_Dwsum += sample_weights[i] * (__logf(max(sample_weights[i], 1e-8)/sample_weight_sum) + 1.f) / _SQR(sample_weight_sum);
+    }
+
 
     float accum = fmaf(color_cache[0], grad_output[0],
                       fmaf(color_cache[1], grad_output[1],
@@ -1697,8 +1710,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
                         }
                         curr_grad_alpha += lambda_l_dist * l_dist_grad_alpha;
-                        
 
+                        // add grad to alpha from l_entropy
+                        float const Den_Dwi = -(__logf(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                        curr_grad_alpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
+                        
+                        
                         // compute gradient for activation
                         float const  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
                         ASSERT_NUM(curr_grad_raw_alpha);
@@ -1944,6 +1961,11 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                     l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
                                 }
                                 curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
+
+                                // add grad to alpha from l_entropy
+                                float const Den_Dwi = -(__logf(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                                curr_grad_rwalpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
+
                                 sample_i += 1;
                                 // note that for fake sample, we don't have grad to st
                             }
@@ -2434,6 +2456,7 @@ __global__ void render_ray_backward_kernel(
     float lambda_l2,
     float lambda_l1,
     float lambda_l_dist,
+    float lambda_l_entropy,
     int l_dist_max_sample,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_ts,
@@ -2506,6 +2529,7 @@ __global__ void render_ray_backward_kernel(
         fused_surf_norm_reg_con_check,
         fused_surf_norm_reg_ignore_empty,
         lambda_l_dist,
+        lambda_l_entropy,
         l_dist_max_sample,
         sample_weights[ray_id].data(),
         sample_ts[ray_id].data(),
@@ -2886,6 +2910,7 @@ void volume_render_surf_trav_backward(
                     0.f,
                     0.f,
                     0.f,
+                    0.f,
                     0,
                     sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
@@ -2927,6 +2952,7 @@ void volume_render_surf_trav_fused(
         float lambda_l2,
         float lambda_l1,
         float lambda_l_dist, // l_dist loss from mipnerf 360
+        float lambda_l_entropy, // entropy loss from infonerf
         int const l_dist_max_sample, // maximum number of samples for each ray considered for l_dist
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
@@ -3002,6 +3028,7 @@ void volume_render_surf_trav_fused(
                 lambda_l2,
                 lambda_l1,
                 lambda_l_dist / Q,
+                lambda_l_entropy / Q,
                 l_dist_max_sample,
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),

@@ -2403,7 +2403,7 @@ class SparseGrid(nn.Module):
             out['depth'] = out_depth
 
 
-        # computer entropy loss (mipnerf 360)
+        # computer dist loss (mipnerf 360)
         if B_weights.numel() > 0:
             B_ts = torch.zeros((B, MS), device=origins.device)
             B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
@@ -2423,6 +2423,18 @@ class SparseGrid(nn.Module):
             l_dist = 0.
         out['extra_loss']['l_dist'] = l_dist
         out['log_stats']['l_dist'] = l_dist
+
+        # computer entropy loss (info nerf)
+        if B_weights.numel() > 0:
+            na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
+
+            l_entropy = torch.where(B_alpha > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
+            l_entropy = l_entropy.sum(axis=-1).mean()
+
+        else:
+            l_entropy = 0.
+        out['extra_loss']['l_entropy'] = l_entropy
+        out['log_stats']['l_entropy'] = l_entropy
 
         
         if reg:
@@ -2652,7 +2664,8 @@ class SparseGrid(nn.Module):
             lambda_l1 = 1.
             s = F.mse_loss(out['rgb'], torch.zeros_like(out['rgb'])) * lambda_l2 + \
                 torch.abs(out['rgb'] - torch.zeros_like(out['rgb'])).mean() * lambda_l1
-            s += l_dist
+            # s += l_dist
+            s += l_entropy
             s.backward()
 
             # accum = torch.sum(out['rgb'] * out['rgb'].grad)
@@ -3157,6 +3170,7 @@ class SparseGrid(nn.Module):
         lambda_l2: float = 1.,
         lambda_l1: float = 0.,
         lambda_l_dist: float = 1.,
+        lambda_l_entropy: float = 1.,
         l_dist_max_sample: int = 64,
         no_surface: bool = False,
     ):
@@ -3263,6 +3277,7 @@ class SparseGrid(nn.Module):
                 lambda_l2,
                 lambda_l1,
                 lambda_l_dist,
+                lambda_l_entropy,
                 l_dist_max_sample,
                 rgb_out,
                 grad_holder
