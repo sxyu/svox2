@@ -2436,6 +2436,20 @@ class SparseGrid(nn.Module):
         out['extra_loss']['l_entropy'] = l_entropy
         out['log_stats']['l_entropy'] = l_entropy
 
+        # computer sample distance loss
+        if B_weights.numel() > 0:
+            na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
+            na = na.detach().clone()
+            mean_dist = (na * B_ts).sum(axis=-1, keepdim=True)
+
+            l_samp_dist = torch.abs(mean_dist - B_ts)
+            l_samp_dist = l_samp_dist.sum(axis=-1).mean()
+
+        else:
+            l_samp_dist = 0.
+        out['extra_loss']['l_samp_dist'] = l_samp_dist
+        out['log_stats']['l_samp_dist'] = l_samp_dist
+
         
         if reg:
             if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
@@ -2665,7 +2679,8 @@ class SparseGrid(nn.Module):
             s = F.mse_loss(out['rgb'], torch.zeros_like(out['rgb'])) * lambda_l2 + \
                 torch.abs(out['rgb'] - torch.zeros_like(out['rgb'])).mean() * lambda_l1
             # s += l_dist
-            s += l_entropy
+            # s += l_entropy
+            s += l_samp_dist
             s.backward()
 
             # accum = torch.sum(out['rgb'] * out['rgb'].grad)
@@ -3169,8 +3184,9 @@ class SparseGrid(nn.Module):
         fused_surf_norm_reg_ignore_empty: bool = False,
         lambda_l2: float = 1.,
         lambda_l1: float = 0.,
-        lambda_l_dist: float = 1.,
-        lambda_l_entropy: float = 1.,
+        lambda_l_dist: float = 0.,
+        lambda_l_entropy: float = 0.,
+        lambda_l_samp_dist: float = 0.,
         l_dist_max_sample: int = 64,
         no_surface: bool = False,
     ):
@@ -3278,6 +3294,7 @@ class SparseGrid(nn.Module):
                 lambda_l1,
                 lambda_l_dist,
                 lambda_l_entropy,
+                lambda_l_samp_dist,
                 l_dist_max_sample,
                 rgb_out,
                 grad_holder

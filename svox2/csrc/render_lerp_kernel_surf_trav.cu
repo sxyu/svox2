@@ -1354,6 +1354,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         bool fused_surf_norm_reg_ignore_empty,
         float const lambda_l_dist,
         float const lambda_l_entropy,
+        float const lambda_l_samp_dist, // l_samp_dist = |weighted_avg(Di, wi) - Di| 
         int const l_dist_max_sample,
         float* __restrict__ const sample_weights,
         float* __restrict__ const sample_ts,
@@ -1376,9 +1377,27 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     sample_weight_sum = max(sample_weight_sum, 1e-8); // prevent 0
 
     float Den_Dwsum = 0.f;
+    float sample_t_mean = 0.f;
     for (int i=0; i<l_dist_max_sample; ++i){
         Den_Dwsum += sample_weights[i] * (__logf(max(sample_weights[i], 1e-8)/sample_weight_sum) + 1.f) / _SQR(sample_weight_sum);
+        sample_t_mean += sample_weights[i] / sample_weight_sum * sample_ts[i];
+
     }
+
+    int valid_sample_n = 0;
+    float shared_Dmeant_sign = 0.f; // shared grad part for l_samp_dist
+    for (int i=0; i<l_dist_max_sample; ++i){
+        if (sample_ts[i] > 0.f) {
+            valid_sample_n++;
+            float const samp_dist_abs_sign = (sample_t_mean > sample_ts[i]) ? 1.f : \
+                                            ((sample_t_mean < sample_ts[i]) ? -1.f : 0.f);
+            shared_Dmeant_sign += samp_dist_abs_sign;
+        }
+    }
+
+    // if (lane_id == 0) printf("sample_t_mean: %f\n", sample_t_mean);
+    // if (lane_id == 0) printf("valid_sample_n: %d\n", valid_sample_n);
+    // if (lane_id == 0) printf("shared_Dmeant: %f\n", shared_Dmeant_sign);
 
 
     float accum = fmaf(color_cache[0], grad_output[0],
@@ -1585,11 +1604,6 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     continue;
                 }
 
-                // int32_t volatile ray_l[] = {ray.l[0],ray.l[1],ray.l[2]};
-                // float volatile ray_origin[] = {ray.origin[0],ray.origin[1],ray.origin[2]};
-                // float volatile ray_dir[] = {ray.dir[0],ray.dir[1],ray.dir[2]};
-                // float volatile ray_pos[] = {ray.pos[0],ray.pos[1],ray.pos[2]};
-
                 has_sample = true;
                 float const  raw_alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
@@ -1756,6 +1770,15 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         }
                         grad_st += lambda_l_dist * l_dist_grad_st;
 
+                        // l_samp_dist = |weighted_avg(Di, wi) - Di| 
+                        float const samp_dist_abs_sign = (sample_t_mean > sample_ts[sample_i]) ? 1.f : \
+                                                        ((sample_t_mean < sample_ts[sample_i]) ? -1.f : 0.f);
+                        float grad_l_samp_dist = shared_Dmeant_sign * sample_weights[sample_i] / sample_weight_sum + samp_dist_abs_sign * (-1.f);               
+                        grad_st += lambda_l_samp_dist * grad_l_samp_dist;
+
+                        // printf("sample_i: %d\n", sample_i);
+                        // printf("sample_ts[sample_i]: %f\n", sample_ts[sample_i]);
+                        // printf("grad_l_samp_dist: %f\n", grad_l_samp_dist);
 
                         float grad_fs[4] = {grad_st, grad_st, grad_st, grad_st};
                         // calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
@@ -2457,6 +2480,7 @@ __global__ void render_ray_backward_kernel(
     float lambda_l1,
     float lambda_l_dist,
     float lambda_l_entropy,
+    float lambda_l_samp_dist,
     int l_dist_max_sample,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_ts,
@@ -2530,6 +2554,7 @@ __global__ void render_ray_backward_kernel(
         fused_surf_norm_reg_ignore_empty,
         lambda_l_dist,
         lambda_l_entropy,
+        lambda_l_samp_dist,
         l_dist_max_sample,
         sample_weights[ray_id].data(),
         sample_ts[ray_id].data(),
@@ -2911,6 +2936,7 @@ void volume_render_surf_trav_backward(
                     0.f,
                     0.f,
                     0.f,
+                    0.f,
                     0,
                     sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
@@ -2953,6 +2979,7 @@ void volume_render_surf_trav_fused(
         float lambda_l1,
         float lambda_l_dist, // l_dist loss from mipnerf 360
         float lambda_l_entropy, // entropy loss from infonerf
+        float lambda_l_samp_dist, // our sample distance loss
         int const l_dist_max_sample, // maximum number of samples for each ray considered for l_dist
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
@@ -3029,6 +3056,7 @@ void volume_render_surf_trav_fused(
                 lambda_l1,
                 lambda_l_dist / Q,
                 lambda_l_entropy / Q,
+                lambda_l_samp_dist / Q,
                 l_dist_max_sample,
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
