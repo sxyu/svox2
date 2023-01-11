@@ -1731,7 +1731,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         
                         
                         // compute gradient for activation
-                        float const  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
+                        float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
+                        if (sparsity_loss > 0.f) {
+                            // Log Alpha version
+                            curr_grad_raw_alpha += sparsity_loss / max(raw_alpha, 1e-8);
+                        }
+                        
                         ASSERT_NUM(curr_grad_raw_alpha);
                         trilerp_backward_cuvol_one_density(
                                 grid.links,
@@ -1740,6 +1745,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                 grid.stride_x,
                                 grid.size[2],
                                 ray.l, ray.pos, curr_grad_raw_alpha);
+
 
                         // compute gradient to surface via density
                         trilerp_backward_one_pos(

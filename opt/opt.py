@@ -587,7 +587,7 @@ while True:
             else:
                 out = grid.volume_render_fused(rays, rgb_gt,
                         beta_loss=args.lambda_beta,
-                        sparsity_loss=args.lambda_sparsity if (grid.surface_data is None or no_surface) else 0,
+                        sparsity_loss=args.lambda_sparsity if (grid.surface_data is None or no_surface) else args.lambda_inplace_alpha_sparsify,
                         fused_surf_norm_reg_scale = lambda_surf_normal_loss if args.fused_surf_norm_reg else 0.0,
                         fused_surf_norm_reg_con_check = not args.no_surf_norm_con_check,
                         fused_surf_norm_reg_ignore_empty = args.surf_norm_reg_ignore_empty,
