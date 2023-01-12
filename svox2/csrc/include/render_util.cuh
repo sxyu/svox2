@@ -1271,6 +1271,10 @@ __device__ __inline__ void calc_cubic_root_grad_vieta(
                 _Dst_Dtheta =  2.*sqrt(Q)*cos(theta/3. + CUDART_PI/6.)/3.;
             }
 
+            ASSERT_NUM(_Dst_DQ_);
+            ASSERT_NUM(_Dst_Dtheta);
+            ASSERT_NUM(_Dtheta_DQ);
+            ASSERT_NUM(_Dtheta_DR);
 
 
             grad_fs[0] *= static_cast<float>(
@@ -1322,6 +1326,11 @@ __device__ __inline__ void calc_cubic_root_grad_vieta(
 
             // double const _Dst_DA = 1.;
             // double const _Dst_DB = 1.;
+
+            ASSERT_NUM(_DA_DR);
+            ASSERT_NUM(_DA_DQ);
+            ASSERT_NUM(_DB_DA);
+            ASSERT_NUM(_DB_DQ_);
 
             
             grad_fs[0] *= static_cast<float>(

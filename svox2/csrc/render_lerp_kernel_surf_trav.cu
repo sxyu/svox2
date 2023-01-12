@@ -1729,13 +1729,20 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         float const Den_Dwi = -(__logf(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
                         curr_grad_alpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
                         
+                        if (sparsity_loss > 0.f) {
+                            // // Log Alpha version
+                            // curr_grad_alpha += sparsity_loss / max(alpha, 1e-8);
+
+                            // L1 version
+                            curr_grad_alpha += sparsity_loss;
+                        }
                         
                         // compute gradient for activation
                         float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
-                        if (sparsity_loss > 0.f) {
-                            // Log Alpha version
-                            curr_grad_raw_alpha += sparsity_loss / max(raw_alpha, 1e-8);
-                        }
+                        // if (sparsity_loss > 0.f) {
+                        //     // Log Alpha version
+                        //     curr_grad_raw_alpha += sparsity_loss / max(raw_alpha, 1e-8);
+                        // }
                         
                         ASSERT_NUM(curr_grad_raw_alpha);
                         trilerp_backward_cuvol_one_density(
@@ -1785,7 +1792,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // printf("sample_i: %d\n", sample_i);
                         // printf("sample_ts[sample_i]: %f\n", sample_ts[sample_i]);
                         // printf("grad_l_samp_dist: %f\n", grad_l_samp_dist);
-
+                        ASSERT_NUM(grad_st);
+                        
                         float grad_fs[4] = {grad_st, grad_st, grad_st, grad_st};
                         // calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
                         calc_cubic_root_grad_vieta(cubic_root_type, st_id, fs, grad_fs);
@@ -1999,11 +2007,25 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                 // note that for fake sample, we don't have grad to st
                             }
 
+                            if (sparsity_loss > 0.f) {
+                                // // Log Alpha version
+                                // curr_grad_rwalpha += sparsity_loss / max(rw_alpha, 1e-8);
+
+                                // L1 version
+                                curr_grad_rwalpha += sparsity_loss;
+                            }
+
                             // curr_grad_alpha is now d_mse/d_alpha_i
                             float curr_grad_alpha = curr_grad_rwalpha * reweight;
                             
                             // compute gradient for activation
-                            float const  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
+                            float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
+
+                            // if (sparsity_loss > 0.f) {
+                            //     // Log Alpha version
+                            //     curr_grad_raw_alpha += sparsity_loss / max(raw_alpha, 1e-8);
+                            // }
+
                             ASSERT_NUM(curr_grad_raw_alpha);
                             trilerp_backward_cuvol_one_density(
                                     grid.links,
