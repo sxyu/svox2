@@ -62,6 +62,7 @@ class RenderOptions:
     no_surf_grad_from_sh: bool = False
     alpha_activation_type: int = EXP_FN
     fake_sample_l_dist: bool = True
+    fake_sample_normalize_surf: bool = True
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -82,6 +83,7 @@ class RenderOptions:
         opt.no_surf_grad_from_sh = self.no_surf_grad_from_sh
         opt.alpha_activation_type = self.alpha_activation_type
         opt.fake_sample_l_dist = self.fake_sample_l_dist
+        opt.fake_sample_normalize_surf = self.fake_sample_normalize_surf
         #  opt.randomize = randomize
         #  opt.random_sigma_std = self.random_sigma_std
         #  opt.random_sigma_std_background = self.random_sigma_std_background
@@ -4965,84 +4967,123 @@ class SparseGrid(nn.Module):
 
 
     def _surface_eikonal_loss_grad_check(self, rand_cells, scaling, device='cuda'):
+        # xyz = rand_cells
+        # z = (xyz % self.links.shape[2]).long()
+        # xy = xyz / self.links.shape[2]
+        # y = (xy % self.links.shape[1]).long()
+        # x = (xy / self.links.shape[1]).long()
+
+        # coords = torch.tensor([
+        #     [0,0,0],
+        #     [0,0,1],
+        #     [0,1,0],
+        #     [0,1,1],
+        #     [1,0,0],
+        #     [1,0,1],
+        #     [1,1,0],
+        #     [1,1,1],
+        # ], dtype=torch.long, device=device)
+
+        # links=torch.zeros([2,2,2,xyz.shape[0]], dtype=torch.long, device=device)
+        # alphas=torch.zeros([2,2,2,xyz.shape[0], 1], dtype=self.density_data.dtype, device=device)
+        # surfaces=torch.zeros([2,2,2,xyz.shape[0], 1], dtype=self.surface_data.dtype, device=device)
+
+        # for i in range(coords.shape[0]):
+        #     def maybe_get_link(x,y,z):
+        #         _links = torch.ones_like(x, dtype=torch.long) * -1
+        #         invalid_xyz_mask = (torch.stack([x,y,z], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
+        #         _links[~invalid_xyz_mask] = self.links[x[~invalid_xyz_mask], y[~invalid_xyz_mask], z[~invalid_xyz_mask]].long()
+
+        #         return _links
+
+        #     links[coords[i,0], coords[i,1], coords[i,2]] = maybe_get_link(x+coords[i,0], y+coords[i,1], z+coords[i,2])
+        #     alphas[coords[i,0], coords[i,1], coords[i,2]], _ , \
+        #         surfaces[coords[i,0], coords[i,1], coords[i,2]] = self._fetch_links(links[coords[i,0], coords[i,1], coords[i,2]])
+
+        # def find_normal(norm_xyz):
+        #     x,y,z = norm_xyz.unbind(-1)
+
+        #     dx = ((surfaces[x+1,y,z]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
+        #         (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x,y+1,z]+surfaces[x,y+1,z+1])) /4
+        #     dy = ((surfaces[x,y+1,z]+surfaces[x,y+1,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
+        #         (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x+1,y,z]+surfaces[x+1,y,z+1]))/4
+        #     dz = ((surfaces[x,y,z+1]+surfaces[x,y+1,z+1]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z+1]) - \
+        #         (surfaces[x,y,z]+surfaces[x,y+1,z]+surfaces[x+1,y,z]+surfaces[x+1,y+1,z]))/4
+
+        #     normals = torch.stack([dx, dy, dz], dim=-1)
+        #     # normals = normals / torch.clamp(torch.norm(normals, dim=-1, keepdim=True), 1e-10)
+
+        #     # check if there is non-exist vertex
+        #     coords = torch.tensor([
+        #         [0,0,0],
+        #         [0,0,1],
+        #         [0,1,0],
+        #         [0,1,1],
+        #         [1,0,0],
+        #         [1,0,1],
+        #         [1,1,0],
+        #         [1,1,1],
+        #         ], dtype=torch.long, device=device)
+        #     ver_xyzs = norm_xyz[None, :] + coords
+        #     valid_mask = torch.ones(links.shape[-1], device=links.device).bool()
+        #     for i in range(ver_xyzs.shape[0]):
+        #         valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
+
+        #     alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
+        #     alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
+
+        #     return normals, valid_mask, torch.sigmoid(alpha_v.detach().clone())
+
+        # # find normals
+        # norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=device)
+        # norm000, mask000, alpha_v000 = find_normal(norm_xyzs[0])
+
+
+        # Norm000 = torch.clamp(torch.norm(norm000, dim=-1), 1e-10)
+        # Norm000[~mask000] = 1.
+
+
+        # eikonal_loss = scaling * torch.sum((1-Norm000)**2)
+
+
+        # eikonal_loss.backward()
         xyz = rand_cells
         z = (xyz % self.links.shape[2]).long()
         xy = xyz / self.links.shape[2]
         y = (xy % self.links.shape[1]).long()
         x = (xy / self.links.shape[1]).long()
 
-        coords = torch.tensor([
-            [0,0,0],
-            [0,0,1],
-            [0,1,0],
-            [0,1,1],
-            [1,0,0],
-            [1,0,1],
-            [1,1,0],
-            [1,1,1],
-        ], dtype=torch.long, device=device)
+        gsz = self._grid_size().mean()
+        h = 2.0 * self.radius.mean() / gsz
+        h = h.to(device)
 
-        links=torch.zeros([2,2,2,xyz.shape[0]], dtype=torch.long, device=device)
-        alphas=torch.zeros([2,2,2,xyz.shape[0], 1], dtype=self.density_data.dtype, device=device)
-        surfaces=torch.zeros([2,2,2,xyz.shape[0], 1], dtype=self.surface_data.dtype, device=device)
+        def safe_fetch_data_default(xyz, data, default):
 
-        for i in range(coords.shape[0]):
-            def maybe_get_link(x,y,z):
-                _links = torch.ones_like(x, dtype=torch.long) * -1
-                invalid_xyz_mask = (torch.stack([x,y,z], axis=-1) >= torch.tensor(self.links.shape, device=device)).any(axis=-1)
-                _links[~invalid_xyz_mask] = self.links[x[~invalid_xyz_mask], y[~invalid_xyz_mask], z[~invalid_xyz_mask]].long()
+            out = default.clone().detach()
+            edge_mask = (xyz >= 0).all(axis=-1) & (xyz < torch.tensor(self.links.shape, device=xyz.device)[None, :]).all(axis=-1)
 
-                return _links
+            x, y, z = xyz[edge_mask].unbind(-1)
+            links = self.links[x,y,z]
+            valid_mask = links >= 0
 
-            links[coords[i,0], coords[i,1], coords[i,2]] = maybe_get_link(x+coords[i,0], y+coords[i,1], z+coords[i,2])
-            alphas[coords[i,0], coords[i,1], coords[i,2]], _ , \
-                surfaces[coords[i,0], coords[i,1], coords[i,2]] = self._fetch_links(links[coords[i,0], coords[i,1], coords[i,2]])
+            idx = torch.arange(out.shape[0])[edge_mask][valid_mask]
+            out[idx] = data[links[valid_mask].long()]
 
-        def find_normal(norm_xyz):
-            x,y,z = norm_xyz.unbind(-1)
+            return out
 
-            dx = ((surfaces[x+1,y,z]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
-                (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x,y+1,z]+surfaces[x,y+1,z+1])) /4
-            dy = ((surfaces[x,y+1,z]+surfaces[x,y+1,z+1]+surfaces[x+1,y+1,z]+surfaces[x+1,y+1,z+1]) - \
-                (surfaces[x,y,z]+surfaces[x,y,z+1]+surfaces[x+1,y,z]+surfaces[x+1,y,z+1]))/4
-            dz = ((surfaces[x,y,z+1]+surfaces[x,y+1,z+1]+surfaces[x+1,y,z+1]+surfaces[x+1,y+1,z+1]) - \
-                (surfaces[x,y,z]+surfaces[x,y+1,z]+surfaces[x+1,y,z]+surfaces[x+1,y+1,z]))/4
+        # filter out empty cells
+        empty_mask = self.links[x,y,z] < 0
 
-            normals = torch.stack([dx, dy, dz], dim=-1)
-            # normals = normals / torch.clamp(torch.norm(normals, dim=-1, keepdim=True), 1e-10)
+        x, y, z = x[~empty_mask], y[~empty_mask], z[~empty_mask]  
 
-            # check if there is non-exist vertex
-            coords = torch.tensor([
-                [0,0,0],
-                [0,0,1],
-                [0,1,0],
-                [0,1,1],
-                [1,0,0],
-                [1,0,1],
-                [1,1,0],
-                [1,1,1],
-                ], dtype=torch.long, device=device)
-            ver_xyzs = norm_xyz[None, :] + coords
-            valid_mask = torch.ones(links.shape[-1], device=links.device).bool()
-            for i in range(ver_xyzs.shape[0]):
-                valid_mask = (valid_mask) & (links[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] >= 0)
-
-            alpha_v = [alphas[ver_xyzs[i,0], ver_xyzs[i,1], ver_xyzs[i,2]] for i in range(ver_xyzs.shape[0])]
-            alpha_v = torch.concat(alpha_v, axis=-1).mean(dim=-1)
-
-            return normals, valid_mask, torch.sigmoid(alpha_v.detach().clone())
-
-        # find normals
-        norm_xyzs = torch.tensor([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype=torch.long, device=device)
-        norm000, mask000, alpha_v000 = find_normal(norm_xyzs[0])
+        surf000 = self.surface_data[self.links[x,y,z].long()]
+        surf100 = safe_fetch_data_default(torch.stack([x+1,y,z]).T, self.surface_data, surf000)
+        surf010 = safe_fetch_data_default(torch.stack([x,y+1,z]).T, self.surface_data, surf000)
+        surf001 = safe_fetch_data_default(torch.stack([x,y,z+1]).T, self.surface_data, surf000)
 
 
-        Norm000 = torch.clamp(torch.norm(norm000, dim=-1), 1e-10)
-        Norm000[~mask000] = 1.
-
-
-        eikonal_loss = scaling * torch.sum((1-Norm000)**2)
-
+        grad_n2 = ((surf100 - surf000) / h)**2 + ((surf010 - surf000) / h)**2 + ((surf001 - surf000) / h)**2
+        eikonal_loss = scaling * torch.sum((1 - grad_n2)**2) / rand_cells.shape[0]
 
         eikonal_loss.backward()
 
@@ -5214,7 +5255,6 @@ class SparseGrid(nn.Module):
 
     def inplace_surface_normal_grad(self, grad: torch.Tensor,
                                 scaling: float = 1.0,
-                                eikonal_scale: float = 0.,
                                 sparse_frac: float = 0.01,
                                 ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
                                 contiguous: bool = True,
@@ -5244,7 +5284,7 @@ class SparseGrid(nn.Module):
                             rand_cells,
                             self._get_sparse_grad_indexer(),
                             self.level_set_data[0],
-                            0, 1, scaling, eikonal_scale,
+                            0, 1, scaling, 0., # TODO: remove this eikonal_scale
                             ndc_coeffs[0], ndc_coeffs[1],
                             connectivity_check,
                             ignore_empty,
@@ -5257,6 +5297,41 @@ class SparseGrid(nn.Module):
                         ndc_coeffs[0], ndc_coeffs[1],
                         grad)
                 self.sparse_grad_indexer : Optional[torch.Tensor] = None
+
+    def inplace_surface_eikonal_grad(self, grad: torch.Tensor,
+                                scaling: float = 1.0,
+                                sparse_frac: float = 0.01,
+                                contiguous: bool = True,
+                                use_kernel: bool = True,
+                                **kwargs
+                            ):
+        if self.surface_data is None:
+            return
+        
+        rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
+        if not use_kernel:
+            # pytorch version
+            return self._surface_eikonal_loss_grad_check(rand_cells, scaling, **kwargs)
+
+        else:
+            assert (
+                _C is not None and self.surface_data.is_cuda and grad.is_cuda
+            ), "CUDA extension is currently required for total variation"
+
+            if rand_cells is not None:
+                raise NotImplementedError
+                # if rand_cells.size(0) > 0:
+                    # _C.surface_normal_grad_sparse(self.links, self.surface_data,
+                    #         rand_cells,
+                    #         self._get_sparse_grad_indexer(),
+                    #         self.level_set_data[0],
+                    #         0, 1, scaling, eikonal_scale,
+                    #         connectivity_check,
+                    #         ignore_empty,
+                    #         use_l1,
+                    #         grad)
+            else:
+                raise NotImplementedError
 
     def inplace_tv_color_grad(
         self,

@@ -241,7 +241,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("limited_fake_sample", &RenderOptions::limited_fake_sample)
       .def_readwrite("no_surf_grad_from_sh", &RenderOptions::no_surf_grad_from_sh)
       .def_readwrite("alpha_activation_type", &RenderOptions::alpha_activation_type)
-      .def_readwrite("fake_sample_l_dist", &RenderOptions::fake_sample_l_dist);
+      .def_readwrite("fake_sample_l_dist", &RenderOptions::fake_sample_l_dist)
+      .def_readwrite("fake_sample_normalize_surf", &RenderOptions::fake_sample_normalize_surf);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
   // .def_readwrite("random_sigma_std_background",

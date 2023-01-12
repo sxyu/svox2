@@ -347,11 +347,13 @@ __device__ __inline__ void trace_ray_surf_trav(
                         // Currently, it's done by normalizing surface scalars by their std, then trilerping
 
                         double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
-                        double const surf_std = sqrtf(
+                        double surf_std = sqrtf(
                             max(1e-9f, 
                             (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
                             )
                         );
+
+                        if (!opt.fake_sample_normalize_surf) surf_std = 1.;
 
                         // tri-lerp to get distance
 
@@ -1871,11 +1873,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
 
                         double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
-                        double const surf_std = sqrtf(
+                        double surf_std = sqrtf(
                             max(1e-9f, 
                             (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
                             )
                         );
+
+                        if (!opt.fake_sample_normalize_surf) surf_std = 1.;
 
                         // tri-lerp to get distance
 
@@ -2063,23 +2067,23 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             grad_ns[7] = ray.pos[1] * ray.pos[2] * xo;
 
 
-                            // for (int ks = 0; ks < 8; ++ks){
-                            //     ASSERT_NUM(grad_ns[ks]);
-                            // }
-
-
-
                             float grad_surface[8] = {0,0,0,0,0,0,0,0};
+                            if (!opt.fake_sample_normalize_surf) {
 #pragma unroll 8
-                            for (int ks = 0; ks < 8; ++ks){
+                            for (int ks = 0; ks < 8; ++ks) grad_surface[ks] = grad_ns[ks];
+                            
+                            } else {
 #pragma unroll 8
-                                for (int kn = 0; kn < 8; ++kn){
-                                    // kn: index for normalized surf
-                                    // ks: index for original surf
-                                    if (ks == kn){
-                                        grad_surface[ks] += grad_ns[kn] * (surface[ks] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std) + 1.f/surf_std);
-                                    } else {
-                                        grad_surface[ks] +=  grad_ns[kn] * (surface[kn] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std));
+                                for (int ks = 0; ks < 8; ++ks){
+#pragma unroll 8
+                                    for (int kn = 0; kn < 8; ++kn){
+                                        // kn: index for normalized surf
+                                        // ks: index for original surf
+                                        if (ks == kn){
+                                            grad_surface[ks] += grad_ns[kn] * (surface[ks] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std) + 1.f/surf_std);
+                                        } else {
+                                            grad_surface[ks] +=  grad_ns[kn] * (surface[kn] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std));
+                                        }
                                     }
                                 }
                             }

@@ -151,6 +151,9 @@ def define_common_args(parser : configargparse.ArgumentParser):
     group.add_argument('--no_fake_sample_l_dist', 
                         action='store_true',
                         default=False)
+    group.add_argument('--no_fake_sample_normalize_surf', 
+                        action='store_true',
+                        default=False)
 
 
 def build_data_options(args):
@@ -211,6 +214,7 @@ def setup_render_opts(opt, args):
     opt.no_surf_grad_from_sh = args.no_surf_grad_from_sh
     opt.alpha_activation_type = 0 if args.surf_alpha_sigmoid_act else 1
     opt.fake_sample_l_dist = not args.no_fake_sample_l_dist
+    opt.fake_sample_normalize_surf = not args.no_fake_sample_normalize_surf
 
 
 def setup_train_conf(return_parpser=False):

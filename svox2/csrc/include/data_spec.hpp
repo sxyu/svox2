@@ -181,6 +181,7 @@ struct RenderOptions {
   // enum ActivationType alpha_activation_type;
   uint8_t alpha_activation_type;
   bool fake_sample_l_dist;
+  bool fake_sample_normalize_surf;
   // bool randomize;
   // float random_sigma_std;
   // float random_sigma_std_background;

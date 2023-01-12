@@ -753,7 +753,6 @@ while True:
                     # with Timing("normal_loss"):
                     norm_loss = grid.inplace_surface_normal_grad(grid.surface_data.grad,
                             scaling=lambda_surf_normal_loss,
-                            eikonal_scale=args.lambda_surface_eikonal,
                             sparse_frac=args.norm_surface_sparsity,
                             ndc_coeffs=dset.ndc_coeffs,
                             contiguous=args.tv_contiguous,
@@ -765,6 +764,18 @@ while True:
 
                     if (gstep_id + 1) % args.print_every == 0 and norm_loss is not None:
                         summary_writer.add_scalar("surf_norm_loss", norm_loss, global_step=gstep_id)
+
+                if args.lambda_surface_eikonal > 0.0:
+                    # with Timing("normal_loss"):
+                    eik_loss = grid.inplace_surface_eikonal_grad(grid.surface_data.grad,
+                            scaling=args.lambda_surface_eikonal,
+                            sparse_frac=args.norm_surface_sparsity,
+                            contiguous=args.tv_contiguous,
+                            use_kernel=False,
+                            )
+
+                    if (gstep_id + 1) % args.print_every == 0 and eik_loss is not None:
+                        summary_writer.add_scalar("eik_loss", eik_loss, global_step=gstep_id)
 
                 if args.lambda_surf_sign_loss > 0.0:
                     # with Timing("normal_loss"):
