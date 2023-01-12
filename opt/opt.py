@@ -437,57 +437,59 @@ while True:
                                     depth_thresh_img,
                                     global_step=step_id, dataformats='HWC')
 
-            if args.eval_cf and grid.surface_data is not None and not no_surface:
+            if args.eval_cf and not no_surface:
                 pred_pts = grid.extract_pts(n_sample=args.surf_eval_n_sample, density_thresh=args.surf_eval_intersect_th, scene_scale=2./3., to_world=True)
                 pred_pts = pred_pts.cpu().detach().numpy()
-                
-                # downsample points
-                nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=0.001, algorithm='kd_tree', n_jobs=-1)
-                nn_engine.fit(pred_pts)
-                rnn_idxs = nn_engine.radius_neighbors(pred_pts, radius=0.001, return_distance=False)
-                mask = np.ones(pred_pts.shape[0], dtype=np.bool_)
-                for curr, idxs in enumerate(rnn_idxs):
-                    if mask[curr]:
-                        mask[idxs] = 0
-                        mask[curr] = 1
-                pred_pts = pred_pts[mask]
 
-                # load gt
-                surf_gt = np.load(f'{args.data_dir}/shape.npy')
-                # compute cf
-                dist_d2s, dist_s2d = eval_cf(pred_pts, surf_gt, 0.001)
-                mean_d2s = dist_d2s.mean()
-                mean_s2d = dist_s2d.mean()
+                if pred_pts.size > 0:   
+                    # downsample points
+                    nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=0.001, algorithm='kd_tree', n_jobs=-1)
+                    nn_engine.fit(pred_pts)
+                    rnn_idxs = nn_engine.radius_neighbors(pred_pts, radius=0.001, return_distance=False)
+                    mask = np.ones(pred_pts.shape[0], dtype=np.bool_)
+                    for curr, idxs in enumerate(rnn_idxs):
+                        if mask[curr]:
+                            mask[idxs] = 0
+                            mask[curr] = 1
+                    pred_pts = pred_pts[mask]
 
-                stats_test['cf_d2s'] = mean_d2s
-                stats_test['cf_s2d'] = mean_s2d
-                stats_test['cf_mean'] = (mean_d2s + mean_s2d) / 2.
+                    # load gt
+                    surf_gt = np.load(f'{args.data_dir}/shape.npy')
+                    # compute cf
+                    dist_d2s, dist_s2d = eval_cf(pred_pts, surf_gt, 0.001)
+                    mean_d2s = dist_d2s.mean()
+                    mean_s2d = dist_s2d.mean()
 
-                vis_dist = 0.1
-                max_dist = 20
-                R = np.array([[1,0,0]], dtype=np.float64)
-                G = np.array([[0,1,0]], dtype=np.float64)
-                B = np.array([[0,0,1]], dtype=np.float64)
-                W = np.array([[1,1,1]], dtype=np.float64)
-                data_color = np.tile(B, (pred_pts.shape[0], 1))
-                data_alpha = dist_d2s.clip(max=vis_dist) / vis_dist
-                data_color = R * data_alpha + W * (1-data_alpha)
-                data_color[dist_d2s[:,0] >= max_dist] = G
-                stl_color = np.tile(B, (surf_gt.shape[0], 1))
-                stl_alpha = dist_s2d.clip(max=vis_dist) / vis_dist
-                stl_color= R * stl_alpha + W * (1-stl_alpha)
-                stl_color[dist_s2d[:,0] >= max_dist] = G
-                print(mean_d2s, mean_s2d, (mean_d2s + mean_s2d) / 2.)
+                    stats_test['cf_d2s'] = mean_d2s
+                    stats_test['cf_s2d'] = mean_s2d
+                    stats_test['cf_mean'] = (mean_d2s + mean_s2d) / 2.
 
-                out_dir = f'{args.train_dir}/coarse_pts_eval/{step_id}'
-                os.makedirs(out_dir, exist_ok=True)
-                write_vis_pcd(f'{out_dir}/vis_d2s.ply', pred_pts, data_color)
-                write_vis_pcd(f'{out_dir}/vis_s2d.ply', surf_gt, stl_color)
+                    vis_dist = 0.1
+                    max_dist = 20
+                    R = np.array([[1,0,0]], dtype=np.float64)
+                    G = np.array([[0,1,0]], dtype=np.float64)
+                    B = np.array([[0,0,1]], dtype=np.float64)
+                    W = np.array([[1,1,1]], dtype=np.float64)
+                    data_color = np.tile(B, (pred_pts.shape[0], 1))
+                    data_alpha = dist_d2s.clip(max=vis_dist) / vis_dist
+                    data_color = R * data_alpha + W * (1-data_alpha)
+                    data_color[dist_d2s[:,0] >= max_dist] = G
+                    stl_color = np.tile(B, (surf_gt.shape[0], 1))
+                    stl_alpha = dist_s2d.clip(max=vis_dist) / vis_dist
+                    stl_color= R * stl_alpha + W * (1-stl_alpha)
+                    stl_color[dist_s2d[:,0] >= max_dist] = G
+                    print(mean_d2s, mean_s2d, (mean_d2s + mean_s2d) / 2.)
 
-                with open(f'{out_dir}/cf.txt', 'w') as f:
-                    f.write(f'Mean d2s: {mean_d2s}\n')
-                    f.write(f'Mean s2d: {mean_s2d}\n')
-                    f.write(f'Over all: {(mean_d2s + mean_s2d) / 2.}\n')
+                    out_dir = f'{args.train_dir}/coarse_pts_eval/{step_id}'
+                    os.makedirs(out_dir, exist_ok=True)
+                    write_vis_pcd(f'{out_dir}/vis_d2s.ply', pred_pts, data_color)
+                    # write_vis_pcd(f'{out_dir}/vis_s2d.ply', surf_gt, stl_color)
+                    
+
+                    with open(f'{out_dir}/cf.txt', 'w') as f:
+                        f.write(f'Mean d2s: {mean_d2s}\n')
+                        f.write(f'Mean s2d: {mean_s2d}\n')
+                        f.write(f'Over all: {(mean_d2s + mean_s2d) / 2.}\n')
 
             for stat_name in stats_test:
                 summary_writer.add_scalar('test/' + stat_name,
