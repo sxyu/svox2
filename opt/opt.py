@@ -8,6 +8,7 @@ import torch.cuda
 import torch.optim
 import torch.nn.functional as F
 import svox2
+import open3d as o3d
 
 # import sys
 # from os import path
@@ -28,7 +29,7 @@ from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis
 from util import config_util
 import ast
 import sklearn.neighbors as skln
-from eval_cf_blender import eval_cf
+from eval_cf_blender import eval_cf, write_vis_pcd
 
 from warnings import warn
 from datetime import datetime
@@ -462,6 +463,32 @@ while True:
                 stats_test['cf_s2d'] = mean_s2d
                 stats_test['cf_mean'] = (mean_d2s + mean_s2d) / 2.
 
+                vis_dist = 0.1
+                max_dist = 20
+                R = np.array([[1,0,0]], dtype=np.float64)
+                G = np.array([[0,1,0]], dtype=np.float64)
+                B = np.array([[0,0,1]], dtype=np.float64)
+                W = np.array([[1,1,1]], dtype=np.float64)
+                data_color = np.tile(B, (pred_pts.shape[0], 1))
+                data_alpha = dist_d2s.clip(max=vis_dist) / vis_dist
+                data_color = R * data_alpha + W * (1-data_alpha)
+                data_color[dist_d2s[:,0] >= max_dist] = G
+                stl_color = np.tile(B, (surf_gt.shape[0], 1))
+                stl_alpha = dist_s2d.clip(max=vis_dist) / vis_dist
+                stl_color= R * stl_alpha + W * (1-stl_alpha)
+                stl_color[dist_s2d[:,0] >= max_dist] = G
+                print(mean_d2s, mean_s2d, (mean_d2s + mean_s2d) / 2.)
+
+                out_dir = f'{args.train_dir}/coarse_pts_eval/{step_id}'
+                os.makedirs(out_dir, exist_ok=True)
+                write_vis_pcd(f'{out_dir}/vis_d2s.ply', pred_pts, data_color)
+                write_vis_pcd(f'{out_dir}/vis_s2d.ply', surf_gt, stl_color)
+
+                with open(f'{out_dir}/cf.txt', 'w') as f:
+                    f.write(f'Mean d2s: {mean_d2s}\n')
+                    f.write(f'Mean s2d: {mean_s2d}\n')
+                    f.write(f'Over all: {(mean_d2s + mean_s2d) / 2.}\n')
+
             for stat_name in stats_test:
                 summary_writer.add_scalar('test/' + stat_name,
                         stats_test[stat_name], global_step=step_id)
@@ -877,6 +904,11 @@ while True:
                 obj_path = path.join(args.train_dir, 'mesh', f'mesh_{gstep_id:05d}.obj')
                 os.makedirs(path.join(args.train_dir, 'mesh'), exist_ok=True)
                 grid.extract_mesh(obj_path, args.mesh_sigma_thresh)
+
+            # if (gstep_id % args.extract_pts_every == 0) and not args.tune_mode:
+            #     ply_path = path.join(args.train_dir, 'pts_coarse', f'pts_{gstep_id:05d}.ply')
+            #     os.makedirs(path.join(args.train_dir, 'pts_coarse'), exist_ok=True)
+            #     pts = grid.extract_pts(n_sample=args.surf_eval_n_sample, density_thresh=args.surf_eval_intersect_th, scene_scale=2./3., to_world=True)
 
             if gstep_id >= args.n_iters:
                 print('* Final eval and save')
