@@ -476,7 +476,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surf_normal_loss_lambda_type', type=str, default='const', 
                         choices=['const', 'linear'])
     group.add_argument('--surf_lv_range_decay_type', type=str, default='linear', 
-                        choices=['exp', 'linear'])
+                        choices=['exp', 'linear', 'const'])
     group.add_argument('--lambda_normal_loss_final', type=float, default=0)
     group.add_argument('--lambda_normal_loss_delay_steps', type=float, default=0)
     group.add_argument('--lambda_normal_loss_decay_steps', type=float, default=0)
