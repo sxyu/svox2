@@ -296,6 +296,7 @@ def setup_train_conf(return_parpser=False):
 
     group.add_argument('--surf_lv_range', type=float, default=5.)
     group.add_argument('--surf_lv_num', type=int, default=1)
+    group.add_argument('--surf_lv_range_decay_steps', type=lambda x: int(float(x)), default=100000)
 
     # TODO: make the lr higher near the end
     group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
@@ -474,6 +475,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--lambda_normal_loss', type=float, default=0)
     group.add_argument('--surf_normal_loss_lambda_type', type=str, default='const', 
                         choices=['const', 'linear'])
+    group.add_argument('--surf_lv_range_decay_type', type=str, default='linear', 
+                        choices=['exp', 'linear'])
     group.add_argument('--lambda_normal_loss_final', type=float, default=0)
     group.add_argument('--lambda_normal_loss_delay_steps', type=float, default=0)
     group.add_argument('--lambda_normal_loss_decay_steps', type=float, default=0)

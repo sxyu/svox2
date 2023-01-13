@@ -5,6 +5,7 @@ import torch
 import svox2
 import svox2.utils
 import math
+import open3d as o3d
 import configargparse
 import numpy as np
 import os
@@ -60,7 +61,7 @@ parser.add_argument(
 parser.add_argument(
     "--surf_lv_set",
     type=float,
-    default=0.,
+    default=None,
 )
 parser.add_argument(
     "--n_sample",
@@ -114,9 +115,19 @@ if args.extract_nerf:
 print('Render options', grid.opt)
 
 # grid.extract_mesh(args.out_path, args.intersect_th)
-all_pts = grid.extract_pts(n_sample=args.n_sample, density_thresh=args.intersect_th, scene_scale=2./3., to_world=True, surf_lv_set=args.surf_lv_set)
 
-all_pts = all_pts.cpu().detach().numpy()
+if args.surf_lv_set is None:
+    # use level set from grid ckpt
+    surf_lv_set = grid.level_set_data.cpu().detach().numpy()
+else:
+    surf_lv_set = [args.surf_lv_set]
+
+all_pts = []
+for lv_set in surf_lv_set:
+    pts = grid.extract_pts(n_sample=args.n_sample, density_thresh=args.intersect_th, scene_scale=2./3., to_world=True, surf_lv_set=lv_set)
+    all_pts.append(pts)
+
+all_pts = torch.concat(all_pts, axis=0).cpu().detach().numpy()
 if args.downsample_density > 0:
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=args.downsample_density, algorithm='kd_tree', n_jobs=-1)
     nn_engine.fit(all_pts)
@@ -131,6 +142,10 @@ if args.downsample_density > 0:
 print(f'Saving pts to {args.out_path}')
 if args.out_path.endswith('txt'):
     np.savetxt(args.out_path, all_pts)
+elif args.out_path.endswith('ply'):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(all_pts)
+    o3d.io.write_point_cloud(args.out_path, pcd)
 else:
     np.save(args.out_path, all_pts)
 

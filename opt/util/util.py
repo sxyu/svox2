@@ -152,7 +152,7 @@ def get_linear_lr_func(
             return lr_final
 
         rate = (lr_final - lr_init) / max_steps
-        return lr_init + rate * step
+        return lr_init + rate * (step-lr_delay_steps)
 
     return helper
 
