@@ -2058,11 +2058,6 @@ class SparseGrid(nn.Module):
                 # analyical solution for f0 + _t*f1 + (_t**2)*f2 + (_t**3)*f3 = 0
                 # https://github.com/shril/CubicEquationSolver/blob/master/CubicEquationSolver.py
 
-                # check for trivial a and b -- reduce to linear or polynomial solutions
-                # no_solution_mask = (f3 == 0.) & (f2 == 0.) & (f1 == 0.)
-                # linear_mask = (f3 == 0.) & (f2 == 0.) & (~no_solution_mask)
-                # quad_mask = (f3 == 0.) & (~linear_mask) & (~no_solution_mask)
-                # cubic_mask = (~quad_mask) & (~linear_mask) & (~no_solution_mask)
 
                 atol = 1e-10
                 no_solution_mask = torch.isclose(f3, torch.zeros_like(f3), atol=atol) \
@@ -2152,7 +2147,7 @@ class SparseGrid(nn.Module):
                 assert not torch.isnan(ts).any(), 'NaN detcted in cubic roots'
                 assert torch.isfinite(ts).all(), 'Inf detcted in cubic roots'
 
-            assert (((ts[:,0] <= ts[:,1]) | (ts[:,1]==-1.)) & ((ts[:,1] <= ts[:,2])| (ts[:,2]==-1.)) ).all()
+            # assert (((ts[:,0] <= ts[:,1]) | (ts[:,1]==-1.)) & ((ts[:,1] <= ts[:,2])| (ts[:,2]==-1.)) ).all()
 
             N_INTERSECT = ts.shape[1]
             # ts = torch.sort(ts, dim=-1).values
@@ -2222,7 +2217,7 @@ class SparseGrid(nn.Module):
 
 
             ts_raw = ts
-            # ts = torch.concat([ts_raw[:1].detach().clone(), ts_raw[1:2], ts_raw[2:].detach().clone()], dim=-1)
+            # ts = torch.concat([ts_raw[:0].detach().clone(), ts_raw[0:1], ts_raw[1:].detach().clone()], dim=-1)
             ts = ts_raw
             samples = origins[ray_ids, :] + (ts[..., None] + close_t[...,None]) * dirs[ray_ids, :] # [VEV * N_INTERSECT, 3]
         
@@ -2674,15 +2669,16 @@ class SparseGrid(nn.Module):
             B_ts.retain_grad()
             B_weights.retain_grad()
             B_alpha.retain_grad()
+            fs.retain_grad()
 
             # s = torch.nn.functional.mse_loss(out['rgb'], torch.zeros_like(out['rgb']))
             lambda_l2 = 0.
             lambda_l1 = 1.
             s = F.mse_loss(out['rgb'], torch.zeros_like(out['rgb'])) * lambda_l2 + \
                 torch.abs(out['rgb'] - torch.zeros_like(out['rgb'])).mean() * lambda_l1
-            # s += l_dist
-            # s += l_entropy
-            s += l_samp_dist
+            s += l_dist
+            s += l_entropy
+            # s += l_samp_dist
             s.backward()
 
             # accum = torch.sum(out['rgb'] * out['rgb'].grad)
@@ -2747,12 +2743,12 @@ class SparseGrid(nn.Module):
 
             density_data = self.safe_fetch_data(coords, self.density_data.data)
             sh_data = self.safe_fetch_data(coords, self.sh_data.data)
+            surface_data = self.safe_fetch_data(coords, self.surface_data.data)
             valid_mask = density_data > density_raw_thres
             valid_mask = valid_mask.view(reso)
 
             if self.surface_data is not None and prune_surf:
                 # prune vertex where the sign of surf is same as all its adjacent vertices
-                surface_data = self.safe_fetch_data(coords, self.surface_data.data)
 
                 X = torch.tensor([-1,0,1], device=device)
                 offset = torch.stack((torch.meshgrid(X, X, X)), dim=-1).view(-1, 3)
@@ -2807,7 +2803,7 @@ class SparseGrid(nn.Module):
             return kept_ratio.item
 
 
-    def _init_surface_from_density(
+    def init_surface_from_density(
         self, 
         alpha_lv_sets=0.5, 
         reset_alpha=False, 
@@ -2817,7 +2813,9 @@ class SparseGrid(nn.Module):
         reset_all=False,
         prune_threshold=1e-8,
         dilate=2,
-        use_z_order=True):
+        surf_lv_range=5.,
+        surf_lv_num=1,
+        ):
         '''
         Initialize surface data from density values
         reset_alpha: resetting alpha values to binary
@@ -2865,14 +2863,17 @@ class SparseGrid(nn.Module):
                 # alpha lv set is used as sigma lv set
                 device = self.density_data.device
 
-                self.level_set_data = torch.tensor([0. if self.surface_type == SURFACE_TYPE_SDF else 64.], device=device)
+                if surf_lv_num == 1:
+                    self.level_set_data = torch.tensor([0.], device=device)
+                else:
+                    self.level_set_data = torch.linspace(-surf_lv_range, surf_lv_range, surf_lv_num, dtype=self.density_data.dtype, device=device)
 
                 surface_data = self.density_data.detach().clone()
                 surface_data = (surface_data - alpha_lv_sets)
                 self.surface_data = nn.Parameter(surface_data.to(torch.float32))
                 # surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
 
-                self.prune_grid(prune_threshold, dilate, prune_surf=True)
+                self.prune_grid(prune_threshold, dilate, prune_surf=False)
                 
                 # better rescale using average grad of surface data
                 rand_cells = self._get_rand_cells_non_empty(0.1, contiguous=True)
@@ -2910,7 +2911,7 @@ class SparseGrid(nn.Module):
                 # this allows fake sample distance to be calculated easier
                 gsz = self._grid_size().mean()
                 h = 2.0 * self.radius.mean() / gsz
-                h = h.to(device)
+                h = h.to(device) * 256
 
                 norm_grad = torch.sqrt(
                     ((surf100 - surf000) / h) ** 2. + \
@@ -2920,7 +2921,7 @@ class SparseGrid(nn.Module):
 
                 # surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
                 # self.surface_data = nn.Parameter(surface_data.to(torch.float32))
-                self.surface_data.data = self.surface_data.data/norm_grad.mean() + self.level_set_data[0]
+                self.surface_data.data = self.surface_data.data/norm_grad.mean() + self.level_set_data[len(self.level_set_data) // 2]
 
                 if alpha_rescale is not None:
                     self.density_data.data *= alpha_rescale
@@ -4175,6 +4176,7 @@ class SparseGrid(nn.Module):
         cell_ids,
         n_sample:int = 5, # number of sample per verext = 3*n_sample
         density_thresh:float = 0,
+        surf_lv_set:float = 0.,
     ):
         '''
             Find iso-surface pts within the voxels by shooting rays perpendicular to x,y,z axis
@@ -4182,7 +4184,7 @@ class SparseGrid(nn.Module):
 
         pts = _C.__dict__[f"cubic_extract_iso_pts"](
             self.links,
-            self.surface_data if self.surface_data is not None else (self.density_data - density_thresh),
+            (self.surface_data - surf_lv_set) if self.surface_data is not None else (self.density_data - density_thresh),
             self.density_data,
             cell_ids.to(torch.int),
             n_sample,
@@ -4202,6 +4204,7 @@ class SparseGrid(nn.Module):
         batch_size:int = 100000, 
         scene_scale:float = 1.,
         to_world:bool = False,
+        surf_lv_set:float = 0.,
     ):
         with torch.no_grad():
             cell_ids = torch.arange(self.links.numel())[self.links.view(-1) >= 0]
@@ -4210,7 +4213,8 @@ class SparseGrid(nn.Module):
                 pts = self.sample_surf_pts(
                     cell_ids[i : i + batch_size].to(self.density_data.device),
                     n_sample,
-                    density_thresh
+                    density_thresh,
+                    surf_lv_set,
                     )
                 all_pts.append(pts)
 
@@ -5055,7 +5059,7 @@ class SparseGrid(nn.Module):
 
         gsz = self._grid_size().mean()
         h = 2.0 * self.radius.mean() / gsz
-        h = h.to(device)
+        h = h.to(device) * 256
 
         def safe_fetch_data_default(xyz, data, default):
 
@@ -5138,7 +5142,7 @@ class SparseGrid(nn.Module):
         # this allows fake sample distance to be calculated easier
         gsz = self._grid_size().mean()
         h = 2.0 * self.radius.mean() / gsz
-        h = h.to(device)
+        h = h.to(device) * 256
 
         norm_grad = ((surf100 - surf_100) / (2. * h)) ** 2. + \
             ((surf010 - surf0_10) / (2. * h)) ** 2. + \
@@ -5283,8 +5287,10 @@ class SparseGrid(nn.Module):
                     _C.surface_normal_grad_sparse(self.links, self.surface_data,
                             rand_cells,
                             self._get_sparse_grad_indexer(),
-                            self.level_set_data[0],
-                            0, 1, scaling, 0., # TODO: remove this eikonal_scale
+                            # self.level_set_data[0],
+                            0.,
+                            0, 1, scaling, 
+                            0., # TODO: remove this eikonal_scale
                             ndc_coeffs[0], ndc_coeffs[1],
                             connectivity_check,
                             ignore_empty,

@@ -58,6 +58,11 @@ parser.add_argument(
     help="density for downsampling the pts, set to 0 to disable"
 )
 parser.add_argument(
+    "--surf_lv_set",
+    type=float,
+    default=0.,
+)
+parser.add_argument(
     "--n_sample",
     type=int,
     default=10,
@@ -109,7 +114,7 @@ if args.extract_nerf:
 print('Render options', grid.opt)
 
 # grid.extract_mesh(args.out_path, args.intersect_th)
-all_pts = grid.extract_pts(n_sample=args.n_sample, density_thresh=args.intersect_th, scene_scale=2./3., to_world=True)
+all_pts = grid.extract_pts(n_sample=args.n_sample, density_thresh=args.intersect_th, scene_scale=2./3., to_world=True, surf_lv_set=args.surf_lv_set)
 
 all_pts = all_pts.cpu().detach().numpy()
 if args.downsample_density > 0:
@@ -124,7 +129,10 @@ if args.downsample_density > 0:
     all_pts = all_pts[mask]
 
 print(f'Saving pts to {args.out_path}')
-np.save(args.out_path, all_pts)
+if args.out_path.endswith('txt'):
+    np.savetxt(args.out_path, all_pts)
+else:
+    np.save(args.out_path, all_pts)
 
 if args.del_ckpt:
     os.remove(args.ckpt)

@@ -14,6 +14,7 @@ struct PackedSparseGridSpec {
           density_data(spec.density_data.data_ptr<float>()),
           surface_data(spec.surface_data.defined() ? spec.surface_data.data_ptr<float>() : nullptr),
           level_set_data(spec.level_set_data.defined() ? spec.level_set_data.data_ptr<float>() : nullptr),
+          level_set_num(spec.level_set_data.defined() ? (int)spec.level_set_data.size(0) : 0),
           sh_data(spec.sh_data.data_ptr<float>()),
           links(spec.links.data_ptr<int32_t>()),
           basis_type(spec.basis_type),
@@ -50,6 +51,7 @@ struct PackedSparseGridSpec {
     float* __restrict__ density_data;
     float* __restrict__ surface_data;
     float* __restrict__ level_set_data;
+    const int level_set_num;
     float* __restrict__ sh_data;
     const int32_t* __restrict__ links;
 

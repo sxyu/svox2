@@ -181,10 +181,8 @@ __device__ __inline__ void trace_ray_surf_trav(
         // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
-        // only supports single level set!
-        const int level_set_num = 1;
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8);
-        for (int i=0; i < level_set_num; ++i){
+        for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             // if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
             //     continue;
@@ -290,6 +288,7 @@ __device__ __inline__ void trace_ray_surf_trav(
                         sample_weights[sample_i] = alpha;
                         sample_ts[sample_i] = t_close + st[j];
                         sample_i += 1;
+                        // printf("Intersection at: %f\n",  t_close + st[j]);
                     }
                 }
             }
@@ -549,10 +548,8 @@ __device__ __inline__ void trace_ray_expected_term(
         // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
-        // only supports single level set!
-        const int level_set_num = 1;
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
-        for (int i=0; i < level_set_num; ++i){
+        for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
@@ -739,10 +736,8 @@ __device__ __inline__ void trace_ray_sigma_thresh(
         // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
-        // only supports single level set!
-        const int level_set_num = 1;
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
-        for (int i=0; i < level_set_num; ++i){
+        for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
@@ -908,10 +903,8 @@ __device__ __inline__ void trace_ray_alpha(
         // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
-        // only supports single level set!
-        const int level_set_num = 1;
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
-        for (int i=0; i < level_set_num; ++i){
+        for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
@@ -1080,10 +1073,8 @@ __device__ __inline__ void trace_ray_normal(
         // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
-        // only supports single level set!
-        const int level_set_num = 1;
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
-        for (int i=0; i < level_set_num; ++i){
+        for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
@@ -1271,10 +1262,8 @@ __device__ __inline__ void trace_ray_extract_pt(
         // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
-        // only supports single level set!
-        const int level_set_num = 1;
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); // TODO check if it works!
-        for (int i=0; i < level_set_num; ++i){
+        for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
@@ -1542,18 +1531,18 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         // surface_to_cubic_equation_01(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
-        // only supports single level set!
-        const int level_set_num = 1;
+        double const fs0_original = fs[0];
+
 
         
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); 
-        for (int i=0; i < level_set_num; ++i){
+        for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             // if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
             //     continue;
             // }
 
-            fs[0] -= lv_set;
+            fs[0] = fs0_original - lv_set;
 
             ////////////// CUBIC ROOT SOLVING //////////////
             double st[3] = {-1, -1, -1}; // sample t
@@ -1605,6 +1594,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                 if ((ray.pos[0] < 0) | (ray.pos[0] > 1) | (ray.pos[1] < 0) | (ray.pos[1] > 1) | (ray.pos[2] < 0) | (ray.pos[2] > 1)){
                     continue;
                 }
+
+                // if (lane_id==0) printf("backpass intersection at: %f\n",  t_close + st[st_id]);
 
                 has_sample = true;
                 float const  raw_alpha = trilerp_cuvol_one(
@@ -1784,6 +1775,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             l_dist_grad_st += abs_sign * sample_weights[sample_i] * sample_weights[sample_j];
                         }
                         grad_st += lambda_l_dist * l_dist_grad_st;
+                        ASSERT_NUM(grad_st);
 
                         // l_samp_dist = |weighted_avg(Di, wi) - Di| 
                         float const samp_dist_abs_sign = (sample_t_mean > sample_ts[sample_i]) ? 1.f : \
@@ -1800,6 +1792,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // calc_cubic_root_grad(cubic_root_type, st_id, fs, grad_fs);
                         calc_cubic_root_grad_vieta(cubic_root_type, st_id, fs, grad_fs);
                         // grad_fs is now d_mse/d_f0123
+
+                        // printf("grad_fs: [%f, %f, %f, %f]\n", fs[0], fs[1], fs[2], fs[3]);
 
 
                         float grad_surface[8];

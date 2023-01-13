@@ -564,13 +564,15 @@ while True:
                     print('Saving for no surface init', ckpt_path)
                     grid.save(ckpt_path, step_id=gstep_id)
 
-                grid._init_surface_from_density(
+                grid.init_surface_from_density(
                     alpha_lv_sets=args.alpha_lv_sets,
                     reset_alpha=args.surface_init_reset_alpha,
                     alpha_rescale=args.surf_init_alpha_rescale,
                     surface_rescale=args.surface_init_rescale,
                     reset_all=args.surf_init_reset_all,
-                    prune_threshold=args.alpha_lv_sets / 2
+                    prune_threshold=args.alpha_lv_sets / 2,
+                    surf_lv_range=args.surf_lv_range,
+                    surf_lv_num=args.surf_lv_num
                     )
 
                 # reset opt for surface rendering

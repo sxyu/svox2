@@ -294,6 +294,8 @@ def setup_train_conf(return_parpser=False):
                         #  2000,
                     help='batch size')
 
+    group.add_argument('--surf_lv_range', type=float, default=5.)
+    group.add_argument('--surf_lv_num', type=int, default=1)
 
     # TODO: make the lr higher near the end
     group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
