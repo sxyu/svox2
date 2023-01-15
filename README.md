@@ -57,7 +57,7 @@ Since CUDA 11, CUB is shipped with the toolkit and installing this may lead to b
 
 To install the main library, simply run
 ```
-pip install .
+pip install -e . --verbose
 ```
 In the repo root directory.
 
@@ -80,7 +80,7 @@ https://drive.google.com/file/d/1PG-KllCv4vSRPO7n5lpBjyTjlUyT8Nag/view?usp=shari
 **Note: we currently do not support the instant-ngp format data (since the project was released before NGP). Using it will trigger the nerf-synthetic (Blender) data loader
 due to similarity, but will not train properly. For real data we use the NSVF format.**
 
-To help convert instant-ngp data, please try
+To convert instant-ngp data, please try our script
 ```
 cd opt/scripts
 python ingp2nsvf.py <ingp_data_dir> <output_data_dir>
