@@ -30,7 +30,7 @@ A JAX implementation is also available at <https://github.com/sarafridov/plenoxe
 
 ![Overview](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/pipeline.png)
 
-### Examples
+### Examples use cases
 
 Check out PeRFCeption [Jeong, Shin, Lee, et al], which uses Plenoxels with tuned parameters to generate a large
 dataset of radiance fields:
@@ -58,7 +58,6 @@ To install the main library, simply run
 pip install .
 ```
 In the repo root directory.
-
 ## Getting datasets
 
 We have backends for NeRF-Blender, LLFF, NSVF, and CO3D dataset formats, and the dataset will be auto-detected.
@@ -84,7 +83,7 @@ cd opt/scripts
 python ingp2nsvf.py <ingp_data_dir> <output_data_dir>
 ```
 
-## Voxel Optimization (aka Training)
+## Optimization
 
 For training a single scene, see `opt/opt.py`. The launch script makes this easier.
 
@@ -110,6 +109,7 @@ Usage,
 `python render_imgs.py <CHECKPOINT.npz> <data_dir>`
 
 By default this saves all frames, which is very slow. Add `--no_imsave` to avoid this.
+
 
 ## Rendering a spiral
 
@@ -183,10 +183,18 @@ To render a video, please see the "rendering a spiral" section.
 To convert to a svox1-compatible PlenOctree (not perfect quality since interpolation is not implemented)
 you can try `to_svox1.py <ckpt>`
 
-### Recent updates
 
-- Removed COLMAP undistorter since it is very unhelpful (using SIMPLE_PINHOLE for simplicity, could easily use OPENCV camera instead)
-- Updated the camera normalization
+Example result with the mip-nerf-360 garden data (using custom_alt config as provided)
+![Overview](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/garden.png)
+
+## Potential extensions
+
+Due to limited time we did not make the follow extensions which should make the quality  and speed better.
+
+- Use exp activation instead of ReLU. May help with the semi-transparent look issue
+- Add mip-nerf 360 distortion loss to reduce floaters. PeRFCeption also tuned some parameters to help with the quality
+- Use FP16 training. This codebase uses FP32 still. This should improve speed and memory use
+- Add a GUI viewer
 
 ## Random tip: how to make pip install faster for native extensions
 
