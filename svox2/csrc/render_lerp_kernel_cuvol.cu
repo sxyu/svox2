@@ -249,6 +249,13 @@ __device__ __inline__ void trace_ray_cuvol_backward(
                       fmaf(color_cache[1], grad_output[1],
                            color_cache[2] * grad_output[2]));
 
+    if (ray.tmin > ray.tmax) {
+        if (accum_out != nullptr) { *accum_out = accum; }
+        if (log_transmit_out != nullptr) { *log_transmit_out = 0.f; }
+        // printf("accum_end_fg_fast=%f\n", accum);
+        return;
+    }
+
     if (beta_loss > 0.f) {
         const float transmit_in = _EXP(log_transmit_in);
         beta_loss *= (1 - transmit_in / (1 - transmit_in + 1e-3)); // d beta_loss / d log_transmit_in
@@ -256,12 +263,6 @@ __device__ __inline__ void trace_ray_cuvol_backward(
         // Interesting how this loss turns out, kinda nice?
     }
 
-    if (ray.tmin > ray.tmax) {
-        if (accum_out != nullptr) { *accum_out = accum; }
-        if (log_transmit_out != nullptr) { *log_transmit_out = 0.f; }
-        // printf("accum_end_fg_fast=%f\n", accum);
-        return;
-    }
     float t = ray.tmin;
 
     const float gout = grad_output[lane_colorgrp];

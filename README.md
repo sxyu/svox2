@@ -10,11 +10,7 @@ arXiv: <https://arxiv.org/abs/2112.05131>
 
 [Featured at Two Minute Papers YouTube](https://youtu.be/yptwRRpPEBM) 2022-01-11
 
-**Note:** This is a preliminary release. We have not carefully tested everything,
-but feel that it would be better to first put the code out there.
-
-Also, despite the name, it's not strictly intended to be a successor of svox
-
+Despite the name, it's not strictly intended to be a successor of svox
 
 Citation:
 ```
@@ -34,7 +30,10 @@ A JAX implementation is also available at <https://github.com/sarafridov/plenoxe
 
 ![Overview](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/pipeline.png)
 
-Please also check out PeRFCeption [Jeong, Shin, Lee, et al], which uses Plenoxels with tuned parameters:
+### Examples
+
+Check out PeRFCeption [Jeong, Shin, Lee, et al], which uses Plenoxels with tuned parameters to generate a large
+dataset of radiance fields:
 https://github.com/POSTECH-CVLab/PeRFception
 
 Artistic Radiance Fields by Kai Zhang et al
@@ -75,6 +74,9 @@ Note this data should be identical to that in NeRF++
 
 Finally, the real Lego capture can be downloaded from:
 https://drive.google.com/file/d/1PG-KllCv4vSRPO7n5lpBjyTjlUyT8Nag/view?usp=sharing
+
+**Note: we currently do not support the instant-ngp format data (since the project was released before NGP). Using it will trigger the nerf-synthetic (Blender) data loader
+due to similarity, but will not train properly. For real data we use the NSVF format.**
 
 ## Voxel Optimization (aka Training)
 
