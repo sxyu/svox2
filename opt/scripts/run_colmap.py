@@ -259,6 +259,9 @@ def run_colmap(vid_root, args, factor, overwrite=False):
     os.system(mapper_cmd)
     
     if not args.noradial:
+        print("Warning: I've found the undistorter to work very poorly, substantially reducing quality.")
+        print("A potential (fairly easy) improvement is to support OPENCV camera model in the codebase, "
+              "and without doing undistorting.")
         undist_dir = os.path.join(vid_root, args.undistorted_output)
         if not os.path.exists(undist_dir) or overwrite:
             os.makedirs(undist_dir, exist_ok=True)
@@ -387,7 +390,7 @@ if __name__ == '__main__':
     parser.add_argument('--known-intrin', action='store_true', default=False, help='use intrinsics in <root>/intrinsics.txt if available')
     parser.add_argument('--fix-intrin', action='store_true', default=False, help='fix intrinsics in bundle adjustment, only used if --known-intrin is given and intrinsics.txt exists')
     parser.add_argument('--debug', action='store_true', default=False, help='render debug video')
-    parser.add_argument('--noradial', action='store_true', default=False, help='do not use radial distortion')
+    parser.add_argument('--noradial', action='store_true', default=True, help='do not use radial distortion')
     parser.add_argument('--use-masks', action='store_true', default=False, help='use automatic masks')
     parser.add_argument(
                     '--images-resized', default='images_resized', help='location for resized/renamed images')

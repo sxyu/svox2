@@ -82,20 +82,28 @@ class NSVFDataset(DatasetBase):
         img_dir_name = look_for_dir(["images", "image", "rgb"])
         pose_dir_name = look_for_dir(["poses", "pose"])
         #  intrin_dir_name = look_for_dir(["intrin"], required=False)
-        img_files = sorted(os.listdir(path.join(root, img_dir_name)), key=sort_key)
+        orig_img_files = sorted(os.listdir(path.join(root, img_dir_name)), key=sort_key)
 
         # Select subset of files
         if self.split == "train" or self.split == "test_train":
-            img_files = [x for x in img_files if x.startswith("0_")]
+            img_files = [x for x in orig_img_files if x.startswith("0_")]
         elif self.split == "val":
-            img_files = [x for x in img_files if x.startswith("1_")]
+            img_files = [x for x in orig_img_files if x.startswith("1_")]
         elif self.split == "test":
-            test_img_files = [x for x in img_files if x.startswith("2_")]
+            test_img_files = [x for x in orig_img_files if x.startswith("2_")]
             if len(test_img_files) == 0:
-                test_img_files = [x for x in img_files if x.startswith("1_")]
+                test_img_files = [x for x in orig_img_files if x.startswith("1_")]
             img_files = test_img_files
+        else:
+            img_files = orig_img_files
 
-        assert len(img_files) > 0, "No matching images in directory: " + path.join(data_dir, img_dir_name)
+        if len(img_files) == 0:
+            if self.split == "train":
+                img_files = [x for i, x in enumerate(orig_img_files) if i % 16 != 0]
+            else:
+                img_files = orig_img_files[::16]
+
+        assert len(img_files) > 0, "No matching images in directory: " + path.join(root, img_dir_name)
         self.img_files = img_files
 
         dynamic_resize = scale < 1

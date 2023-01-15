@@ -139,6 +139,11 @@ normal perspective camera.
 For custom datasets we adopt a data format similar to that in NSVF
 <https://github.com/facebookresearch/NSVF>
 
+**Update:** I found that the original release which uses colmap's undistorter made custom scene results much worse. There might be some issue here, but the current version does not use the undistorter.
+Supporting a full OPENCV camera model should be fairly easy, as done in nerfstudio and multi-nerf
+https://github.com/google-research/multinerf/blob/1c8b1c552133cdb2de1c1f3c871b2813f6662265/internal/camera_utils.py#L477
+
+
 You should be able to use this dataset directly afterwards. The format will be auto-detected.
 
 To view the data use:
@@ -151,17 +156,23 @@ Now follow the "Voxel Optimization (aka Training)" section to train:
 
 `./launch.sh <exp_name> <GPU_id> <data_dir> -c configs/custom.json`
 
-You can also try `configs/custom_alt.json` which has some minor differences.
+custom.json was used for the real lego bulldozer scene.
+You can also try `configs/custom_alt.json` which has some minor differences **especially that near_clip is eliminated**. If the scene's central object is totally messed up, this might be due to the aggressive near clip, and the alt config fixes it.
 You may need to tune the TV for best results.
+
 
 To render a video, please see the "rendering a spiral" section.
 To convert to a svox1-compatible PlenOctree (not perfect quality since interpolation is not implemented)
 you can try `to_svox1.py <ckpt>`
+
+### Recent updates
+
+- Removed COLMAP undistorter since it is very unhelpful (using SIMPLE_PINHOLE for simplicity, could easily use OPENCV camera instead)
+- Updated the camera normalization
 
 ## Random tip: how to make pip install faster for native extensions
 
 You may notice that this CUDA extension takes forever to install.
 A suggestion is using ninja. On Ubuntu,
 install it with `sudo apt install ninja-build`.
-Then set the environment variable `MAX_JOBS` to the number of CPUS to use in parallel (e.g. 12) in your shell startup script.
 This will enable parallel compilation and significantly improve iteration speed.
