@@ -78,6 +78,12 @@ https://drive.google.com/file/d/1PG-KllCv4vSRPO7n5lpBjyTjlUyT8Nag/view?usp=shari
 **Note: we currently do not support the instant-ngp format data (since the project was released before NGP). Using it will trigger the nerf-synthetic (Blender) data loader
 due to similarity, but will not train properly. For real data we use the NSVF format.**
 
+To help convert instant-ngp data, please try
+```
+cd opt/scripts
+python ingp2nsvf.py <ingp_data_dir> <output_data_dir>
+```
+
 ## Voxel Optimization (aka Training)
 
 For training a single scene, see `opt/opt.py`. The launch script makes this easier.

@@ -15,6 +15,8 @@ import numpy as np
 class NeRFDataset(DatasetBase):
     """
     NeRF dataset loader
+
+    WARNING: this is only intended for use with NeRF Blender data!!!!
     """
 
     focal: float
@@ -58,6 +60,8 @@ class NeRFDataset(DatasetBase):
         data_json = path.join(root, "transforms_" + split_name + ".json")
 
         print("LOAD DATA", data_path)
+        print("WARNING: This data loader is ONLY intended for use with NeRF-synthetic Blender data!!!!")
+        print("If you want to try running this code on Instant-NGP data please use scripts/ingp2nsvf.py")
 
         j = json.load(open(data_json, "r"))
 
