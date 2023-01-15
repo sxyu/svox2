@@ -185,7 +185,10 @@ you can try `to_svox1.py <ckpt>`
 
 
 Example result with the mip-nerf-360 garden data (using custom_alt config as provided)
-![Overview](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/garden.png)
+![Garden](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/garden.png)
+
+With fox (converted with the script `opt/scripts/ingp2nsvf.py`)
+![Fox](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/fox.png)
 
 ## Potential extensions
 
