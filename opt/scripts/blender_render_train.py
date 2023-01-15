@@ -13,23 +13,19 @@ DEBUG = False
             
 RESOLUTION = 800
 DEPTH_SCALE = 1.4
-COLOR_DEPTH = 8
-# FORMAT = 'OPEN_EXR'
-FORMAT = 'PNG'
+COLOR_DEPTH = 32
+FORMAT = 'OPEN_EXR'
+# FORMAT = 'PNG'
 RANDOM_VIEWS = True
+UPPER_VIEWS = True
+UPPER_VIEWS = True
+
+scene_name = 'lotus'
+out_path = f'/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/train/'
+VIEWS = 100
 
 
-scene_name = 'lego_transparent'
-# data_json = f'/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/transforms_train.json'
-data_json = f'/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/transforms_test.json'
-j = json.load(open(data_json, "r"))
-frames = j['frames']
-VIEWS = len(frames)
-# VIEWS = 1
-
-
-fp = bpy.path.abspath(f"{data_json.replace('transforms_train.json', 'depth_render/')}")
-fp = bpy.path.abspath(f"{data_json.replace('transforms_test.json', 'test/')}")
+fp = bpy.path.abspath(out_path)
 
 
 def listify_matrix(matrix):
@@ -136,8 +132,8 @@ out_data['frames'] = []
 for i in range(0, VIEWS):
     if RANDOM_VIEWS:
         scene.render.filepath = fp + '/r_' + str(i)
-        # b_empty.rotation_euler = np.random.uniform(0, 2*np.pi, size=3)
-        cam.matrix_world = np.array(frames[i]['transform_matrix']).T
+        b_empty.rotation_euler = np.random.uniform(0, 2*np.pi, size=3)
+        # cam.matrix_world = np.array(frames[i]['transform_matrix']).T
     else:
         print("Rotation {}, {}".format((stepsize * i), radians(stepsize * i)))
         scene.render.filepath = fp + '/r_{0:03d}'.format(int(i * stepsize))
@@ -161,8 +157,8 @@ for i in range(0, VIEWS):
     # pdb.set_trace()
 
     if RANDOM_VIEWS:
-        # b_empty.rotation_euler = np.random.uniform(0, 2*np.pi, size=3)
-        cam.matrix_world = np.array(frames[i]['transform_matrix']).T
+        b_empty.rotation_euler = np.random.uniform(0, 2*np.pi, size=3)
+        # cam.matrix_world = np.array(frames[i]['transform_matrix']).T
     else:
         b_empty.rotation_euler[2] += radians(stepsize)
 

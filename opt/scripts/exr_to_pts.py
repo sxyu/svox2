@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import sklearn.neighbors as skln
 
-scene_name = "drums"
+scene_name = "materials"
 
 data_json = f'/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/depth_render/transforms.json'
 j = json.load(open(data_json, "r"))
