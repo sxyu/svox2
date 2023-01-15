@@ -1,10 +1,10 @@
 {
-    "reso": "[[256, 256, 256], [512, 512, 512]]",
+    "reso": "[[128, 128, 128], [256, 256, 256], [512, 512, 512]]",
     "n_iters": 102400,
     "background_nlayers": 64,
     "background_reso": 1024,
     "cam_scale_factor": 0.95,
-    "upsamp_every": 51200,
+    "upsamp_every": 38400,
     "lr_sigma": 3e1,
     "lr_sh": 1e-2,
     "lr_sigma_delay_steps": 35000,

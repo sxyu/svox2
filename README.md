@@ -164,8 +164,10 @@ For custom datasets we adopt a data format similar to that in NSVF
 
 You should be able to use this dataset directly afterwards. The format will be auto-detected.
 
-To view the data use:
+To view the data (and check the scene normalization) use:
 `python view_data.py <img_dir>`
+
+You will need nerfvis: `pip install nerfvis`
 
 This should launch a server at localhost:8889
 
