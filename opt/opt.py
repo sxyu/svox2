@@ -219,7 +219,7 @@ if args.surf_lv_range_decay_type == 'linear':
     surf_lv_range_func = get_linear_lr_func(args.surf_lv_range, 0., lr_delay_steps=args.no_surface_init_iters,
                                 max_steps=args.surf_lv_range_decay_steps)
 elif args.surf_lv_range_decay_type == 'exp':
-    surf_lv_range_func = get_expon_lr_func(args.surf_lv_range, 1e-6, fix_delay_step=args.no_surface_init_iters,
+    surf_lv_range_func = get_expon_lr_func(args.surf_lv_range, 1e-7, fix_delay_step=args.no_surface_init_iters,
                                 max_steps=args.surf_lv_range_decay_steps)
 else:
     # const
