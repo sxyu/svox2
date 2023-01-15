@@ -156,12 +156,10 @@ First make sure you have colmap installed. Then
 Where `<img_dir>` should be a directory directly containing png/jpg images from a 
 normal perspective camera.
 UPDATE: `--noradial` is recommended since otherwise, the script performs undistortion, which seems to not work well and make results blurry.
+Support for the complete OPENCV camera model which has been used by more recent projects would be welcome
+https://github.com/google-research/multinerf/blob/1c8b1c552133cdb2de1c1f3c871b2813f6662265/internal/camera_utils.py#L477.
 For custom datasets we adopt a data format similar to that in NSVF
 <https://github.com/facebookresearch/NSVF>
-
-**Update:** I found that the original release which uses colmap's undistorter made custom scene results much worse. There might be some issue here, but the current version does not use the undistorter.
-Supporting a full OPENCV camera model should be fairly easy, as done in nerfstudio and multi-nerf
-https://github.com/google-research/multinerf/blob/1c8b1c552133cdb2de1c1f3c871b2813f6662265/internal/camera_utils.py#L477
 
 
 You should be able to use this dataset directly afterwards. The format will be auto-detected.
