@@ -8,6 +8,8 @@ Website and video: <https://alexyu.net/plenoxels>
 
 arXiv: <https://arxiv.org/abs/2112.05131>
 
+[Featured at Two Minute Papers YouTube](https://youtu.be/yptwRRpPEBM) 2022-01-11
+
 **Note:** This is a preliminary release. We have not carefully tested everything,
 but feel that it would be better to first put the code out there.
 
@@ -31,6 +33,12 @@ A JAX implementation is also available at <https://github.com/sarafridov/plenoxe
 ![Fast optimization](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/fastopt.gif)
 
 ![Overview](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/pipeline.png)
+
+Please also check out PeRFCeption [Jeong, Shin, Lee, et al], which uses Plenoxels with tuned parameters:
+https://github.com/POSTECH-CVLab/PeRFception
+
+Artistic Radiance Fields by Kai Zhang et al
+https://github.com/Kai-46/ARF-svox2
 
 ## Setup
 
@@ -132,10 +140,11 @@ Please take images all around the object and try to take images at different ele
 First make sure you have colmap installed. Then
 
 (in opt/scripts)
-`bash proc_colmap.sh <img_dir>`
+`bash proc_colmap.sh <img_dir> --noradial`
 
 Where `<img_dir>` should be a directory directly containing png/jpg images from a 
 normal perspective camera.
+UPDATE: `--noradial` is recommended since otherwise, the script performs undistortion, which seems to not work well and make results blurry.
 For custom datasets we adopt a data format similar to that in NSVF
 <https://github.com/facebookresearch/NSVF>
 
@@ -158,7 +167,8 @@ Now follow the "Voxel Optimization (aka Training)" section to train:
 
 custom.json was used for the real lego bulldozer scene.
 You can also try `configs/custom_alt.json` which has some minor differences **especially that near_clip is eliminated**. If the scene's central object is totally messed up, this might be due to the aggressive near clip, and the alt config fixes it.
-You may need to tune the TV for best results.
+
+You may need to tune the TV and sparsity loss for best results.
 
 
 To render a video, please see the "rendering a spiral" section.
