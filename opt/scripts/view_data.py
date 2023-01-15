@@ -372,7 +372,7 @@ def main():
     out_dir = path.join(args.data_dir, "visual")
     scene.add_axes(length=1.0, visible=False)
     scene.add_sphere("Unit Sphere", visible=False)
-    scene.add_cube("Unit Cube", scale=2, visible=False)
+    scene.add_wireframe_cube("Unit Cube", scale=2, visible=False)
     print('WRITING', out_dir)
     scene.display(out_dir, world_up=world_up, cam_origin=origin, cam_center=center, cam_forward=vforward)
 
