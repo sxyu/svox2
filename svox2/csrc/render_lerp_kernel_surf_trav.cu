@@ -359,12 +359,13 @@ __device__ __inline__ void trace_ray_surf_trav(
                                                 _norm_surf(7), ray.pos[2]);
                         const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
                         const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
+                        const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
 
-                        // loop through all level set to find out the minimum dist to surf level set
-                        float fake_sample_dist = INFINITY;
-                        for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
-                            fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < fake_sample_dist ? abs(fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
-                        }
+                        // // loop through all level set to find out the minimum dist to surf level set
+                        // float fake_sample_dist = INFINITY;
+                        // for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
+                        //     fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < fake_sample_dist ? abs(fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
+                        // }
 
                         #undef _norm_surf
 
@@ -1924,13 +1925,14 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         const float ix1y1 = lerp(_norm_surf(6),
                                                 _norm_surf(7), ray.pos[2]);
                         const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
-                        const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
+                        // const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
+                        const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
 
-                        // loop through all level set to find out the minimum dist to surf level set
-                        float fake_sample_dist = INFINITY;
-                        for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
-                            fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < fake_sample_dist ? abs(fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
-                        }
+                        // // loop through all level set to find out the minimum dist to surf level set
+                        // float fake_sample_dist = INFINITY;
+                        // for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
+                        //     fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < fake_sample_dist ? abs(fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
+                        // }
 
                         #undef _norm_surf
 
