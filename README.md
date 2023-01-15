@@ -41,6 +41,8 @@ https://github.com/Kai-46/ARF-svox2
 
 ## Setup
 
+**Windows is not officially supported, and we have only tested with Linux. Adding support would be welcome.**
+
 First create the virtualenv; we recommend using conda:
 ```sh
 conda env create -f environment.yml
@@ -49,15 +51,16 @@ conda activate plenoxel
 
 Then clone the repo and install the library at the root (svox2), which includes a CUDA extension.
 
-If your CUDA toolkit is older than 11, then you will need to install CUB as follows:
+**If and only if** your CUDA toolkit is older than 11, you will need to install CUB as follows:
 `conda install -c bottler nvidiacub`.
-Since CUDA 11, CUB is shipped with the toolkit.
+Since CUDA 11, CUB is shipped with the toolkit and installing this may lead to build errors.
 
 To install the main library, simply run
 ```
 pip install .
 ```
 In the repo root directory.
+
 ## Getting datasets
 
 We have backends for NeRF-Blender, LLFF, NSVF, and CO3D dataset formats, and the dataset will be auto-detected.
