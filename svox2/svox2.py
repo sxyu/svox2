@@ -2378,6 +2378,12 @@ class SparseGrid(nn.Module):
             )[:, :-1]
 
         B_weights = B_alpha * B_T # [B, MS, 3]
+
+        # B_weights_raw = B_weights
+        # B_weights_raw.retain_grad()
+        # start, end = 1, 2
+        # B_weights = torch.concat([B_weights_raw[:, :start].detach().clone(), B_weights_raw[:, start:end], B_weights_raw[:, end:].detach().clone()], dim=-1)
+        
         
         out_rgb = torch.sum(B_weights[...,None] * B_rgb, -2)  # [B, 3]
 
@@ -2408,10 +2414,10 @@ class SparseGrid(nn.Module):
                 torch.clamp_min(B_ts.max(axis=-1, keepdim=True).values - B_ts[:,:1], 1e-8)
             B_nts = B_ts
             
-            # l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
-            #     torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
-            l_dist = (B_alpha[:, :, None] * B_alpha[:, None, :]) * \
+            l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
                 torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
+            # l_dist = (B_alpha[:, :, None] * B_alpha[:, None, :]) * \
+            #     torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
             # l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
             l_dist = l_dist.sum(axis=-1).sum(axis=-1)
             
@@ -2423,9 +2429,11 @@ class SparseGrid(nn.Module):
 
         # computer entropy loss (info nerf)
         if B_weights.numel() > 0:
-            na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
+            na = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-8)
+            l_entropy = torch.where(B_weights > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
 
-            l_entropy = torch.where(B_alpha > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
+            # na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
+            # l_entropy = torch.where(B_alpha > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
             l_entropy = l_entropy.sum(axis=-1).mean()
 
         else:
@@ -2676,7 +2684,7 @@ class SparseGrid(nn.Module):
             lambda_l1 = 1.
             s = F.mse_loss(out['rgb'], torch.zeros_like(out['rgb'])) * lambda_l2 + \
                 torch.abs(out['rgb'] - torch.zeros_like(out['rgb'])).mean() * lambda_l1
-            s += l_dist
+            # s += l_dist
             s += l_entropy
             # s += l_samp_dist
             s.backward()

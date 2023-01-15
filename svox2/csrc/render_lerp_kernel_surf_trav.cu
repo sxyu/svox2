@@ -42,6 +42,7 @@ __device__ __inline__ void trace_ray_surf_trav(
         float* __restrict__ out,
         float* __restrict__ out_log_transmit,
         int const l_dist_max_sample,
+        float* __restrict__ sample_alphas,
         float* __restrict__ sample_weights,
         float* __restrict__ sample_ts
         ) {
@@ -285,7 +286,8 @@ __device__ __inline__ void trace_ray_surf_trav(
                     // save weights and sample dist for l_dist gradient
                     if ((lane_id==0) && (sample_weights != nullptr) && (sample_i < l_dist_max_sample)){
                         // save alpha for now
-                        sample_weights[sample_i] = alpha;
+                        sample_alphas[sample_i] = alpha;
+                        sample_weights[sample_i] = weight;
                         sample_ts[sample_i] = t_close + st[j];
                         sample_i += 1;
                         // printf("Intersection at: %f\n",  t_close + st[j]);
@@ -1347,6 +1349,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         float const lambda_l_entropy,
         float const lambda_l_samp_dist, // l_samp_dist = |weighted_avg(Di, wi) - Di| 
         int const l_dist_max_sample,
+        float* __restrict__ const sample_alphas,
         float* __restrict__ const sample_weights,
         float* __restrict__ const sample_ts,
         PackedGridOutputGrads& __restrict__ grads,
@@ -1370,7 +1373,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     float Den_Dwsum = 0.f;
     float sample_t_mean = 0.f;
     for (int i=0; i<l_dist_max_sample; ++i){
-        Den_Dwsum += sample_weights[i] * (__logf(max(sample_weights[i], 1e-8)/sample_weight_sum) + 1.f) / _SQR(sample_weight_sum);
+        Den_Dwsum += sample_weights[i] * (_LOG(max(sample_weights[i], 1e-8)/sample_weight_sum) + 1.f) / _SQR(sample_weight_sum);
         sample_t_mean += sample_weights[i] / sample_weight_sum * sample_ts[i];
 
     }
@@ -1619,7 +1622,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
 
-                    const float  pcnt = -1 * _LOG(1 - alpha);
+                    const float  pcnt = -_LOG(1 - alpha);
                     const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
                     
 
@@ -1659,6 +1662,39 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     accum -= weight * total_color;
                     // compute d_mse/d_alpha_i
                     float  curr_grad_alpha = accum / min(alpha-1.f, -1e-9f) + total_color * _EXP(log_transmit); 
+
+                    // // add grad to alpha from l_dist -- weight version
+                    // float l_dist_grad_alpha = 0.;
+                    // for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                    //     // // skip non-intersection
+                    //     // if (sample_ts[sample_j] == 0.f) continue;
+                    //     l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                    // }
+                    // curr_grad_alpha += lambda_l_dist * l_dist_grad_alpha * log_transmit;
+                    // // if (lane_id == 0) printf("grad l_dist to alpha: %f\n", lambda_l_dist * l_dist_grad_alpha * log_transmit);
+
+
+
+                    // add grad to alpha from l_entropy -- weight version
+                    float const Den_Dwi_ = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                    float Den_Dai = (Den_Dwi_ + Den_Dwsum) * _EXP(log_transmit);
+
+                    float log_Tj_ = log_transmit; // log(T_i)
+
+                    for (int sample_j=sample_i+1; sample_j <valid_sample_n; ++sample_j){
+                        float const Den_Dwj = -(_LOG(max(sample_weights[sample_j], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                        log_Tj_ += _LOG(1.f-sample_alphas[sample_j-1]); // log(T_j)
+                        Den_Dai += (Den_Dwj + Den_Dwsum) * _EXP(log_Tj_) * sample_alphas[sample_j] / (alpha-1.f);
+                    }
+                    curr_grad_alpha += lambda_l_entropy * Den_Dai; // note Dwsum_Dwi is always 1
+
+                    // if (lane_id == 0) printf("sample_weights[sample_i]: %f\n", sample_weights[sample_i]);
+                    // if (lane_id == 0) printf("grad l_entropy to weight: %f\n", lambda_l_entropy * (Den_Dwi_ + Den_Dwsum));
+                    // if (lane_id == 0) printf("grad l_entropy to alpha: %f\n\n", Den_Dai);
+
+                    ASSERT_NUM(curr_grad_alpha);
+                    
+
                     log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
                     // if (sparsity_loss > 0.f) {
                     //     // Cauchy version (from SNeRG)
@@ -1709,26 +1745,26 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     if (lane_id == 0) {
 
-                        // add grad to alpha from l_dist
-                        float l_dist_grad_alpha = 0.;
-                        for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
-                            // // skip non-intersection
-                            // if (sample_ts[sample_j] == 0.f) continue;
-                            l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
-                        }
-                        curr_grad_alpha += lambda_l_dist * l_dist_grad_alpha;
+                        // // add grad to alpha from l_dist
+                        // float l_dist_grad_alpha = 0.;
+                        // for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                        //     // // skip non-intersection
+                        //     // if (sample_ts[sample_j] == 0.f) continue;
+                        //     l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                        // }
+                        // curr_grad_alpha += lambda_l_dist * l_dist_grad_alpha;
 
-                        // add grad to alpha from l_entropy
-                        float const Den_Dwi = -(__logf(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                        curr_grad_alpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
+                        // // add grad to alpha from l_entropy
+                        // float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                        // curr_grad_alpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
                         
-                        if (sparsity_loss > 0.f) {
-                            // // Log Alpha version
-                            // curr_grad_alpha += sparsity_loss / max(alpha, 1e-8);
+                        // if (sparsity_loss > 0.f) {
+                        //     // // Log Alpha version
+                        //     // curr_grad_alpha += sparsity_loss / max(alpha, 1e-8);
 
-                            // L1 version
-                            curr_grad_alpha += sparsity_loss;
-                        }
+                        //     // L1 version
+                        //     curr_grad_alpha += sparsity_loss;
+                        // }
                         
                         // compute gradient for activation
                         float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
@@ -1953,6 +1989,24 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         accum -= weight * total_color_fs;
                         // compute d_mse/d_rwalpha_i (reweighted alpha)
                         float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-9f) + total_color_fs * _EXP(log_transmit); 
+
+                        if (opt.fake_sample_l_dist){
+                            // add grad to alpha from l_dist -- weight version
+                            float l_dist_grad_alpha = 0.;
+                            for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                                // // skip non-intersection
+                                // if (sample_ts[sample_j] == 0.f) continue;
+                                l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                            }
+                            curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha * log_transmit;
+
+                            // add grad to alpha from l_entropy -- weight version
+                            float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                            curr_grad_rwalpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum) * log_transmit; // note Dwsum_Dwi is always 1
+
+                            sample_i += 1;
+                            // note that for fake sample, we don't have grad to st
+                        }
                         log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
 
 
@@ -1987,23 +2041,23 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
 
                         if (lane_id == 0) {
-                            if (opt.fake_sample_l_dist){
-                                // add grad to alpha from l_dist
-                                float l_dist_grad_alpha = 0.;
-                                for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
-                                    // // skip non-intersection
-                                    // if (sample_ts[sample_j] == 0.f) continue;
-                                    l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
-                                }
-                                curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
+                            // if (opt.fake_sample_l_dist){
+                            //     // add grad to alpha from l_dist
+                            //     float l_dist_grad_alpha = 0.;
+                            //     for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                            //         // // skip non-intersection
+                            //         // if (sample_ts[sample_j] == 0.f) continue;
+                            //         l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                            //     }
+                            //     curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
 
-                                // add grad to alpha from l_entropy
-                                float const Den_Dwi = -(__logf(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                                curr_grad_rwalpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
+                            //     // add grad to alpha from l_entropy
+                            //     float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                            //     curr_grad_rwalpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
 
-                                sample_i += 1;
-                                // note that for fake sample, we don't have grad to st
-                            }
+                            //     sample_i += 1;
+                            //     // note that for fake sample, we don't have grad to st
+                            // }
 
                             if (sparsity_loss > 0.f) {
                                 // // Log Alpha version
@@ -2397,6 +2451,7 @@ __global__ void render_ray_kernel(
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> out,
         float* __restrict__ log_transmit_out,
         int const l_dist_max_sample,
+        torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_alphas,
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
         torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_ts
         ) {
@@ -2437,6 +2492,7 @@ __global__ void render_ray_kernel(
         // sample_weights == nullptr ? nullptr : sample_weights[ray_id].data(),
         // sample_ts == nullptr ? nullptr : sample_ts[ray_id].data()
         l_dist_max_sample,
+        sample_alphas[ray_id].data(),
         sample_weights[ray_id].data(),
         sample_ts[ray_id].data()
         );
@@ -2485,6 +2541,7 @@ __global__ void render_ray_image_kernel(
         log_transmit_out == nullptr ? nullptr : log_transmit_out + ray_id,
         0,
         nullptr,
+        nullptr,
         nullptr);
 }
 
@@ -2508,6 +2565,7 @@ __global__ void render_ray_backward_kernel(
     float lambda_l_entropy,
     float lambda_l_samp_dist,
     int l_dist_max_sample,
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_alphas,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_ts,
     PackedGridOutputGrads grads,
@@ -2582,6 +2640,7 @@ __global__ void render_ray_backward_kernel(
         lambda_l_entropy,
         lambda_l_samp_dist,
         l_dist_max_sample,
+        sample_alphas[ray_id].data(),
         sample_weights[ray_id].data(),
         sample_ts[ray_id].data(),
         grads,
@@ -2823,8 +2882,10 @@ torch::Tensor volume_render_surf_trav(SparseGridSpec& grid, RaysSpec& rays, Rend
         .layout(torch::kStrided)
         .device(rays.origins.device())
         .requires_grad(false);
+    torch::Tensor sample_alphas;
     torch::Tensor sample_weights;
     torch::Tensor sample_ts;
+    sample_alphas = torch::zeros({rays.origins.size(0), 0}, options);
     sample_weights = torch::zeros({rays.origins.size(0), 0}, options);
     sample_ts = torch::zeros({rays.origins.size(0), 0}, options);
 
@@ -2837,6 +2898,7 @@ torch::Tensor volume_render_surf_trav(SparseGridSpec& grid, RaysSpec& rays, Rend
                 results.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 use_background ? log_transmit.data_ptr<float>() : nullptr,
                 0,
+                sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>()
                 );
@@ -2937,8 +2999,10 @@ void volume_render_surf_trav_backward(
         .layout(torch::kStrided)
         .device(rays.origins.device())
         .requires_grad(false);
+    torch::Tensor sample_alphas;
     torch::Tensor sample_weights;
     torch::Tensor sample_ts;
+    sample_alphas = torch::zeros({rays.origins.size(0), 0}, options);
     sample_weights = torch::zeros({rays.origins.size(0), 0}, options);
     sample_ts = torch::zeros({rays.origins.size(0), 0}, options);
 
@@ -2964,6 +3028,7 @@ void volume_render_surf_trav_backward(
                     0.f,
                     0.f,
                     0,
+                    sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     // Output
@@ -3035,8 +3100,10 @@ void volume_render_surf_trav_fused(
         .layout(torch::kStrided)
         .device(rays.origins.device())
         .requires_grad(false);
+    torch::Tensor sample_alphas;
     torch::Tensor sample_weights;
     torch::Tensor sample_ts;
+    sample_alphas = torch::zeros({rays.origins.size(0), l_dist_max_sample}, options);
     sample_weights = torch::zeros({rays.origins.size(0), l_dist_max_sample}, options);
     sample_ts = torch::zeros({rays.origins.size(0), l_dist_max_sample}, options);
 
@@ -3049,6 +3116,7 @@ void volume_render_surf_trav_fused(
                 rgb_out.packed_accessor32<float, 2, torch::RestrictPtrTraits>(), // <dtype, dim, __restrict__>
                 need_log_transmit ? log_transmit.data_ptr<float>() : nullptr,
                 l_dist_max_sample,
+                sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>()
                 );
@@ -3084,6 +3152,7 @@ void volume_render_surf_trav_fused(
                 lambda_l_entropy / Q,
                 lambda_l_samp_dist / Q,
                 l_dist_max_sample,
+                sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_ts.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 // Output
