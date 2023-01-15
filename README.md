@@ -190,12 +190,24 @@ Example result with the mip-nerf-360 garden data (using custom_alt config as pro
 With fox (converted with the script `opt/scripts/ingp2nsvf.py`)
 ![Fox](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/fox.png)
 
+### Common Capture Tips
+
+Floaters and poor quality surfaces can be caused by the following reasons
+
+- Dynamic objects. Dynamic object modelling is not done in this repo, and if anything moves it will probably lead to floaters
+- Specularity. Very shiny surfaces will lead to floaters and/or poor surface artifacts 
+- Exposure variations. Please lock the exposure when recording a video if possible
+- Lighting variations. Sometimes the clouds move when capturing outdoors.. Try to capture within a short time frame
+- Motion blur and DoF blur. Do not move too fast and make sure the object is in focus. For small objects, DoF tends to be a substantial issue
+- Image quality. Check if your images have severe compression artifacts for example
+
 ## Potential extensions
 
 Due to limited time we did not make the follow extensions which should make the quality  and speed better.
 
 - Use exp activation instead of ReLU. May help with the semi-transparent look issue
 - Add mip-nerf 360 distortion loss to reduce floaters. PeRFCeption also tuned some parameters to help with the quality
+- Exposure modelling
 - Use FP16 training. This codebase uses FP32 still. This should improve speed and memory use
 - Add a GUI viewer
 
