@@ -187,19 +187,19 @@ you can try `to_svox1.py <ckpt>`
 Example result with the mip-nerf-360 garden data (using custom_alt config as provided)
 ![Garden](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/garden.png)
 
-With fox (converted with the script `opt/scripts/ingp2nsvf.py`)
+Fox data (converted with the script `opt/scripts/ingp2nsvf.py`)
 ![Fox](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/fox.png)
 
 ### Common Capture Tips
 
 Floaters and poor quality surfaces can be caused by the following reasons
 
-- Dynamic objects. Dynamic object modelling is not done in this repo, and if anything moves it will probably lead to floaters
-- Specularity. Very shiny surfaces will lead to floaters and/or poor surface artifacts 
+- Dynamic objects. Dynamic object modelling is not supported in this repo, and if anything moves it will probably lead to floaters
+- Specularity. Very shiny surfaces will lead to floaters and/or poor surfaces
 - Exposure variations. Please lock the exposure when recording a video if possible
 - Lighting variations. Sometimes the clouds move when capturing outdoors.. Try to capture within a short time frame
-- Motion blur and DoF blur. Do not move too fast and make sure the object is in focus. For small objects, DoF tends to be a substantial issue
-- Image quality. Check if your images have severe compression artifacts for example
+- Motion blur and DoF blur. Try to move slowly and make sure the object is in focus. For small objects, DoF tends to be a substantial issue
+- Image quality. Images may have severe JPEG compression artifacts for example
 
 ## Potential extensions
 
