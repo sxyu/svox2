@@ -34,6 +34,12 @@ A JAX implementation is also available at <https://github.com/sarafridov/plenoxe
 
 ![Overview](https://raw.githubusercontent.com/sxyu/svox2/master/github_img/pipeline.png)
 
+Please also check out PeRFCeption [Jeong, Shin, Lee, et al], which uses Plenoxels with tuned parameters:
+https://github.com/POSTECH-CVLab/PeRFception
+
+Artistic Radiance Fields by Kai Zhang et al
+https://github.com/Kai-46/ARF-svox2
+
 ## Setup
 
 First create the virtualenv; we recommend using conda:
@@ -134,10 +140,11 @@ Please take images all around the object and try to take images at different ele
 First make sure you have colmap installed. Then
 
 (in opt/scripts)
-`bash proc_colmap.sh <img_dir>`
+`bash proc_colmap.sh <img_dir> --noradial`
 
 Where `<img_dir>` should be a directory directly containing png/jpg images from a 
 normal perspective camera.
+UPDATE: `--noradial` is recommended since otherwise, the script performs undistortion, which seems to not work well and make results blurry.
 For custom datasets we adopt a data format similar to that in NSVF
 <https://github.com/facebookresearch/NSVF>
 
@@ -154,7 +161,7 @@ Now follow the "Voxel Optimization (aka Training)" section to train:
 `./launch.sh <exp_name> <GPU_id> <data_dir> -c configs/custom.json`
 
 You can also try `configs/custom_alt.json` which has some minor differences.
-You may need to tune the TV for best results.
+You may need to tune the TV and sparsity loss for best results.
 
 To render a video, please see the "rendering a spiral" section.
 To convert to a svox1-compatible PlenOctree (not perfect quality since interpolation is not implemented)
