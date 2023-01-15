@@ -320,15 +320,6 @@ __device__ __inline__ void trace_ray_surf_trav(
                         ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
                         ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
 
-                        // if ((!(ray.pos[k] >= 0.f)) || (!(ray.pos[k] <= 1.f)) ){
-                        //     printf("t_far: %f\n", t_far);
-                        //     printf("t_close: %f\n", t_close);
-                        //     printf("ray_l_k: %d\n", ray.l[k]);
-                        //     printf("ray_pos_k: %f\n", ray.pos[k]);
-                        // }
-                        
-                        // assert(ray.pos[k] <= 1.f);
-                        // assert(ray.pos[k] >= 0.f);
                     }
 
                     float alpha = trilerp_cuvol_one(
@@ -367,7 +358,13 @@ __device__ __inline__ void trace_ray_surf_trav(
                         const float ix1y1 = lerp(_norm_surf(6),
                                                 _norm_surf(7), ray.pos[2]);
                         const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
-                        const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
+                        const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
+
+                        // loop through all level set to find out the minimum dist to surf level set
+                        float fake_sample_dist = INFINITY;
+                        for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
+                            fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < fake_sample_dist ? abs(fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
+                        }
 
                         #undef _norm_surf
 
@@ -1623,7 +1620,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
 
-                    const float  pcnt = -_LOG(1 - alpha);
+                    const float  pcnt = -_LOG(max(1.f - alpha, 1e-8));
                     const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
                     
 
@@ -1662,7 +1659,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
                     accum -= weight * total_color;
                     // compute d_mse/d_alpha_i
-                    float  curr_grad_alpha = accum / min(alpha-1.f, -1e-9f) + total_color * _EXP(log_transmit); 
+                    float  curr_grad_alpha = accum / min(alpha-1.f, -1e-8f) + total_color * _EXP(log_transmit); 
 
                     // // add grad to alpha from l_dist -- weight version
                     // float l_dist_grad_alpha = 0.;
@@ -1675,25 +1672,29 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     // // if (lane_id == 0) printf("grad l_dist to alpha: %f\n", lambda_l_dist * l_dist_grad_alpha * log_transmit);
 
 
+                    ASSERT_NUM(curr_grad_alpha);
 
                     // add grad to alpha from l_entropy -- weight version
                     float const Den_Dwi_ = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                    // ASSERT_NUM(Den_Dwi_);
                     float Den_Dai = (Den_Dwi_ + Den_Dwsum) * _EXP(log_transmit);
+                    // ASSERT_NUM(Den_Dai);
 
                     float log_Tj_ = log_transmit; // log(T_i)
+                    // ASSERT_NUM(log_Tj_);
 
                     for (int sample_j=sample_i+1; sample_j <valid_sample_n; ++sample_j){
                         float const Den_Dwj = -(_LOG(max(sample_weights[sample_j], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                        log_Tj_ += _LOG(1.f-sample_alphas[sample_j-1]); // log(T_j)
-                        Den_Dai += (Den_Dwj + Den_Dwsum) * _EXP(log_Tj_) * sample_alphas[sample_j] / (alpha-1.f);
+                        log_Tj_ += _LOG(max(1.f-sample_alphas[sample_j-1], 1e-8)); // log(T_j)
+                        Den_Dai += (Den_Dwj + Den_Dwsum) * _EXP(log_Tj_) * sample_alphas[sample_j] / min(alpha-1.f, -1e-8f);
                     }
                     curr_grad_alpha += lambda_l_entropy * Den_Dai; // note Dwsum_Dwi is always 1
+                    ASSERT_NUM(curr_grad_alpha);
 
                     // if (lane_id == 0) printf("sample_weights[sample_i]: %f\n", sample_weights[sample_i]);
                     // if (lane_id == 0) printf("grad l_entropy to weight: %f\n", lambda_l_entropy * (Den_Dwi_ + Den_Dwsum));
                     // if (lane_id == 0) printf("grad l_entropy to alpha: %f\n\n", Den_Dai);
 
-                    ASSERT_NUM(curr_grad_alpha);
                     
 
                     log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
@@ -1923,7 +1924,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         const float ix1y1 = lerp(_norm_surf(6),
                                                 _norm_surf(7), ray.pos[2]);
                         const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
-                        const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
+                        const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
+
+                        // loop through all level set to find out the minimum dist to surf level set
+                        float fake_sample_dist = INFINITY;
+                        for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
+                            fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < fake_sample_dist ? abs(fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
+                        }
 
                         #undef _norm_surf
 
@@ -1945,7 +1952,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                         // backward gradient computation
                         float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
-                        const float  pcnt = -1 * _LOG(1 - rw_alpha);
+                        const float  pcnt = -1 * _LOG(max(1.f - rw_alpha, 1e-8));
                         const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
                         
 
@@ -1989,7 +1996,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
                         accum -= weight * total_color_fs;
                         // compute d_mse/d_rwalpha_i (reweighted alpha)
-                        float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-9f) + total_color_fs * _EXP(log_transmit); 
+                        float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-8f) + total_color_fs * _EXP(log_transmit); 
 
                         if (opt.fake_sample_l_dist){
                             // // add grad to alpha from l_dist -- weight version
@@ -2009,7 +2016,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                             for (int sample_j=sample_i+1; sample_j <valid_sample_n; ++sample_j){
                                 float const Den_Dwj = -(_LOG(max(sample_weights[sample_j], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                                log_Tj_ += _LOG(1.f-sample_alphas[sample_j-1]); // log(T_j)
+                                log_Tj_ += _LOG(max(1.f-sample_alphas[sample_j-1], 1e-8)); // log(T_j)
                                 Den_Dai += (Den_Dwj + Den_Dwsum) * _EXP(log_Tj_) * sample_alphas[sample_j] / (rw_alpha-1.f);
                             }
                             curr_grad_rwalpha += lambda_l_entropy * Den_Dai; // note Dwsum_Dwi is always 1
