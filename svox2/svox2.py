@@ -2319,7 +2319,8 @@ class SparseGrid(nn.Module):
             c1 = c10 * wa[fake_sample_ids, 1:2] + c11 * wb[fake_sample_ids, 1:2]
             surface_scalar = c0 * wa[fake_sample_ids, :1] + c1 * wb[fake_sample_ids, :1]
 
-            surface_scalar = surface_scalar[:,0] - lv_sets # SDF-like values
+            # surface_scalar = surface_scalar[:,0] - lv_sets # SDF-like values
+            surface_scalar = torch.abs(surface_scalar - self.level_set_data).min(axis=-1).values # SDF-like values
 
             alpha_before_rw = alpha
 
