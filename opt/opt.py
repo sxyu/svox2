@@ -244,6 +244,42 @@ if args.enable_random:
 if args.lambda_tv > 0.0 and args.surface_type in ['udf_alpha']:
     raise NotImplementedError(f'Surface type [{args.surface_type}] must not use density tv!')
 
+
+if args.load_pretrain_density_sh is not None:
+    pretrained_ckpt_path = path.join(args.load_pretrain_density_sh, 'ckpt.npz') if os.path.isdir(args.load_pretrain_density_sh) else \
+        args.load_pretrain_density_sh
+    
+    print(f'Loading density & SH from ckpt: {pretrained_ckpt_path}')
+
+    z = np.load(pretrained_ckpt_path, allow_pickle=True)
+    sh_data = z.f.sh_data
+    density_data = z.f.density_data
+    links = z.f.links
+    sh_data = torch.from_numpy(sh_data.astype(np.float32)).to(device=device)
+    density_data = torch.from_numpy(density_data.astype(np.float32)).to(device=device)
+    grid.sh_data.data = sh_data
+    grid.density_data.data = density_data
+
+    grid.links = torch.from_numpy(links).to(device=device)
+    grid.capacity = grid.sh_data.size(0)
+    grid.accelerate()
+
+
+    grid.init_surface_from_density(
+        alpha_lv_sets=args.alpha_lv_sets,
+        reset_alpha=args.surface_init_reset_alpha,
+        alpha_rescale=args.surf_init_alpha_rescale,
+        surface_rescale=args.surface_init_rescale,
+        reset_all=args.surf_init_reset_all,
+        prune_threshold=args.alpha_lv_sets / 2,
+        surf_lv_range=args.surf_lv_range,
+        surf_lv_num=args.surf_lv_num
+        )
+
+    # reset opt for surface rendering
+    config_util.setup_render_opts(grid.opt, args)
+    print(grid.opt)
+
 epoch_id = -1
 while True:
     dset.shuffle_rays()
