@@ -182,13 +182,17 @@ __device__ __inline__ void trace_ray_surf_trav(
         // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
         surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
 
+        bool vox_has_sample = false;
+        bool vox_has_surf = false;
+
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8);
         for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
-            // if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
-            //     continue;
-            // }
-            // float const f0_lv = f0 - lv_set;
+            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+                continue;
+            }
+
+            vox_has_surf = true;
 
             // probably better ways to find roots
             // https://stackoverflow.com/questions/4906556/what-is-a-simple-way-to-find-real-roots-of-a-cubic-polynomial
@@ -200,32 +204,27 @@ __device__ __inline__ void trace_ray_surf_trav(
             double st[3] = {-1, -1, -1}; // sample t
             // note that it's now distance from new origin to intersections
 
-            if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
-                // only solve for cubic if we know there is a root
-                // cubic_equation_solver(
-                //     fs[0] - lv_set, fs[1], fs[2], fs[3],
-                //     1e-8, // float eps
-                //     1e-10, // double eps
-                //     st
-                //     );
-                cubic_equation_solver_vieta(
-                    fs[0] - lv_set, fs[1], fs[2], fs[3],
-                    1e-8, // float eps
-                    1e-10, // double eps
-                    st
-                    );
-            } else {
-                // No valid surface present in voxel
-                // if we don't use fake sample, then skip
+            // cubic_equation_solver(
+            //     fs[0] - lv_set, fs[1], fs[2], fs[3],
+            //     1e-8, // float eps
+            //     1e-10, // double eps
+            //     st
+            //     );
+            cubic_equation_solver_vieta(
+                fs[0] - lv_set, fs[1], fs[2], fs[3],
+                1e-8, // float eps
+                1e-10, // double eps
+                st
+                );
 
-                if ((!opt.surf_fake_sample) || (opt.surf_fake_sample && opt.limited_fake_sample)){
-                    continue;
-                }
-            }
+            // if (lane_id == 0){
+            //     printf("==========\n");
+            //     printf("voxel with surf: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+            //     printf("st:[%f, %f, %f]\n", st[0], st[1], st[2]);
+            //     printf("level_set:[%f]\n", lv_set);
+            //     printf("fs:[%f, %f, %f, %f]\n", fs[0] - lv_set, fs[1], fs[2], fs[3]);
+            // }
 
-
-            bool has_sample = false;
-            
             ////////////// TRILINEAR INTERPOLATE //////////////
             for (int j=0; j < 3; ++j){
                 if (st[j] <= 0){
@@ -253,7 +252,13 @@ __device__ __inline__ void trace_ray_surf_trav(
                     continue;
                 }
 
-                has_sample = true;
+                // if (lane_id == 0){
+                //     printf("==========\n");
+                //     printf("taking real sample for: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+                //     printf("st:[%f, %f, %f]\n", st[0], st[1], st[2]);
+                // }
+
+                vox_has_sample = true;
                 float alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
@@ -296,126 +301,128 @@ __device__ __inline__ void trace_ray_surf_trav(
             }
 
 
-            ////// FAKE SAMPLEING //////
-            if ((!has_sample) && (opt.surf_fake_sample)){
-                // there is no intersection between ray and surface
-                // take fake sample if allowed
+        }
 
 
-                // if (lane_id == 0){
-                //     printf("==========\n");
-                //     printf("taking fake sample for: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
-                // }
-
-                // https://math.stackexchange.com/questions/967268/finding-the-closest-distance-between-a-point-a-curve
-                
+        ////// FAKE SAMPLEING //////
+        if ((opt.surf_fake_sample) && (!vox_has_sample) && ((!opt.limited_fake_sample) || (vox_has_surf))){
+            // there is no intersection between ray and surface
+            // take fake sample if allowed
 
 
+            // if (lane_id == 0){
+            //     printf("==========\n");
+            //     printf("taking fake sample for: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+            // }
 
-                if ((t_far - t_close) > opt.surf_fake_sample_min_vox_len){
+            // https://math.stackexchange.com/questions/967268/finding-the-closest-distance-between-a-point-a-curve
+            
+
+
+
+            if ((t_far - t_close) > opt.surf_fake_sample_min_vox_len){
 #pragma unroll 3
-                    for (int k=0; k < 3; ++k){
-                        // assert(!isnan(st[j]));
-                        ray.pos[k] = fmaf((t_far + t_close) / 2.f, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
-                        ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
-                        ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
-
-                    }
-
-                    float alpha = trilerp_cuvol_one(
-                            grid.links, grid.density_data,
-                            grid.stride_x,
-                            grid.size[2],
-                            1,
-                            ray.l, ray.pos,
-                            0);
-
-                    if (alpha > opt.sigma_thresh) {
-                        alpha = surf_alpha_act(alpha, opt.alpha_activation_type);
-
-                        // use distance to surface to re-weight alpha
-                        // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
-                        // Estimate distance between sample to closest surface
-                        // Currently, it's done by normalizing surface scalars by their std, then trilerping
-
-                        double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
-                        double surf_std = sqrtf(
-                            max(1e-9f, 
-                            (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
-                            )
-                        );
-
-                        if (!opt.fake_sample_normalize_surf) surf_std = 1.;
-
-                        // tri-lerp to get distance
-
-                        #define _norm_surf(x) (static_cast<float>(surface[x] / surf_std))
-
-                        const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
-                        const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
-                        const float ix0 = lerp(ix0y0, ix0y1, ray.pos[1]);
-                        const float ix1y0 = lerp(_norm_surf(4), _norm_surf(5), ray.pos[2]);
-                        const float ix1y1 = lerp(_norm_surf(6),
-                                                _norm_surf(7), ray.pos[2]);
-                        const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
-                        const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
-                        // const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
-
-                        // loop through all level set to find out the minimum dist to surf level set
-                        float fake_sample_dist = INFINITY;
-                        for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
-                            fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < abs(fake_sample_dist) ? (fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
-                        }
-
-                        #undef _norm_surf
-
-
-                        // if (lane_id == 0){
-                        //     printf("surf miu: [%f]\n", surf_miu);
-                        //     printf("surf std: [%f]\n", surf_std);
-                        //     printf("fake_sample_dist: [%f]\n", fake_sample_dist);
-                        // }
-
-                        
-                        // re-weight alpha using a simple gaussian
-                        alpha = alpha * _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
-
-
-                        float lane_color = trilerp_cuvol_one(
-                                        grid.links,
-                                        grid.sh_data,
-                                        grid.stride_x,
-                                        grid.size[2],
-                                        grid.sh_data_dim,
-                                        ray.l, ray.pos, lane_id);
-                        lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
-
-                        // const float pcnt = ray.world_step * sigma;
-                        const float pcnt = -1 * _LOG(1 - alpha);
-                        const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
-                        log_transmit -= pcnt; // log_trans = sum(log(1-alpha)) = log(prod(1-alpha))
-                        // log_transmit is now T_{i+1}
-
-                        float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                                    lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
-                        outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
-
-                        // save weights and sample dist for l_dist gradient
-                        if ((lane_id==0) && (sample_weights != nullptr) && (sample_i < l_dist_max_sample) && (opt.fake_sample_l_dist)){
-                            // save alpha for now
-                            sample_alphas[sample_i] = alpha;
-                            sample_weights[sample_i] = weight;
-                            sample_ts[sample_i] = (t_far + t_close) / 2.f;
-                            sample_i += 1;
-                        }
-                    }
+                for (int k=0; k < 3; ++k){
+                    // assert(!isnan(st[j]));
+                    ray.pos[k] = fmaf((t_far + t_close) / 2.f, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
+                    ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
 
                 }
 
-                
+                float alpha = trilerp_cuvol_one(
+                        grid.links, grid.density_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        1,
+                        ray.l, ray.pos,
+                        0);
+
+                if (alpha > opt.sigma_thresh) {
+                    alpha = surf_alpha_act(alpha, opt.alpha_activation_type);
+
+                    // use distance to surface to re-weight alpha
+                    // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
+                    // Estimate distance between sample to closest surface
+                    // Currently, it's done by normalizing surface scalars by their std, then trilerping
+
+                    double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
+                    double surf_std = sqrtf(
+                        max(1e-9f, 
+                        (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
+                        )
+                    );
+
+                    if (!opt.fake_sample_normalize_surf) surf_std = 1.;
+
+                    // tri-lerp to get distance
+
+                    #define _norm_surf(x) (static_cast<float>(surface[x] / surf_std))
+
+                    const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
+                    const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
+                    const float ix0 = lerp(ix0y0, ix0y1, ray.pos[1]);
+                    const float ix1y0 = lerp(_norm_surf(4), _norm_surf(5), ray.pos[2]);
+                    const float ix1y1 = lerp(_norm_surf(6),
+                                            _norm_surf(7), ray.pos[2]);
+                    const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
+                    const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
+                    // const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
+
+                    // loop through all level set to find out the minimum dist to surf level set
+                    float fake_sample_dist = INFINITY;
+                    for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
+                        fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < abs(fake_sample_dist) ? (fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
+                    }
+
+                    #undef _norm_surf
+
+
+                    // if (lane_id == 0){
+                    //     printf("surf miu: [%f]\n", surf_miu);
+                    //     printf("surf std: [%f]\n", surf_std);
+                    //     printf("fake_sample_dist: [%f]\n", fake_sample_dist);
+                    // }
+
+                    
+                    // re-weight alpha using a simple gaussian
+                    alpha = alpha * _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
+
+
+                    float lane_color = trilerp_cuvol_one(
+                                    grid.links,
+                                    grid.sh_data,
+                                    grid.stride_x,
+                                    grid.size[2],
+                                    grid.sh_data_dim,
+                                    ray.l, ray.pos, lane_id);
+                    lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
+
+                    // const float pcnt = ray.world_step * sigma;
+                    const float pcnt = -1 * _LOG(1 - alpha);
+                    const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+                    log_transmit -= pcnt; // log_trans = sum(log(1-alpha)) = log(prod(1-alpha))
+                    // log_transmit is now T_{i+1}
+
+                    float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
+                                                lane_color, lane_colorgrp_id == 0); // segment lanes into RGB channel, them sum
+                    outv += weight * fmaxf(lane_color_total + 0.5f, 0.f);  // Clamp to [+0, infty)
+
+                    // save weights and sample dist for l_dist gradient
+                    if ((lane_id==0) && (sample_weights != nullptr) && (sample_i < l_dist_max_sample) && (opt.fake_sample_l_dist)){
+                        // save alpha for now
+                        sample_alphas[sample_i] = alpha;
+                        sample_weights[sample_i] = weight;
+                        sample_ts[sample_i] = (t_far + t_close) / 2.f;
+                        sample_i += 1;
+                    }
+                }
+
             }
 
+            
         }
+
 
         if (_EXP(log_transmit) < opt.stop_thresh) {
             log_transmit = -1e3f;
@@ -1535,14 +1542,17 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
         double const fs0_original = fs[0];
 
-
+        bool vox_has_sample = false;
+        bool vox_has_surf = false;
         
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); 
         for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
-            // if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
-            //     continue;
-            // }
+            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+                continue;
+            }
+
+            vox_has_surf = true;
 
             fs[0] = fs0_original - lv_set;
 
@@ -1551,30 +1561,19 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
             enum BasisType cubic_root_type;
 
-            if ((lv_set >= *mnmax.first) && (lv_set <= *mnmax.second)){
-                // only solve for cubic if we know there is a root
-                // cubic_root_type = cubic_equation_solver(
-                //     fs[0], fs[1], fs[2], fs[3],
-                //     1e-8, // float eps
-                //     1e-10, // double eps
-                //     st
-                //     );
-                cubic_root_type = cubic_equation_solver_vieta(
-                    fs[0], fs[1], fs[2], fs[3],
-                    1e-8, // float eps
-                    1e-10, // double eps
-                    st
-                    );
-            } else {
-                // No valid surface present in voxel
-                // if we don't use fake sample, then skip
-                if ((!opt.surf_fake_sample) || (opt.surf_fake_sample && opt.limited_fake_sample)){
-                    continue;
-                }
-            }
+            // cubic_root_type = cubic_equation_solver(
+            //     fs[0], fs[1], fs[2], fs[3],
+            //     1e-8, // float eps
+            //     1e-10, // double eps
+            //     st
+            //     );
+            cubic_root_type = cubic_equation_solver_vieta(
+                fs[0], fs[1], fs[2], fs[3],
+                1e-8, // float eps
+                1e-10, // double eps
+                st
+                );
             
-
-            bool has_sample = false;
 
             ////////////// TRILINEAR INTERPOLATE //////////////
             for (int st_id=0; st_id < 3; ++st_id){
@@ -1599,7 +1598,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                 // if (lane_id==0) printf("backpass intersection at: %f\n",  t_close + st[st_id]);
 
-                has_sample = true;
+                vox_has_sample = true;
                 float const  raw_alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
@@ -1859,363 +1858,359 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
             }
         
-            ///////////// FAKE SAMPLE GRADIENT ///////////////
 
-            if ((!has_sample) && (opt.surf_fake_sample)){
-                // there is no intersection between ray and surface
-                // take fake sample if allowed            
+        }
+        ///////////// FAKE SAMPLE GRADIENT ///////////////
 
-                // if (lane_id == 0){
-                //     printf("==========\n");
-                //     printf("taking fake sample for: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
-                // }    
+        if ((opt.surf_fake_sample) && (!vox_has_sample) && ((!opt.limited_fake_sample) || (vox_has_surf))){
+            // there is no intersection between ray and surface
+            // take fake sample if allowed            
 
+            // if (lane_id == 0){
+            //     printf("==========\n");
+            //     printf("taking fake sample for: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+            // }
 
-                if ((t_far - t_close) > opt.surf_fake_sample_min_vox_len){
+            vox_has_sample = true;
+
+            if ((t_far - t_close) > opt.surf_fake_sample_min_vox_len){
 #pragma unroll 3
-                    for (int k=0; k < 3; ++k){
-                        // assert(!isnan(st[j]));
-                        ray.pos[k] = fmaf((t_far + t_close) / 2, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
-                        ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
-                        ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
+                for (int k=0; k < 3; ++k){
+                    // assert(!isnan(st[j]));
+                    ray.pos[k] = fmaf((t_far + t_close) / 2, ray.dir[k], ray.origin[k]); // fmaf(x,y,z) = (x*y)+z
+                    ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
+                    ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
 
-                        // if ((!(ray.pos[k] >= 0.f)) || (!(ray.pos[k] <= 1.f)) ){
-                        //     printf("t_far: %f\n", t_far);
-                        //     printf("t_close: %f\n", t_close);
-                        //     printf("ray_l_k: %d\n", ray.l[k]);
-                        //     printf("ray_pos_k: %f\n", ray.pos[k]);
-                        // }
-                        
-                        // assert(ray.pos[k] <= 1.f);
-                        // assert(ray.pos[k] >= 0.f);
+                    // if ((!(ray.pos[k] >= 0.f)) || (!(ray.pos[k] <= 1.f)) ){
+                    //     printf("t_far: %f\n", t_far);
+                    //     printf("t_close: %f\n", t_close);
+                    //     printf("ray_l_k: %d\n", ray.l[k]);
+                    //     printf("ray_pos_k: %f\n", ray.pos[k]);
+                    // }
+                    
+                    // assert(ray.pos[k] <= 1.f);
+                    // assert(ray.pos[k] >= 0.f);
+                }
+
+                float const raw_alpha = trilerp_cuvol_one(
+                        grid.links, grid.density_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        1,
+                        ray.l, ray.pos,
+                        0);
+
+                if (raw_alpha > opt.sigma_thresh) {
+                    float const  alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);;
+
+                    // use distance to surface to re-weight alpha
+                    // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
+
+
+                    double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
+                    double surf_std = sqrtf(
+                        max(1e-9f, 
+                        (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
+                        )
+                    );
+
+                    if (!opt.fake_sample_normalize_surf) surf_std = 1.;
+
+                    // tri-lerp to get distance
+
+                    #define _norm_surf(x) (static_cast<float>(surface[x] / surf_std))
+
+                    const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
+                    const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
+                    const float ix0 = lerp(ix0y0, ix0y1, ray.pos[1]);
+                    const float ix1y0 = lerp(_norm_surf(4), _norm_surf(5), ray.pos[2]);
+                    const float ix1y1 = lerp(_norm_surf(6),
+                                            _norm_surf(7), ray.pos[2]);
+                    const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
+                    const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
+                    // const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
+
+                    // loop through all level set to find out the minimum dist to surf level set
+                    float fake_sample_dist = INFINITY;
+                    for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
+                        fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < abs(fake_sample_dist) ? (fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
                     }
 
-                    float const raw_alpha = trilerp_cuvol_one(
-                            grid.links, grid.density_data,
-                            grid.stride_x,
-                            grid.size[2],
-                            1,
-                            ray.l, ray.pos,
-                            0);
+                    #undef _norm_surf
 
-                    if (raw_alpha > opt.sigma_thresh) {
-                        float const  alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);;
-
-                        // use distance to surface to re-weight alpha
-                        // https://math.stackexchange.com/questions/1815397/distance-between-point-and-parametric-line
+                    
+                    // re-weight alpha using a simple gaussian
+                    float const  reweight = _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
+                    float const  rw_alpha = alpha * reweight;
 
 
-                        double const surf_miu = (surface[0] + surface[1] + surface[2] + surface[3] + surface[4] + surface[5] + surface[6] + surface[7]) / 8;
-                        double surf_std = sqrtf(
-                            max(1e-9f, 
-                            (_SQR(surface[0]-surf_miu) + _SQR(surface[1]-surf_miu) + _SQR(surface[2]-surf_miu) + _SQR(surface[3]-surf_miu) + _SQR(surface[4]-surf_miu) + _SQR(surface[5]-surf_miu) + _SQR(surface[6]-surf_miu) + _SQR(surface[7]-surf_miu)) / 8
-                            )
-                        );
-
-                        if (!opt.fake_sample_normalize_surf) surf_std = 1.;
-
-                        // tri-lerp to get distance
-
-                        #define _norm_surf(x) (static_cast<float>(surface[x] / surf_std))
-
-                        const float ix0y0 = lerp(_norm_surf(0), _norm_surf(1), ray.pos[2]);
-                        const float ix0y1 = lerp(_norm_surf(2), _norm_surf(3), ray.pos[2]);
-                        const float ix0 = lerp(ix0y0, ix0y1, ray.pos[1]);
-                        const float ix1y0 = lerp(_norm_surf(4), _norm_surf(5), ray.pos[2]);
-                        const float ix1y1 = lerp(_norm_surf(6),
-                                                _norm_surf(7), ray.pos[2]);
-                        const float ix1 = lerp(ix1y0, ix1y1, ray.pos[1]);
-                        const float fake_sample_s = lerp(ix0, ix1, ray.pos[0]);
-                        // const float fake_sample_dist = lerp(ix0, ix1, ray.pos[0]);
-
-                        // loop through all level set to find out the minimum dist to surf level set
-                        float fake_sample_dist = INFINITY;
-                        for (int lv_i=0; lv_i < grid.level_set_num; ++lv_i){
-                            fake_sample_dist = abs(fake_sample_s - grid.level_set_data[lv_i]) < abs(fake_sample_dist) ? (fake_sample_s - grid.level_set_data[lv_i]) : fake_sample_dist;
-                        }
-
-                        #undef _norm_surf
-
-                        
-                        // re-weight alpha using a simple gaussian
-                        float const  reweight = _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
-                        float const  rw_alpha = alpha * reweight;
-
-
-                        float lane_color = trilerp_cuvol_one(
-                                        grid.links,
-                                        grid.sh_data,
-                                        grid.stride_x,
-                                        grid.size[2],
-                                        grid.sh_data_dim,
-                                        ray.l, ray.pos, lane_id);
-                        // lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
-
-
-                        // backward gradient computation
-                        float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
-                        const float  pcnt = -1 * _LOG(max(1.f - rw_alpha, 1e-8));
-                        const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
-                        
-
-                        const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
-                                                    weighted_lane_color, lane_colorgrp_id == 0) + 0.5f; // this is wrong!
-
-                        // if (lane_colorgrp_id == 0){
-                        //     printf("lane_color_total (%d): %f\n", lane_id, lane_color_total);
-                        // }
-
-                        float total_color_fs = fmaxf(lane_color_total, 0.f); // Clamp to [+0, infty), ci -- one channel of radiance of the sample
-                        float color_in_01 = total_color_fs == lane_color_total; // 1 if color >= 0.
-                        // substract for background color? -- seems to have already been done somewhere
-                        total_color_fs *= gout; // d_mse/d_pred_c * ci
-
-                        // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-description 
-                        float total_color_fs_c1 = __shfl_sync(leader_mask, total_color_fs, grid.basis_dim); 
-                        // taking d_mse/d_pred_c * ci of each RGB channels
-                        total_color_fs += __shfl_sync(leader_mask, total_color_fs, 2 * grid.basis_dim); 
-                        total_color_fs += total_color_fs_c1;
-
-                        // get color_in_01 from 'parent' lane in the color group where the channel color is computed
-                        color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim); 
-                        // d_mse/d_ci in the final computed color is within clamp range, compute proper gradient 
-                        const float  grad_common = weight * color_in_01 * gout; 
-                        // gradient wrt sh coefficient (d_mse/d_sh)
-                        const float  curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
-
-                        // if (grid.basis_type != BASIS_TYPE_SH) {
-                        //     float curr_grad_sphfunc = lane_color * grad_common;
-                        //     const float curr_grad_up2 = __shfl_down_sync((1U << grid.sh_data_dim) - 1,
-                        //             curr_grad_sphfunc, 2 * grid.basis_dim);
-                        //     curr_grad_sphfunc += __shfl_down_sync((1U << grid.sh_data_dim) - 1,
-                        //             curr_grad_sphfunc, grid.basis_dim);
-                        //     curr_grad_sphfunc += curr_grad_up2;
-                        //     if (lane_id < grid.basis_dim) {
-                        //         grad_sphfunc_val[lane_id] += curr_grad_sphfunc;
-                        //     }
-                        // }
-
-                        // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
-                        accum -= weight * total_color_fs;
-                        // compute d_mse/d_rwalpha_i (reweighted alpha)
-                        float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-8f) + total_color_fs * _EXP(log_transmit); 
-
-                        if (opt.fake_sample_l_dist){
-                            // // add grad to alpha from l_dist -- weight version
-                            // float l_dist_grad_alpha = 0.;
-                            // for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
-                            //     // // skip non-intersection
-                            //     // if (sample_ts[sample_j] == 0.f) continue;
-                            //     l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
-                            // }
-                            // curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha * log_transmit;
-
-                            // add grad to alpha from l_entropy -- weight version
-                            float const Den_Dwi_ = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                            float Den_Dai = (Den_Dwi_ + Den_Dwsum) * _EXP(log_transmit);
-
-                            float log_Tj_ = log_transmit; // log(T_i)
-
-                            for (int sample_j=sample_i+1; sample_j <valid_sample_n; ++sample_j){
-                                float const Den_Dwj = -(_LOG(max(sample_weights[sample_j], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                                log_Tj_ += _LOG(max(1.f-sample_alphas[sample_j-1], 1e-8)); // log(T_j)
-                                Den_Dai += (Den_Dwj + Den_Dwsum) * _EXP(log_Tj_) * sample_alphas[sample_j] / (rw_alpha-1.f);
-                            }
-                            curr_grad_rwalpha += lambda_l_entropy * Den_Dai; // note Dwsum_Dwi is always 1
-
-                            sample_i += 1;
-                            // note that for fake sample, we don't have grad to st
-                        }
-
-
-                        log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
-
-
-                        // if (sparsity_loss > 0.f) {
-                        //     // Cauchy version (from SNeRG)
-                        //     // TODO: check if expected!
-                        //     // curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
-
-                        //     // Log Alpha version
-                        //     curr_grad_alpha += sparsity_loss / alpha;
-                        // }
-
-                        // if (lane_id == 0){
-                        //     printf("weight: [%f]\n", weight);
-                        //     // printf("grad_common: [%f]\n", grad_common);
-                        //     // printf("reweight: [%f]\n", reweight);
-                        //     printf("alpha: [%f]\n", alpha);
-                        //     printf("rw_alpha: [%f]\n", rw_alpha);
-                        //     printf("curr_grad_rwalpha: [%f]\n", curr_grad_rwalpha);
-                        //     printf("curr_grad_alpha: [%f]\n", curr_grad_alpha);
-                        //     // printf("log_transmit: [%f]\n", log_transmit);
-                        //     // printf("accum: [%f]\n", accum);
-                        //     // printf("total_color_fs: [%f]\n", total_color_fs);
-                        // }
-
-                        trilerp_backward_cuvol_one(grid.links, grads.grad_sh_out,
-                                grid.stride_x,
-                                grid.size[2],
-                                grid.sh_data_dim,
-                                ray.l, ray.pos,
-                                curr_grad_color, lane_id);
-
-
-                        if (lane_id == 0) {
-                            // if (opt.fake_sample_l_dist){
-                            //     // add grad to alpha from l_dist
-                            //     float l_dist_grad_alpha = 0.;
-                            //     for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
-                            //         // // skip non-intersection
-                            //         // if (sample_ts[sample_j] == 0.f) continue;
-                            //         l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
-                            //     }
-                            //     curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
-
-                            //     // add grad to alpha from l_entropy
-                            //     float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                            //     curr_grad_rwalpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
-
-                            //     sample_i += 1;
-                            //     // note that for fake sample, we don't have grad to st
-                            // }
-
-                            if (sparsity_loss > 0.f) {
-                                // // Log Alpha version
-                                // curr_grad_rwalpha += sparsity_loss / max(rw_alpha, 1e-8);
-
-                                // L1 version
-                                curr_grad_rwalpha += sparsity_loss;
-                            }
-
-                            // curr_grad_alpha is now d_mse/d_alpha_i
-                            float curr_grad_alpha = curr_grad_rwalpha * reweight;
-                            
-                            // compute gradient for activation
-                            float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
-
-                            // if (sparsity_loss > 0.f) {
-                            //     // Log Alpha version
-                            //     curr_grad_raw_alpha += sparsity_loss / max(raw_alpha, 1e-8);
-                            // }
-
-                            ASSERT_NUM(curr_grad_raw_alpha);
-                            trilerp_backward_cuvol_one_density(
+                    float lane_color = trilerp_cuvol_one(
                                     grid.links,
-                                    grads.grad_density_out,
-                                    grads.mask_out,
+                                    grid.sh_data,
                                     grid.stride_x,
                                     grid.size[2],
-                                    ray.l, ray.pos, curr_grad_raw_alpha);
-
-                            
-                            // gradient to surface via fake sample
-                            // via curr_grad_rwalpha
-
-                            float const grad_fake_dist = curr_grad_rwalpha * (-alpha) * fake_sample_dist * reweight / _SQR(grid.fake_sample_std);
-                            
-                            ASSERT_NUM(grad_fake_dist);
-
-                            
-                            float grad_ns[8]; // grad from trilerp dist to normalized surface values
-
-                            const float ay = 1.f - ray.pos[1], az = 1.f - ray.pos[2];
-                            float xo = (1.0f - ray.pos[0]) * grad_fake_dist;
-
-                            // printf("pos: [%f, %f, %f]\n", ray.pos[0], ray.pos[1], ray.pos[2]);
-
-                            grad_ns[0] = ay * az * xo;
-                            grad_ns[1] = ay * ray.pos[2] * xo;
-                            grad_ns[2] = ray.pos[1] * az * xo;
-                            grad_ns[3] = ray.pos[1] * ray.pos[2] * xo;
-
-                            xo = ray.pos[0] * grad_fake_dist;
-                            grad_ns[4] = ay * az * xo;
-                            grad_ns[5] = ay * ray.pos[2] * xo;
-                            grad_ns[6] = ray.pos[1] * az * xo;
-                            grad_ns[7] = ray.pos[1] * ray.pos[2] * xo;
+                                    grid.sh_data_dim,
+                                    ray.l, ray.pos, lane_id);
+                    // lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
 
 
-                            float grad_surface[8] = {0,0,0,0,0,0,0,0};
-                            if (!opt.fake_sample_normalize_surf) {
-#pragma unroll 8
-                            for (int ks = 0; ks < 8; ++ks) grad_surface[ks] = grad_ns[ks];
-                            
-                            } else {
-#pragma unroll 8
-                                for (int ks = 0; ks < 8; ++ks){
-#pragma unroll 8
-                                    for (int kn = 0; kn < 8; ++kn){
-                                        // kn: index for normalized surf
-                                        // ks: index for original surf
-                                        if (ks == kn){
-                                            grad_surface[ks] += grad_ns[kn] * (surface[ks] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std) + 1.f/surf_std);
-                                        } else {
-                                            grad_surface[ks] +=  grad_ns[kn] * (surface[kn] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std));
-                                        }
-                                    }
-                                }
-                            }
+                    // backward gradient computation
+                    float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
+                    const float  pcnt = -1 * _LOG(max(1.f - rw_alpha, 1e-8));
+                    const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+                    
+
+                    const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
+                                                weighted_lane_color, lane_colorgrp_id == 0) + 0.5f; // this is wrong!
+
+                    // if (lane_colorgrp_id == 0){
+                    //     printf("lane_color_total (%d): %f\n", lane_id, lane_color_total);
+                    // }
+
+                    float total_color_fs = fmaxf(lane_color_total, 0.f); // Clamp to [+0, infty), ci -- one channel of radiance of the sample
+                    float color_in_01 = total_color_fs == lane_color_total; // 1 if color >= 0.
+                    // substract for background color? -- seems to have already been done somewhere
+                    total_color_fs *= gout; // d_mse/d_pred_c * ci
+
+                    // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-description 
+                    float total_color_fs_c1 = __shfl_sync(leader_mask, total_color_fs, grid.basis_dim); 
+                    // taking d_mse/d_pred_c * ci of each RGB channels
+                    total_color_fs += __shfl_sync(leader_mask, total_color_fs, 2 * grid.basis_dim); 
+                    total_color_fs += total_color_fs_c1;
+
+                    // get color_in_01 from 'parent' lane in the color group where the channel color is computed
+                    color_in_01 = __shfl_sync((1U << grid.sh_data_dim) - 1, color_in_01, lane_colorgrp * grid.basis_dim); 
+                    // d_mse/d_ci in the final computed color is within clamp range, compute proper gradient 
+                    const float  grad_common = weight * color_in_01 * gout; 
+                    // gradient wrt sh coefficient (d_mse/d_sh)
+                    const float  curr_grad_color = sphfunc_val[lane_colorgrp_id] * grad_common; 
+
+                    // if (grid.basis_type != BASIS_TYPE_SH) {
+                    //     float curr_grad_sphfunc = lane_color * grad_common;
+                    //     const float curr_grad_up2 = __shfl_down_sync((1U << grid.sh_data_dim) - 1,
+                    //             curr_grad_sphfunc, 2 * grid.basis_dim);
+                    //     curr_grad_sphfunc += __shfl_down_sync((1U << grid.sh_data_dim) - 1,
+                    //             curr_grad_sphfunc, grid.basis_dim);
+                    //     curr_grad_sphfunc += curr_grad_up2;
+                    //     if (lane_id < grid.basis_dim) {
+                    //         grad_sphfunc_val[lane_id] += curr_grad_sphfunc;
+                    //     }
+                    // }
+
+                    // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
+                    accum -= weight * total_color_fs;
+                    // compute d_mse/d_rwalpha_i (reweighted alpha)
+                    float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-8f) + total_color_fs * _EXP(log_transmit); 
+
+                    if (opt.fake_sample_l_dist){
+                        // // add grad to alpha from l_dist -- weight version
+                        // float l_dist_grad_alpha = 0.;
+                        // for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                        //     // // skip non-intersection
+                        //     // if (sample_ts[sample_j] == 0.f) continue;
+                        //     l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                        // }
+                        // curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha * log_transmit;
+
+                        // add grad to alpha from l_entropy -- weight version
+                        float const Den_Dwi_ = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                        float Den_Dai = (Den_Dwi_ + Den_Dwsum) * _EXP(log_transmit);
+
+                        float log_Tj_ = log_transmit; // log(T_i)
+
+                        for (int sample_j=sample_i+1; sample_j <valid_sample_n; ++sample_j){
+                            float const Den_Dwj = -(_LOG(max(sample_weights[sample_j], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                            log_Tj_ += _LOG(max(1.f-sample_alphas[sample_j-1], 1e-8)); // log(T_j)
+                            Den_Dai += (Den_Dwj + Den_Dwsum) * _EXP(log_Tj_) * sample_alphas[sample_j] / (rw_alpha-1.f);
+                        }
+                        curr_grad_rwalpha += lambda_l_entropy * Den_Dai; // note Dwsum_Dwi is always 1
+
+                        sample_i += 1;
+                        // note that for fake sample, we don't have grad to st
+                    }
 
 
-                            // for (int ks = 0; ks < 8; ++ks){
-                            //     ASSERT_NUM(grad_surface[ks]);
-                            // }
+                    log_transmit -= pcnt; // update log_transmit to log(T_{i+1})
 
-                            assign_surface_grad(
+
+                    // if (sparsity_loss > 0.f) {
+                    //     // Cauchy version (from SNeRG)
+                    //     // TODO: check if expected!
+                    //     // curr_grad_alpha += sparsity_loss * (4.f * alpha / (1.f + 2.f * (alpha * alpha)));
+
+                    //     // Log Alpha version
+                    //     curr_grad_alpha += sparsity_loss / alpha;
+                    // }
+
+                    // if (lane_id == 0){
+                    //     printf("weight: [%f]\n", weight);
+                    //     // printf("grad_common: [%f]\n", grad_common);
+                    //     // printf("reweight: [%f]\n", reweight);
+                    //     printf("alpha: [%f]\n", alpha);
+                    //     printf("rw_alpha: [%f]\n", rw_alpha);
+                    //     printf("curr_grad_rwalpha: [%f]\n", curr_grad_rwalpha);
+                    //     printf("curr_grad_alpha: [%f]\n", curr_grad_alpha);
+                    //     // printf("log_transmit: [%f]\n", log_transmit);
+                    //     // printf("accum: [%f]\n", accum);
+                    //     // printf("total_color_fs: [%f]\n", total_color_fs);
+                    // }
+
+                    trilerp_backward_cuvol_one(grid.links, grads.grad_sh_out,
+                            grid.stride_x,
+                            grid.size[2],
+                            grid.sh_data_dim,
+                            ray.l, ray.pos,
+                            curr_grad_color, lane_id);
+
+
+                    if (lane_id == 0) {
+                        // if (opt.fake_sample_l_dist){
+                        //     // add grad to alpha from l_dist
+                        //     float l_dist_grad_alpha = 0.;
+                        //     for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                        //         // // skip non-intersection
+                        //         // if (sample_ts[sample_j] == 0.f) continue;
+                        //         l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                        //     }
+                        //     curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
+
+                        //     // add grad to alpha from l_entropy
+                        //     float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
+                        //     curr_grad_rwalpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
+
+                        //     sample_i += 1;
+                        //     // note that for fake sample, we don't have grad to st
+                        // }
+
+                        if (sparsity_loss > 0.f) {
+                            // // Log Alpha version
+                            // curr_grad_rwalpha += sparsity_loss / max(rw_alpha, 1e-8);
+
+                            // L1 version
+                            curr_grad_rwalpha += sparsity_loss;
+                        }
+
+                        // curr_grad_alpha is now d_mse/d_alpha_i
+                        float curr_grad_alpha = curr_grad_rwalpha * reweight;
+                        
+                        // compute gradient for activation
+                        float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
+
+                        // if (sparsity_loss > 0.f) {
+                        //     // Log Alpha version
+                        //     curr_grad_raw_alpha += sparsity_loss / max(raw_alpha, 1e-8);
+                        // }
+
+                        ASSERT_NUM(curr_grad_raw_alpha);
+                        trilerp_backward_cuvol_one_density(
                                 grid.links,
-                                grads.grad_surface_out,
+                                grads.grad_density_out,
                                 grads.mask_out,
                                 grid.stride_x,
                                 grid.size[2],
-                                ray.l,
-                                grad_surface
-                            );
+                                ray.l, ray.pos, curr_grad_raw_alpha);
+
+                        
+                        // gradient to surface via fake sample
+                        // via curr_grad_rwalpha
+
+                        float const grad_fake_dist = curr_grad_rwalpha * (-alpha) * fake_sample_dist * reweight / _SQR(grid.fake_sample_std);
+                        
+                        ASSERT_NUM(grad_fake_dist);
+
+                        
+                        float grad_ns[8]; // grad from trilerp dist to normalized surface values
+
+                        const float ay = 1.f - ray.pos[1], az = 1.f - ray.pos[2];
+                        float xo = (1.0f - ray.pos[0]) * grad_fake_dist;
+
+                        // printf("pos: [%f, %f, %f]\n", ray.pos[0], ray.pos[1], ray.pos[2]);
+
+                        grad_ns[0] = ay * az * xo;
+                        grad_ns[1] = ay * ray.pos[2] * xo;
+                        grad_ns[2] = ray.pos[1] * az * xo;
+                        grad_ns[3] = ray.pos[1] * ray.pos[2] * xo;
+
+                        xo = ray.pos[0] * grad_fake_dist;
+                        grad_ns[4] = ay * az * xo;
+                        grad_ns[5] = ay * ray.pos[2] * xo;
+                        grad_ns[6] = ray.pos[1] * az * xo;
+                        grad_ns[7] = ray.pos[1] * ray.pos[2] * xo;
 
 
-
-                            // assign grad for fake sample std if enabled
-                            if (grads.grad_fake_sample_std_out != nullptr){
-                                float const grad_std = curr_grad_rwalpha * alpha * _SQR(fake_sample_dist) * reweight / _CUBIC(grid.fake_sample_std);
-
-                                atomicAdd(grads.grad_fake_sample_std_out, grad_std);
+                        float grad_surface[8] = {0,0,0,0,0,0,0,0};
+                        if (!opt.fake_sample_normalize_surf) {
+#pragma unroll 8
+                        for (int ks = 0; ks < 8; ++ks) grad_surface[ks] = grad_ns[ks];
+                        
+                        } else {
+#pragma unroll 8
+                            for (int ks = 0; ks < 8; ++ks){
+#pragma unroll 8
+                                for (int kn = 0; kn < 8; ++kn){
+                                    // kn: index for normalized surf
+                                    // ks: index for original surf
+                                    if (ks == kn){
+                                        grad_surface[ks] += grad_ns[kn] * (surface[ks] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std) + 1.f/surf_std);
+                                    } else {
+                                        grad_surface[ks] +=  grad_ns[kn] * (surface[kn] * (surf_miu-surface[ks]) / 8.f / _CUBIC(surf_std));
+                                    }
+                                }
                             }
-
-
                         }
+
+
+                        // for (int ks = 0; ks < 8; ++ks){
+                        //     ASSERT_NUM(grad_surface[ks]);
+                        // }
+
+                        assign_surface_grad(
+                            grid.links,
+                            grads.grad_surface_out,
+                            grads.mask_out,
+                            grid.stride_x,
+                            grid.size[2],
+                            ray.l,
+                            grad_surface
+                        );
+
+
+
+                        // assign grad for fake sample std if enabled
+                        if (grads.grad_fake_sample_std_out != nullptr){
+                            float const grad_std = curr_grad_rwalpha * alpha * _SQR(fake_sample_dist) * reweight / _CUBIC(grid.fake_sample_std);
+
+                            atomicAdd(grads.grad_fake_sample_std_out, grad_std);
+                        }
+
+
                     }
                 }
-            } 
-
-            if ((!has_sample) && (!opt.surf_fake_sample)){
-                // if don't apply fake sample
-                // then don't include this voxel for fused surface norm reg
-                continue;
             }
-            
+        } 
 
-            ///////////// SURFACE NORMAL REGULARIZATION //////////////
+        
 
-            if ((fused_surf_norm_reg_scale > 0.f) && (lane_id == 0)){
-                // printf("voxel_l for fused surf reg: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+        ///////////// FUSED SURFACE NORMAL REGULARIZATION //////////////
 
-                add_surface_normal_grad(
-                    grid.links,
-                    grid.surface_data,
-                    grid.size,
-                    voxel_l[0], voxel_l[1], voxel_l[2],
-                    grid.stride_x, grid.size[2],
-                    grid.level_set_data[i],
-                    fused_surf_norm_reg_scale,
-                    fused_surf_norm_reg_con_check,
-                    fused_surf_norm_reg_ignore_empty,
-                    false,
-                    // Output
-                    grads.mask_out,
-                    grads.grad_surface_out
-                );
-            }
+        if ((fused_surf_norm_reg_scale > 0.f) && (lane_id == 0) && (vox_has_sample)){
+            // printf("voxel_l for fused surf reg: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
 
+            add_surface_normal_grad(
+                grid.links,
+                grid.surface_data,
+                grid.size,
+                voxel_l[0], voxel_l[1], voxel_l[2],
+                grid.stride_x, grid.size[2],
+                0.,
+                fused_surf_norm_reg_scale,
+                fused_surf_norm_reg_con_check,
+                fused_surf_norm_reg_ignore_empty,
+                false,
+                // Output
+                grads.mask_out,
+                grads.grad_surface_out
+            );
         }
 
         if (_EXP(log_transmit) < opt.stop_thresh) {

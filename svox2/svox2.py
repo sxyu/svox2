@@ -2174,18 +2174,32 @@ class SparseGrid(nn.Module):
                 invalid_sample_mask = (samples < l[l_ids]).any(axis=-1) | (samples > l[l_ids]+1.).any(axis=-1) | (torch.isnan(samples)).any(axis=-1)
             
             valid_sample_mask = (~neg_roots_mask) & (~invalid_sample_mask)
+            _real_sample_mask = valid_sample_mask.clone()
 
 
             # if self.surface_type in [SURFACE_TYPE_UDF_FAKE_SAMPLE]:
             if self.opt.surf_fake_sample:
                 # mask of ray-voxel pair where no valid intersection exists
                 # where we take one fake sample at the mid of the ray passing through the voxel
-                fake_sample_mask = ~(valid_sample_mask.any(axis=-1, keepdim=True)).repeat(1,N_INTERSECT)
+                
+                new_shape = [-1, N_INTERSECT*self.level_set_data.shape[0]]
+                fake_sample_mask = ~(valid_sample_mask.view(new_shape).any(axis=-1, keepdim=True)).repeat(1,new_shape[-1])
                 fake_sample_mask[:, 1:] = False
+                fake_sample_mask = fake_sample_mask.view(-1, N_INTERSECT)
+
+
+                # mlv_set_filter = torch.zeros_like(_fake_sample_mask).bool()[_fake_sample_mask]
+                # mlv_set_filter[torch.arange(0, mlv_set_filter.shape[0], self.level_set_data.shape[0])] = True
+                # fake_sample_mask = _fake_sample_mask.clone()
+                # fake_sample_mask[_fake_sample_mask] &= mlv_set_filter
+
+
                 # find two intersections between ray and voxel surfaces
                 _l = l[l_ids[fake_sample_mask]]
+                # filter non-unique
                 _os = origins[ray_ids[fake_sample_mask]]
                 _ds = dirs[ray_ids[fake_sample_mask]]
+
                 
                 # if dirs is negative, closest plane has larger coord
                 close_planes = _l + (_ds<0).long()
