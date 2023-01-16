@@ -2932,9 +2932,7 @@ class SparseGrid(nn.Module):
                 
                 # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
                 # this allows fake sample distance to be calculated easier
-                gsz = self._grid_size().mean()
-                h = 2.0 * self.radius.mean() / gsz
-                h = h.to(device) * 256
+                h = self._get_h().to(device)
 
                 norm_grad = torch.sqrt(
                     ((surf100 - surf000) / h) ** 2. + \
@@ -2953,7 +2951,11 @@ class SparseGrid(nn.Module):
 
 
 
-
+    def _get_h(self):
+        gsz = self._grid_size().mean()
+        h = 2.0 * self.radius.mean() / gsz
+        h = h
+        return h
 
 
     def _volume_render_gradcheck_nvol_lerp(self, rays: Rays, return_raylen: bool=False):
@@ -5080,9 +5082,8 @@ class SparseGrid(nn.Module):
         y = (xy % self.links.shape[1]).long()
         x = (xy / self.links.shape[1]).long()
 
-        gsz = self._grid_size().mean()
-        h = 2.0 * self.radius.mean() / gsz
-        h = h.to(device) * 256
+
+        h = self._get_h().to(device)
 
         def safe_fetch_data_default(xyz, data, default):
 
@@ -5163,9 +5164,7 @@ class SparseGrid(nn.Module):
 
         # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
         # this allows fake sample distance to be calculated easier
-        gsz = self._grid_size().mean()
-        h = 2.0 * self.radius.mean() / gsz
-        h = h.to(device) * 256
+        h = self._get_h().to(device)
 
         norm_grad = ((surf100 - surf_100) / (2. * h)) ** 2. + \
             ((surf010 - surf0_10) / (2. * h)) ** 2. + \
