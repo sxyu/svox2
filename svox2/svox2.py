@@ -2434,8 +2434,8 @@ class SparseGrid(nn.Module):
             l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
                 torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
 
-            # l_dist = (B_alpha[:, :, None] * B_alpha[:, None, :]) * \
-            #     torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
+            l_dist = (B_alpha[:, :, None] * B_alpha[:, None, :]) * \
+                torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
             
             # l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
             l_dist = l_dist.sum(axis=-1).sum(axis=-1)
@@ -2451,8 +2451,9 @@ class SparseGrid(nn.Module):
             na = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-8)
             l_entropy = torch.where(B_weights > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
 
-            # na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
-            # l_entropy = torch.where(B_alpha > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
+            na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
+            l_entropy = torch.where(B_alpha > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
+
             l_entropy = l_entropy.sum(axis=-1).mean()
 
         else:
@@ -3218,7 +3219,11 @@ class SparseGrid(nn.Module):
         lambda_l1: float = 0.,
         lambda_l_dist: float = 0.,
         lambda_l_entropy: float = 0.,
+        lambda_l_dist_a: float = 0.,
+        lambda_l_entropy_a: float = 0.,
         lambda_l_samp_dist: float = 0.,
+        lambda_l_di: float = 0., # l_di: loss to encourage Denser Intersection
+        l_di_alpha_thresh: float = 0., # only intersections with alpha below this threshold will be applied with l_di
         l_dist_max_sample: int = 64,
         no_surface: bool = False,
     ):
@@ -3326,7 +3331,11 @@ class SparseGrid(nn.Module):
                 lambda_l1,
                 lambda_l_dist,
                 lambda_l_entropy,
+                lambda_l_dist_a,
+                lambda_l_entropy_a,
                 lambda_l_samp_dist,
+                lambda_l_di,
+                l_di_alpha_thresh,
                 l_dist_max_sample,
                 rgb_out,
                 grad_holder

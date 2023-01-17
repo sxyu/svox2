@@ -681,7 +681,11 @@ while True:
                         lambda_l1 = args.img_lambda_l1_ratio,
                         lambda_l_dist = args.lambda_l_dist,
                         lambda_l_entropy = args.lambda_l_entropy,
+                        lambda_l_dist_a = args.lambda_l_dist_a,
+                        lambda_l_entropy_a = args.lambda_l_entropy_a,
                         lambda_l_samp_dist = args.lambda_l_samp_dist,
+                        lambda_l_di = args.lambda_l_di,
+                        l_di_alpha_thresh = args.l_di_alpha_thresh,
                         l_dist_max_sample = 64,
                         randomize=args.enable_random,
                         no_surface=no_surface)
