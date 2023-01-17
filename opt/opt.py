@@ -216,10 +216,10 @@ lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, a
                                args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
 
 if args.surf_lv_range_decay_type == 'linear':
-    surf_lv_range_func = get_linear_lr_func(args.surf_lv_range, 0., lr_delay_steps=args.no_surface_init_iters,
+    surf_lv_range_func = get_linear_lr_func(args.surf_lv_range, args.surf_lv_range_final, lr_delay_steps=args.no_surface_init_iters,
                                 max_steps=args.surf_lv_range_decay_steps)
 elif args.surf_lv_range_decay_type == 'exp':
-    surf_lv_range_func = get_expon_lr_func(args.surf_lv_range, 1e-7, fix_delay_step=args.no_surface_init_iters,
+    surf_lv_range_func = get_expon_lr_func(args.surf_lv_range, args.surf_lv_range_final, fix_delay_step=args.no_surface_init_iters,
                                 max_steps=args.surf_lv_range_decay_steps)
 else:
     # const
@@ -601,10 +601,11 @@ while True:
 
             # update surf lv sets if needed
             if args.surf_lv_num > 1:
-                surf_lv_range = surf_lv_range_func(gstep_id)
-                if surf_lv_range <= 1e-6:
+                if gstep_id >= args.surf_lv_range_decay_steps and args.surf_lv_range_decay_type != 'const':
+                    # decay to single lv set
                     grid.level_set_data = torch.tensor([0.], dtype=grid.level_set_data.dtype, device=grid.level_set_data.device)
                 else:
+                    surf_lv_range = surf_lv_range_func(gstep_id)
                     grid.level_set_data = torch.linspace(-surf_lv_range, surf_lv_range, args.surf_lv_num, dtype=grid.level_set_data.dtype, device=grid.level_set_data.device)
 
             

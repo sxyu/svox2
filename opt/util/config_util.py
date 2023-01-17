@@ -294,7 +294,8 @@ def setup_train_conf(return_parpser=False):
                         #  2000,
                     help='batch size')
 
-    group.add_argument('--surf_lv_range', type=float, default=5.)
+    group.add_argument('--surf_lv_range', type=float, default=2e-2)
+    group.add_argument('--surf_lv_range_final', type=float, default=1e-5)
     group.add_argument('--surf_lv_num', type=int, default=1)
     group.add_argument('--surf_lv_range_decay_steps', type=lambda x: int(float(x)), default=100000)
 
