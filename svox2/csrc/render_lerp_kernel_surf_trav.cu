@@ -1668,50 +1668,50 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     // compute d_mse/d_alpha_i
                     float  curr_grad_alpha = accum / min(alpha-1.f, -1e-8f) + total_color * _EXP(log_transmit); 
 
+                    if (lane_id == 0){
+                        // add grad to alpha from l_dist -- weight version
+                        float Dldist_Dai = 0.f; 
+                        float log_Tk = log_transmit; // log(T_i)
+                        for (int k=sample_i; k < valid_sample_n; ++k){
+                            float Dldist_Dwk = 0.f; 
+                            for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                                Dldist_Dwk += sample_weights[sample_j] * abs(sample_ts[k] - sample_ts[sample_j]);
+                            }
 
-                    // add grad to alpha from l_dist -- weight version
-                    float Dldist_Dai = 0.f; 
-                    float log_Tk = log_transmit; // log(T_i)
-                    for (int k=sample_i; k < valid_sample_n; ++k){
-                        float Dldist_Dwk = 0.f; 
-                        for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
-                            Dldist_Dwk += sample_weights[sample_j] * abs(sample_ts[k] - sample_ts[sample_j]);
+                            if (lane_id == 0) printf("=======\nk: %d\n", k);
+                            if (lane_id == 0) printf("Dldist_Dwk: %f\n", Dldist_Dwk);
+                            if (k == sample_i){
+                                Dldist_Dai += Dldist_Dwk * _EXP(log_transmit);
+                                if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_transmit));
+                            } else {
+                                log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8));
+                                Dldist_Dai += Dldist_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f);
+                                if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f));
+                            }
                         }
 
-                        if (lane_id == 0) printf("=======\nk: %d\n", k);
-                        if (lane_id == 0) printf("Dldist_Dwk: %f\n", Dldist_Dwk);
-                        if (k == sample_i){
-                            Dldist_Dai += Dldist_Dwk * _EXP(log_transmit);
-                            if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_transmit));
-                        } else {
-                            log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8));
-                            Dldist_Dai += Dldist_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f);
-                            if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f));
+                        curr_grad_alpha += lambda_l_dist * Dldist_Dai;
+                        ASSERT_NUM(curr_grad_alpha);
+                        // if (lane_id == 0) printf("grad l_dist to alpha: %f\n", lambda_l_dist * l_dist_grad_alpha * log_transmit);
+
+
+                        // add grad to alpha from l_entropy -- weight version
+                        float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum + Den_Dwsum; // note Dwsum_Dwi is always 1
+                        // ASSERT_NUM(Den_Dwi);
+                        float Den_Dai = Den_Dwi * _EXP(log_transmit);
+                        // ASSERT_NUM(Den_Dai);
+
+                        log_Tk = log_transmit; // log(T_i)
+                        // ASSERT_NUM(log_Tk);
+
+                        for (int k=sample_i+1; k <valid_sample_n; ++k){
+                            float const Den_Dwk = -(_LOG(max(sample_weights[k], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum + Den_Dwsum;
+                            log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8)); 
+                            Den_Dai += Den_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f); // Dwk_Dai
                         }
+                        curr_grad_alpha += lambda_l_entropy * Den_Dai; 
+                        ASSERT_NUM(curr_grad_alpha);
                     }
-
-                    curr_grad_alpha += lambda_l_dist * Dldist_Dai;
-                    ASSERT_NUM(curr_grad_alpha);
-                    // if (lane_id == 0) printf("grad l_dist to alpha: %f\n", lambda_l_dist * l_dist_grad_alpha * log_transmit);
-
-
-
-                    // add grad to alpha from l_entropy -- weight version
-                    float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum + Den_Dwsum; // note Dwsum_Dwi is always 1
-                    // ASSERT_NUM(Den_Dwi);
-                    float Den_Dai = Den_Dwi * _EXP(log_transmit);
-                    // ASSERT_NUM(Den_Dai);
-
-                    log_Tk = log_transmit; // log(T_i)
-                    // ASSERT_NUM(log_Tk);
-
-                    for (int k=sample_i+1; k <valid_sample_n; ++k){
-                        float const Den_Dwk = -(_LOG(max(sample_weights[k], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum + Den_Dwsum;
-                        log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8)); 
-                        Den_Dai += Den_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f); // Dwk_Dai
-                    }
-                    curr_grad_alpha += lambda_l_entropy * Den_Dai; 
-                    ASSERT_NUM(curr_grad_alpha);
 
                     // if (lane_id == 0) printf("sample_weights[sample_i]: %f\n", sample_weights[sample_i]);
                     // if (lane_id == 0) printf("grad l_entropy to weight: %f\n", lambda_l_entropy * (Den_Dwi_ + Den_Dwsum));
@@ -2024,7 +2024,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     // compute d_mse/d_rwalpha_i (reweighted alpha)
                     float  curr_grad_rwalpha = accum / min(rw_alpha-1.f, -1e-8f) + total_color_fs * _EXP(log_transmit); 
 
-                    if (opt.fake_sample_l_dist){
+                    if ((lane_id==0) && (opt.fake_sample_l_dist)){
                         // add grad to alpha from l_dist -- weight version
                         float Dldist_Dai = 0.f; 
                         float log_Tk = log_transmit; // log(T_i)
@@ -2064,30 +2064,6 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         }
                         curr_grad_rwalpha += lambda_l_entropy * Den_Dai; 
                         ASSERT_NUM(curr_grad_rwalpha);
-
-                        // // add grad to alpha from l_dist -- weight version
-                        // float l_dist_grad_alpha = 0.;
-                        // for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
-                        //     // // skip non-intersection
-                        //     // if (sample_ts[sample_j] == 0.f) continue;
-                        //     l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
-                        // }
-                        // curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha * log_transmit;
-
-                        // // add grad to alpha from l_entropy -- weight version
-                        // float const Den_Dwi_ = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                        // float Den_Dai = (Den_Dwi_ + Den_Dwsum) * _EXP(log_transmit);
-
-                        // float log_Tj_ = log_transmit; // log(T_i)
-
-                        // for (int sample_j=sample_i+1; sample_j <valid_sample_n; ++sample_j){
-                        //     float const Den_Dwj = -(_LOG(max(sample_weights[sample_j], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                        //     log_Tj_ += _LOG(max(1.f-sample_alphas[sample_j-1], 1e-8)); // log(T_j)
-                        //     Den_Dai += (Den_Dwj + Den_Dwsum) * _EXP(log_Tj_) * sample_alphas[sample_j] / (rw_alpha-1.f);
-                        // }
-                        // curr_grad_rwalpha += lambda_l_entropy * Den_Dai; // note Dwsum_Dwi is always 1
-
-                        // note that for fake sample, we don't have grad to st
                     }
 
 
