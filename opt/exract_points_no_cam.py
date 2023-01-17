@@ -118,7 +118,11 @@ print('Render options', grid.opt)
 
 if args.surf_lv_set is None:
     # use level set from grid ckpt
-    surf_lv_set = grid.level_set_data.cpu().detach().numpy()
+    if grid.level_set_data is None:
+        # nerf ckpt, surf lv set doesn't matter
+        surf_lv_set = [0.]
+    else:
+        surf_lv_set = grid.level_set_data.cpu().detach().numpy()
 else:
     surf_lv_set = [args.surf_lv_set]
 
