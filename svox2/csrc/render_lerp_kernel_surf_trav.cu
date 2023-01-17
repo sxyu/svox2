@@ -1370,15 +1370,22 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
     int sample_i = 0;
 
+    float const lambda_l_entropy_a = 0.f;
+
+    float sample_alpha_sum = 0.f;
     float sample_weight_sum = 0.f;
     for (int i=0; i<l_dist_max_sample; ++i){
+        sample_alpha_sum += sample_alphas[i];
         sample_weight_sum += sample_weights[i];
     }
+    sample_alpha_sum = max(sample_alpha_sum, 1e-8); // prevent 0
     sample_weight_sum = max(sample_weight_sum, 1e-8); // prevent 0
 
+    float Den_Dasum = 0.f;
     float Den_Dwsum = 0.f;
     float sample_t_mean = 0.f;
     for (int i=0; i<l_dist_max_sample; ++i){
+        Den_Dasum += sample_alphas[i] * (_LOG(max(sample_alphas[i], 1e-8)/sample_alpha_sum) + 1.f) / _SQR(sample_alpha_sum);
         Den_Dwsum += sample_weights[i] * (_LOG(max(sample_weights[i], 1e-8)/sample_weight_sum) + 1.f) / _SQR(sample_weight_sum);
         sample_t_mean += sample_weights[i] / sample_weight_sum * sample_ts[i];
 
@@ -1756,9 +1763,9 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // }
                         // curr_grad_alpha += lambda_l_dist * l_dist_grad_alpha;
 
-                        // // add grad to alpha from l_entropy
-                        // float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                        // curr_grad_alpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
+                        // add grad to alpha from l_entropy
+                        float const Den_Dai = -(_LOG(max(sample_alphas[sample_i], 1e-8) / sample_alpha_sum) + 1.f)/sample_alpha_sum;
+                        curr_grad_alpha += lambda_l_entropy_a * (Den_Dai + Den_Dasum); // note Dwsum_Dwi is always 1
                         
                         // if (sparsity_loss > 0.f) {
                         //     // // Log Alpha version
@@ -2025,7 +2032,6 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         }
                         curr_grad_rwalpha += lambda_l_entropy * Den_Dai; // note Dwsum_Dwi is always 1
 
-                        sample_i += 1;
                         // note that for fake sample, we don't have grad to st
                     }
 
@@ -2064,23 +2070,23 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
 
                     if (lane_id == 0) {
-                        // if (opt.fake_sample_l_dist){
-                        //     // add grad to alpha from l_dist
-                        //     float l_dist_grad_alpha = 0.;
-                        //     for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
-                        //         // // skip non-intersection
-                        //         // if (sample_ts[sample_j] == 0.f) continue;
-                        //         l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
-                        //     }
-                        //     curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
+                        if (opt.fake_sample_l_dist){
+                            // // add grad to alpha from l_dist
+                            // float l_dist_grad_alpha = 0.;
+                            // for (int sample_j=0; sample_j < l_dist_max_sample; ++sample_j){
+                            //     // // skip non-intersection
+                            //     // if (sample_ts[sample_j] == 0.f) continue;
+                            //     l_dist_grad_alpha += sample_weights[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
+                            // }
+                            // curr_grad_rwalpha += lambda_l_dist * l_dist_grad_alpha;
 
-                        //     // add grad to alpha from l_entropy
-                        //     float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum;
-                        //     curr_grad_rwalpha += lambda_l_entropy * (Den_Dwi + Den_Dwsum); // note Dwsum_Dwi is always 1
+                            // add grad to alpha from l_entropy
+                            float const Den_Dai = -(_LOG(max(sample_alphas[sample_i], 1e-8) / sample_alpha_sum) + 1.f)/sample_alpha_sum;
+                            curr_grad_rwalpha += lambda_l_entropy_a * (Den_Dai + Den_Dasum); // note Dwsum_Dwi is always 1
 
-                        //     sample_i += 1;
-                        //     // note that for fake sample, we don't have grad to st
-                        // }
+                            sample_i += 1;
+                            // note that for fake sample, we don't have grad to st
+                        }
 
                         if (sparsity_loss > 0.f) {
                             // // Log Alpha version
