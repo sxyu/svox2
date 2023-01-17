@@ -1678,15 +1678,15 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                 Dldist_Dwk += sample_weights[sample_j] * abs(sample_ts[k] - sample_ts[sample_j]);
                             }
 
-                            if (lane_id == 0) printf("=======\nk: %d\n", k);
-                            if (lane_id == 0) printf("Dldist_Dwk: %f\n", Dldist_Dwk);
+                            // if (lane_id == 0) printf("=======\nk: %d\n", k);
+                            // if (lane_id == 0) printf("Dldist_Dwk: %f\n", Dldist_Dwk);
                             if (k == sample_i){
                                 Dldist_Dai += Dldist_Dwk * _EXP(log_transmit);
-                                if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_transmit));
+                                // if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_transmit));
                             } else {
                                 log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8));
                                 Dldist_Dai += Dldist_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f);
-                                if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f));
+                                // if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f));
                             }
                         }
 
