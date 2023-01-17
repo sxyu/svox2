@@ -1597,6 +1597,8 @@ class SparseGrid(nn.Module):
         no_surface: bool = False,
         run_backward: bool = False,
         reg: bool = False,
+        lambda_l_dist: float = 0,
+        lambda_l_entropy: float = 0,
     ):
         """
         gradcheck version for surface rendering
@@ -2412,9 +2414,9 @@ class SparseGrid(nn.Module):
             'extra_loss': {}
         }
 
+        B_ts = torch.zeros((B, MS), device=origins.device)
+        B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
         if return_depth:
-            B_ts = torch.zeros((B, MS), device=origins.device)
-            B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
 
             out_depth = torch.sum(B_weights[...,None] * B_ts[...,None], -2) # [B, 1]
 
@@ -2423,16 +2425,18 @@ class SparseGrid(nn.Module):
 
         # computer dist loss (mipnerf 360)
         if B_weights.numel() > 0:
-            B_ts = torch.zeros((B, MS), device=origins.device)
-            B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
-            B_nts = torch.clamp_min(B_ts - B_ts[:,:1], 0.) /  \
-                torch.clamp_min(B_ts.max(axis=-1, keepdim=True).values - B_ts[:,:1], 1e-8)
+            # B_ts = torch.zeros((B, MS), device=origins.device)
+            # B_ts[B_to_sample_mask] = (ts + close_t).to(B_ts.dtype) # [N_samples]
+            # B_nts = torch.clamp_min(B_ts - B_ts[:,:1], 0.) /  \
+            #     torch.clamp_min(B_ts.max(axis=-1, keepdim=True).values - B_ts[:,:1], 1e-8)
             B_nts = B_ts
             
             l_dist = (B_weights[:, :, None] * B_weights[:, None, :]) * \
                 torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
+
             # l_dist = (B_alpha[:, :, None] * B_alpha[:, None, :]) * \
             #     torch.abs(B_nts[:, :, None].repeat(1,1,MS) - B_nts[:, None, :].repeat(1,MS,1))
+            
             # l_dist = l_dist.sum(axis=-1) + B_weights ** 2. * (B_nts - torch.cat((torch.zeros_like(B_nts[:, :1]), B_nts[:, :-1]), axis=-1)) / 3.
             l_dist = l_dist.sum(axis=-1).sum(axis=-1)
             
@@ -2699,8 +2703,8 @@ class SparseGrid(nn.Module):
             lambda_l1 = 1.
             s = F.mse_loss(out['rgb'], torch.zeros_like(out['rgb'])) * lambda_l2 + \
                 torch.abs(out['rgb'] - torch.zeros_like(out['rgb'])).mean() * lambda_l1
-            # s += l_dist
-            s += l_entropy
+            s += lambda_l_dist * l_dist 
+            s += lambda_l_entropy * l_entropy
             # s += l_samp_dist
             s.backward()
 
