@@ -55,6 +55,8 @@ if __name__ == '__main__':
     parser.add_argument('--downsample_density', type=float, default=0.001)
     parser.add_argument('--patch_size', type=float, default=60)
     parser.add_argument('--max_dist', type=float, default=20)
+    parser.add_argument('--f1_dist', type=float, default=0.01, 
+                        help="the distance threshold for ac1uracy/completeness/f1 metrics")
     parser.add_argument('--visualize_threshold', type=float, default=0.1)
     parser.add_argument('--out_dir', type=str, default='./')
     # parser.add_argument('--del_ckpt', action='store_true', default=False)
@@ -146,6 +148,9 @@ if __name__ == '__main__':
     max_dist = args.max_dist
     mean_d2s = dist_d2s[dist_d2s < max_dist].mean()
     mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
+    accuracy = np.count_nonzero(dist_d2s < args.f1_dist) / len(dist_d2s)
+    completeness = np.count_nonzero(dist_s2d < args.f1_dist) / len(dist_s2d)
+    f1 = 2. / (1./accuracy + 1./completeness)
 
     vis_dist = args.visualize_threshold
     R = np.array([[1,0,0]], dtype=np.float64)
@@ -165,7 +170,13 @@ if __name__ == '__main__':
     # stl_color[ np.where(above)[0] ] = R * stl_alpha + W * (1-stl_alpha)
     # stl_color[ np.where(above)[0][dist_s2d[:,0] >= max_dist] ] = G
     over_all = (mean_d2s + mean_s2d) / 2
-    print(mean_d2s, mean_s2d, over_all)
+    print(f'======= eval result =======\n')
+    print(f'Mean d2s: {mean_d2s}\n')
+    print(f'Mean s2d: {mean_s2d}\n')
+    print(f'Avg cf: {over_all}\n')
+    print(f'Accuracy: {accuracy}\n')
+    print(f'Completeness: {completeness}\n')
+    print(f'F1: {f1}\n\n')
     if args.out_dir is not None:
         os.makedirs(args.out_dir, exist_ok=True)
         if not args.no_pts_save:
@@ -176,7 +187,11 @@ if __name__ == '__main__':
         with open(f'{args.out_dir}/cf.txt', 'w') as f:
             f.write(f'Mean d2s: {mean_d2s}\n')
             f.write(f'Mean s2d: {mean_s2d}\n')
-            f.write(f'Over all: {over_all}\n')
+            f.write(f'Avg cf: {over_all}\n')
+
+            f.write(f'Accuracy: {accuracy}\n')
+            f.write(f'Completeness: {completeness}\n')
+            f.write(f'F1: {f1}\n')
 
 
     # log hparams for tuning tasks
@@ -197,6 +212,9 @@ if __name__ == '__main__':
             'Chamfer/d2s': mean_d2s,
             'Chamfer/s2d': mean_s2d,
             'Chamfer/mean': over_all,
+            'Chamfer/accuracy': accuracy,
+            'Chamfer/completeness': completeness,
+            'Chamfer/f1': f1,
         }
         # summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.input_path)}/../'))
         summary_writer.add_hparams(hparams, metrics, run_name='hparam_mesh' if mesh_eval else 'hparam_pts')
