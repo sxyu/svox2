@@ -26,10 +26,11 @@ def sample_single_tri(input_):
     q = v1 * k[:,:1] + v2 * k[:,1:] + tri_vert
     return q
 
-def write_vis_pcd(file, points, colors):
+def write_vis_pcd(file, points, colors=None):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
+    if colors is not None:
+        pcd.colors = o3d.utility.Vector3dVector(colors)
     o3d.io.write_point_cloud(file, pcd)
 
 def eval_cf(pred, gt, radius=0.001):
