@@ -1796,8 +1796,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             // // Log Alpha version
                             // curr_grad_alpha += sparsity_loss / max(alpha, 1e-8);
 
-                            // L1 version
-                            curr_grad_alpha += sparsity_loss;
+                            // // L1 version
+                            // curr_grad_alpha += sparsity_loss;
+
+                            // Log raw alpha version
+                            float const _1_a = max(1.f-alpha, 1e-8); // 1 - alpha
+                            curr_grad_alpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8));
+                            // printf("_1_a * _LOG(_1_a): %f\n", _1_a * _LOG(_1_a));
                         }
                         
                         // compute gradient for activation
@@ -2154,8 +2159,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             // // Log Alpha version
                             // curr_grad_rwalpha += sparsity_loss / max(rw_alpha, 1e-8);
 
-                            // L1 version
-                            curr_grad_rwalpha += sparsity_loss;
+                            // // L1 version
+                            // curr_grad_rwalpha += sparsity_loss;
+
+                            // Log raw alpha versio
+                            float const _1_a = max(1.f-rw_alpha, 1e-8); // 1 - alpha
+                            curr_grad_rwalpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8));
                         }
 
                         // curr_grad_alpha is now d_mse/d_alpha_i

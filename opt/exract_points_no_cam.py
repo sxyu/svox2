@@ -55,7 +55,7 @@ parser.add_argument(
 parser.add_argument(
     "--downsample_density",
     type=float,
-    default=0.,
+    default=0.001,
     help="density for downsampling the pts, set to 0 to disable"
 )
 parser.add_argument(

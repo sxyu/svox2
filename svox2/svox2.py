@@ -2475,6 +2475,18 @@ class SparseGrid(nn.Module):
         out['extra_loss']['l_samp_dist'] = l_samp_dist
         out['log_stats']['l_samp_dist'] = l_samp_dist
 
+        # computer sparsity loss
+        if B_weights.numel() > 0:
+            B_sigma = -torch.log(1-alpha)
+            l_sparsity = torch.log(B_sigma).sum()
+
+        else:
+            l_sparsity = 0.
+        out['extra_loss']['l_sparsity'] = l_sparsity
+        out['log_stats']['l_sparsity'] = l_sparsity
+
+
+
         
         if reg:
             if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
@@ -2706,6 +2718,7 @@ class SparseGrid(nn.Module):
                 torch.abs(out['rgb'] - torch.zeros_like(out['rgb'])).mean() * lambda_l1
             s += lambda_l_dist * l_dist 
             s += lambda_l_entropy * l_entropy
+            s += sparsity_loss * l_sparsity
             # s += l_samp_dist
             s.backward()
 
