@@ -15,6 +15,8 @@ import open3d as o3d
 # sys.path.append( path.dirname( path.dirname( path.abspath(__file__) ) ) )
 # import svox2
 
+from pathlib import Path
+
 import json
 import imageio
 import os
@@ -998,6 +1000,41 @@ while True:
                 if not args.tune_nosave:
                     ckpt_path = path.join(args.train_dir, f'ckpt.npz')
                     grid.save(ckpt_path, step_id=gstep_id)
+                
+                if args.final_render_eval:
+                    with torch.no_grad():
+                        stats_test = {'psnr' : 0.0, 'mse' : 0.0}
+
+                        n_images_gen = 0
+                        for img_id in tqdm(range(dset_test.c2w.shape[0]), total=dset_test.c2w.shape[0]):
+                            c2w = dset_test.c2w[img_id].to(device=device)
+                            cam = svox2.Camera(c2w,
+                                            dset_test.intrins.get('fx', img_id),
+                                            dset_test.intrins.get('fy', img_id),
+                                            dset_test.intrins.get('cx', img_id),
+                                            dset_test.intrins.get('cy', img_id),
+                                            width=dset_test.get_image_size(img_id)[1],
+                                            height=dset_test.get_image_size(img_id)[0],
+                                            ndc_coeffs=dset_test.ndc_coeffs)
+
+                            rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, no_surface=no_surface)
+                            rgb_gt_test = dset_test.gt[img_id].to(device=device)
+                            all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
+
+                            rgb_pred_test = rgb_gt_test = None
+                            mse_num : float = all_mses.mean().item()
+                            psnr = -10.0 * math.log10(mse_num)
+                            if math.isnan(psnr):
+                                assert False 
+                            stats_test['mse'] += mse_num
+                            stats_test['psnr'] += psnr
+                            n_images_gen += 1
+                        
+                        mean_psnr = stats_test['psnr'] / n_images_gen
+                        with (Path(args.train_dir) / 'render_eval.txt').open('w') as f:
+                            f.write(f'PSNR: {mean_psnr}')
+                        summary_writer.add_scalar('final_eval/psnr', mean_psnr, global_step=gstep_id)
+
                 exit(0)
             
             if args.save_every > 0 and gstep_id % args.save_every == 0 and not args.tune_mode and gstep_id > 0:
