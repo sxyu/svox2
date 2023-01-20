@@ -14,6 +14,7 @@ import json
 from util import config_util
 # import trimesh
 from util.util import Timing
+from pathlib import Path
 
 def sample_single_tri(input_):
     n1, n2, v1, v2, tri_vert = input_
@@ -171,13 +172,25 @@ if __name__ == '__main__':
     # stl_color[ np.where(above)[0] ] = R * stl_alpha + W * (1-stl_alpha)
     # stl_color[ np.where(above)[0][dist_s2d[:,0] >= max_dist] ] = G
     over_all = (mean_d2s + mean_s2d) / 2
-    print(f'======= eval result =======\n')
-    print(f'Mean d2s: {mean_d2s}\n')
-    print(f'Mean s2d: {mean_s2d}\n')
-    print(f'Avg cf: {over_all}\n')
-    print(f'Accuracy: {accuracy}\n')
-    print(f'Completeness: {completeness}\n')
-    print(f'F1: {f1}\n\n')
+
+
+
+    # read image eval metrics if avaliable
+    img_eval_path = Path(args.input_path).parent / '..' / 'render_eval.txt'
+    if img_eval_path.exists():
+        with img_eval_path.open('r') as f:
+            psnr = float(f.readline().split(':')[-1].strip())
+    else:
+        psnr = None
+
+    print(f'======= eval result =======')
+    print(f'Mean d2s: {mean_d2s}')
+    print(f'Mean s2d: {mean_s2d}')
+    print(f'Avg cf: {over_all}')
+    print(f'Accuracy: {accuracy}')
+    print(f'Completeness: {completeness}')
+    print(f'F1: {f1}')
+    print(f'psnr: {psnr}\n')
     if args.out_dir is not None:
         os.makedirs(args.out_dir, exist_ok=True)
         if not args.no_pts_save:
@@ -193,6 +206,9 @@ if __name__ == '__main__':
             f.write(f'Accuracy: {accuracy}\n')
             f.write(f'Completeness: {completeness}\n')
             f.write(f'F1: {f1}\n')
+            
+            f.write(f'psnr: {psnr}\n')
+
 
 
     # log hparams for tuning tasks
@@ -217,6 +233,10 @@ if __name__ == '__main__':
             'Chamfer/completeness': completeness,
             'Chamfer/f1': f1,
         }
+
+        if psnr is not None:
+            metrics['Image/psnr'] = psnr
+
         # summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.input_path)}/../'))
         summary_writer.add_hparams(hparams, metrics, run_name='hparam_mesh' if mesh_eval else 'hparam_pts')
         summary_writer.flush()
@@ -225,5 +245,9 @@ if __name__ == '__main__':
         summary_writer.add_scalar('Chamfer/d2s', mean_d2s, global_step=0)
         summary_writer.add_scalar('Chamfer/s2d', mean_s2d, global_step=0)
         summary_writer.add_scalar('Chamfer/mean', over_all, global_step=0)
+        summary_writer.add_scalar('Chamfer/accuracy', accuracy, global_step=0)
+        summary_writer.add_scalar('Chamfer/completeness', completeness, global_step=0)
+        summary_writer.add_scalar('Chamfer/f1', f1, global_step=0)
+        summary_writer.add_scalar('Image/psnr', psnr, global_step=0)
         summary_writer.flush()
     summary_writer.close()
