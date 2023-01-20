@@ -1799,9 +1799,12 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             // // L1 version
                             // curr_grad_alpha += sparsity_loss;
 
-                            // Log raw alpha version
+                            // Log raw alpha version -- log(raw_a) * (1-norm_w)
                             float const _1_a = max(1.f-alpha, 1e-8); // 1 - alpha
-                            curr_grad_alpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8));
+                            curr_grad_alpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum);
+                            // printf("weight: %f\n", weight);
+                            // printf("rw: %f\n", (1.f - weight / sample_weight_sum));
+                            // printf("sparse_loss: %f\n\n", -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum));
                             // printf("_1_a * _LOG(_1_a): %f\n", _1_a * _LOG(_1_a));
                         }
                         
@@ -2164,7 +2167,10 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                             // Log raw alpha versio
                             float const _1_a = max(1.f-rw_alpha, 1e-8); // 1 - alpha
-                            curr_grad_rwalpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8));
+                            curr_grad_rwalpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum);
+                            // printf("weight: %f\n", weight);
+                            // printf("rw: %f\n", (1.f - weight / sample_weight_sum));
+                            // printf("sparse_loss: %f\n", -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum));
                         }
 
                         // curr_grad_alpha is now d_mse/d_alpha_i

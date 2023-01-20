@@ -2477,9 +2477,12 @@ class SparseGrid(nn.Module):
 
         # computer sparsity loss
         if B_weights.numel() > 0:
-            B_sigma = -torch.log(1-alpha)
-            l_sparsity = torch.log(B_sigma).sum()
+            nB_weights = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-10)
+            B_sigma = -torch.log(1-B_alpha)
+            # B_sigma = -torch.log(1-B_alpha)
+            l_sparsity = (torch.log(B_sigma) * (1. - nB_weights.detach().clone())).sum()
 
+            B_sigma.retain_grad()
         else:
             l_sparsity = 0.
         out['extra_loss']['l_sparsity'] = l_sparsity
