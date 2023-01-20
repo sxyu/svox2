@@ -248,6 +248,7 @@ if __name__ == '__main__':
         summary_writer.add_scalar('Chamfer/accuracy', accuracy, global_step=0)
         summary_writer.add_scalar('Chamfer/completeness', completeness, global_step=0)
         summary_writer.add_scalar('Chamfer/f1', f1, global_step=0)
-        summary_writer.add_scalar('Image/psnr', psnr, global_step=0)
+        if psnr is not None:
+            summary_writer.add_scalar('Image/psnr', psnr, global_step=0)
         summary_writer.flush()
     summary_writer.close()
