@@ -971,6 +971,8 @@ while True:
                         lambda_l1=fs_std_l1_func(gstep_id),
                         lambda_l2=fs_std_l2_func(gstep_id),
                         )
+                        with torch.no_grad():
+                            torch.clamp_min_(grid.fake_sample_std, 1e-8)
 
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if grid.use_background:
