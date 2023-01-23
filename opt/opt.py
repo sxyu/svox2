@@ -217,6 +217,12 @@ lr_sigma_bg_func = get_expon_lr_func(args.lr_sigma_bg, args.lr_sigma_bg_final, a
 lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, args.lr_color_bg_delay_steps,
                                args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
 
+fs_std_l1_func = get_linear_lr_func(args.lambda_fake_sample_std_l1, args.lambda_fake_sample_std_l1_final,
+                            max_steps=args.lambda_fake_sample_std_l1_steps)
+
+fs_std_l2_func = get_linear_lr_func(args.lambda_fake_sample_std_l2, args.lambda_fake_sample_std_l2_final,
+                            max_steps=args.lambda_fake_sample_std_l2_steps)
+
 if args.surf_lv_range_decay_type == 'linear':
     surf_lv_range_func = get_linear_lr_func(args.surf_lv_range, args.surf_lv_range_final, lr_delay_steps=args.no_surface_init_iters,
                                 max_steps=args.surf_lv_range_decay_steps)
@@ -962,8 +968,8 @@ while True:
 
                     if args.trainable_fake_sample_std:
                         grid.optim_fake_sample_std_step(lr_fake_sample_std, beta=args.rms_beta, optim=args.surface_optim, 
-                        lambda_l1=args.lambda_fake_sample_std_l1,
-                        lambda_l2=args.lambda_fake_sample_std_l2,
+                        lambda_l1=fs_std_l1_func(gstep_id),
+                        lambda_l2=fs_std_l2_func(gstep_id),
                         )
 
                 grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
