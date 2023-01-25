@@ -707,7 +707,7 @@ __global__ void alpha_surf_sparsify_grad_sparse_kernel(
     // const float safe_grad = isnan(grad) ? 1.f : grad;
 
 
-    const float safe_grad = 1.f/max(alpha_raw, 1e-5f);
+    const float safe_grad = 1.f/max(alpha_raw, 1e-8f);
     ASSERT_NUM(safe_grad);
     
 
@@ -1412,8 +1412,10 @@ void alpha_surf_sparsify_grad_sparse(torch::Tensor links,
             alpha_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
             surf_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
             rand_cells.data_ptr<int32_t>(),
-            scale_alpha / nl,
-            scale_surf / nl,
+            scale_alpha,
+            scale_surf,
+            // scale_alpha / nl,
+            // scale_surf / nl,
             surf_sparse_decrease,
             surf_sparse_thresh,
             alpha_bound,
