@@ -853,6 +853,15 @@ while True:
                     if (gstep_id + 1) % args.print_every == 0 and eik_loss is not None:
                         summary_writer.add_scalar("eik_loss", eik_loss / args.lambda_surface_eikonal, global_step=gstep_id)
 
+
+                if args.lambda_norm_match_loss > 0.0:
+                    norm_match_loss = grid._surface_norm_match_loss_grad_check(
+                                grid._get_rand_cells_non_empty(args.norm_surface_sparsity, contiguous=args.tv_contiguous),
+                                scaling=args.lambda_norm_match_loss,
+                                )
+                    if (gstep_id + 1) % args.print_every == 0:
+                        summary_writer.add_scalar("norm_match_loss", norm_match_loss.item() / args.lambda_norm_match_loss, global_step=gstep_id)
+
                 if args.lambda_surf_sign_loss > 0.0:
                     # with Timing("normal_loss"):
                     sign_loss = grid.inplace_surface_sign_change_grad(grid.surface_data.grad,

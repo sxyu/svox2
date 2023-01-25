@@ -538,6 +538,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surf_sparsify_bound', type=float, default=-10)
     group.add_argument('--sparsify_only_trained_cells', action='store_true', default=False)
 
+    group.add_argument('--lambda_norm_match_loss', type=float, default=0)
+
     group.add_argument('--lambda_viscosity_loss', type=float, default=0)
     group.add_argument('--viscosity_sparsity', type=float, default=0.1)
     group.add_argument('--viscosity_eta', type=float, default=1e-2)

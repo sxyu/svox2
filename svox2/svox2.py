@@ -5166,6 +5166,56 @@ class SparseGrid(nn.Module):
 
         return eikonal_loss
 
+    def _surface_norm_match_loss_grad_check(self, rand_cells, scaling, device='cuda'):
+        xyz = rand_cells
+        z = (xyz % self.links.shape[2]).long()
+        xy = xyz / self.links.shape[2]
+        y = (xy % self.links.shape[1]).long()
+        x = (xy / self.links.shape[1]).long()
+
+
+
+        def safe_fetch_data_default(xyz, data, default):
+
+            out = default.clone().detach()
+            edge_mask = (xyz >= 0).all(axis=-1) & (xyz < torch.tensor(self.links.shape, device=xyz.device)[None, :]).all(axis=-1)
+
+            x, y, z = xyz[edge_mask].unbind(-1)
+            links = self.links[x,y,z]
+            valid_mask = links >= 0
+
+            idx = torch.arange(out.shape[0])[edge_mask][valid_mask]
+            out[idx] = data[links[valid_mask].long()]
+
+            return out
+
+        # filter out empty cells
+        empty_mask = self.links[x,y,z] < 0
+
+        x, y, z = x[~empty_mask], y[~empty_mask], z[~empty_mask]  
+
+        surf000 = self.surface_data[self.links[x,y,z].long()]
+        surf100 = safe_fetch_data_default(torch.stack([x+1,y,z]).T, self.surface_data, surf000)
+        surf010 = safe_fetch_data_default(torch.stack([x,y+1,z]).T, self.surface_data, surf000)
+        surf001 = safe_fetch_data_default(torch.stack([x,y,z+1]).T, self.surface_data, surf000)
+
+        raw_alpha000 = self.density_data[self.links[x,y,z].long()]
+        raw_alpha100 = safe_fetch_data_default(torch.stack([x+1,y,z]).T, self.density_data, raw_alpha000)
+        raw_alpha010 = safe_fetch_data_default(torch.stack([x,y+1,z]).T, self.density_data, raw_alpha000)
+        raw_alpha001 = safe_fetch_data_default(torch.stack([x,y,z+1]).T, self.density_data, raw_alpha000)
+
+        surf_grad = torch.concat([surf100 - surf000, surf010 - surf000, surf001 - surf000], axis=-1)
+        surf_norm = surf_grad / torch.clamp_min(torch.sqrt((surf_grad**2.).sum(axis=-1, keepdim=True)), 1e-8)
+        ra_grad = torch.concat([raw_alpha100 - raw_alpha000, raw_alpha010 - raw_alpha000, raw_alpha001 - raw_alpha000], axis=-1)
+        ra_norm = ra_grad / torch.clamp_min(torch.sqrt((ra_grad**2.).sum(axis=-1, keepdim=True)), 1e-8)
+        
+
+        norm_match_loss = scaling / rand_cells.shape[0] * ((surf_norm - ra_norm)**2).sum()
+
+        norm_match_loss.backward()
+
+        return norm_match_loss
+
 
     def _surface_viscosity_loss_grad_check(self, rand_cells, scaling, device='cuda', eta=1e-2):
         xyz = rand_cells
