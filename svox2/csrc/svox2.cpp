@@ -55,6 +55,8 @@ void volume_render_cuvol_fused(SparseGridSpec &, RaysSpec &, RenderOptions &,
 // Expected termination (depth) rendering
 torch::Tensor volume_render_expected_term(SparseGridSpec &, RaysSpec &,
                                           RenderOptions &);
+std::tuple<torch::Tensor, torch::Tensor> volume_render_med_term(SparseGridSpec &, RaysSpec &,
+                                          RenderOptions &, int);
 // Depth rendering based on sigma-threshold as in Dex-NeRF
 torch::Tensor volume_render_sigma_thresh(SparseGridSpec &, RaysSpec &,
                                          RenderOptions &, float);
@@ -145,6 +147,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(volume_render_cuvol_backward);
   _REG_FUNC(volume_render_cuvol_fused);
   _REG_FUNC(volume_render_expected_term);
+  _REG_FUNC(volume_render_med_term);
   _REG_FUNC(volume_render_sigma_thresh);
   _REG_FUNC(volume_render_expected_term_surf_trav);
   _REG_FUNC(volume_render_sigma_thresh_surf_trav);

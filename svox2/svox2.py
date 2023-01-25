@@ -3427,7 +3427,7 @@ class SparseGrid(nn.Module):
                                 **kwargs)['rgb']
                 return rgb_out_part
 
-    def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None, **kwargs):
+    def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None, depth_type='mean', **kwargs):
         """
         Volumetric depth rendering for rays
 
@@ -3462,10 +3462,30 @@ class SparseGrid(nn.Module):
             return out['depth']
 
         if sigma_thresh is None:
-            return _C.volume_render_expected_term(
-                    self._to_cpp(),
-                    rays._to_cpp(),
-                    self.opt._to_cpp())
+            if depth_type == 'mean':
+                return _C.volume_render_expected_term(
+                        self._to_cpp(),
+                        rays._to_cpp(),
+                        self.opt._to_cpp())
+            elif depth_type == 'med':
+                depths, sigmas = _C.volume_render_med_term(
+                                    self._to_cpp(),
+                                    rays._to_cpp(),
+                                    self.opt._to_cpp(),
+                                    1024)
+                
+                nan_mask = (depths == 0.) | (sigmas < 0.5)
+                depths[nan_mask] = torch.nan
+                sigmas[nan_mask] = torch.nan
+
+                ids = torch.nanmedian(sigmas, dim=-1).indices
+                depth = depths[torch.arange(depths.shape[0]), ids]
+                return depth
+
+
+            else:
+                raise NotImplementedError(f'depth_type {depth_type} not recognised!')
+
         else:
             return _C.volume_render_sigma_thresh(
                     self._to_cpp(),
@@ -3580,7 +3600,7 @@ class SparseGrid(nn.Module):
         return all_alpha_out.view(camera.height, camera.width, 1)
 
 
-    def volume_render_extract_pts(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, **kwargs):
+    def volume_render_extract_pts(self, camera: Camera, sigma_thresh: Optional[float] = None, batch_size: int = 5000, depth_type='mean', **kwargs):
         """
         Volume render and caculate depth for each camera ray, then store a 3D point for each ray
 
@@ -3597,13 +3617,13 @@ class SparseGrid(nn.Module):
             # extrac points from depth
             all_depths = []
             for batch_start in range(0, camera.height * camera.width, batch_size):
-                depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh, **kwargs)
+                depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh, depth_type=depth_type, **kwargs)
                 all_depths.append(depths)
             all_depth_out = torch.cat(all_depths, dim=0)
             
             all_pts = rays.origins + rays.dirs * all_depth_out[:,None]
-            # filter 0 depth
-            all_pts = all_pts[all_depth_out!=0.]
+            # filter 0 and nan depth
+            all_pts = all_pts[(all_depth_out!=0.) & (~torch.isnan(all_depth_out))]
         else:
             # extract from intersections
             all_pts = []

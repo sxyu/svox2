@@ -176,6 +176,69 @@ __device__ __inline__ void trace_ray_expected_term(
     *out = outv;
 }
 
+__device__ __inline__ void trace_ray_med_term(
+        const PackedSparseGridSpec& __restrict__ grid,
+        SingleRaySpec& __restrict__ ray,
+        const RenderOptions& __restrict__ opt,
+        const int max_sample,
+        float* __restrict__ depths,
+        float* __restrict__ sigmas
+        ) {
+    if (ray.tmin > ray.tmax) {
+        return;
+    }
+
+    int sample_i = 0;
+
+    float t = ray.tmin;
+
+    float log_transmit = 0.f;
+    // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
+
+    while (t <= ray.tmax) {
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
+            ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
+            ray.pos[j] -= static_cast<float>(ray.l[j]);
+        }
+
+        const float skip = compute_skip_dist(ray,
+                       grid.links, grid.stride_x,
+                       grid.size[2], 0);
+
+        if (skip >= opt.step_size) {
+            // For consistency, we skip the by step size
+            t += ceilf(skip / opt.step_size) * opt.step_size;
+            continue;
+        }
+        float sigma = trilerp_cuvol_one(
+                grid.links, grid.density_data,
+                grid.stride_x,
+                grid.size[2],
+                1,
+                ray.l, ray.pos,
+                0);
+        if (sigma > opt.sigma_thresh) {
+            const float pcnt = ray.world_step * sigma;
+            const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+            log_transmit -= pcnt;
+
+            if (sample_i < max_sample){
+                depths[sample_i] = (t / opt.step_size) * ray.world_step;
+                sigmas[sample_i] = sigma;
+                sample_i += 1;
+            }
+            if (_EXP(log_transmit) < opt.stop_thresh) {
+                log_transmit = -1e3f;
+                break;
+            }
+        }
+        t += opt.step_size;
+    }
+}
+
 // From Dex-NeRF
 __device__ __inline__ void trace_ray_sigma_thresh(
         const PackedSparseGridSpec& __restrict__ grid,
@@ -888,6 +951,32 @@ __global__ void render_ray_expected_term_kernel(
 }
 
 __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void render_ray_med_term_kernel(
+        PackedSparseGridSpec grid,
+        PackedRaysSpec rays,
+        RenderOptions opt,
+        int max_sample,
+        torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> depths,
+        torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sigmas
+        ) {
+        // const PackedSparseGridSpec& __restrict__ grid,
+        // SingleRaySpec& __restrict__ ray,
+        // const RenderOptions& __restrict__ opt,
+        // float* __restrict__ out) {
+    CUDA_GET_THREAD_ID(ray_id, rays.origins.size(0));
+    SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
+    ray_find_bounds(ray_spec, grid, opt, ray_id);
+    trace_ray_med_term(
+        grid,
+        ray_spec,
+        opt,
+        max_sample,
+        depths[ray_id].data(),
+        sigmas[ray_id].data()
+        );
+}
+
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void render_ray_sigma_thresh_kernel(
         PackedSparseGridSpec grid,
         PackedRaysSpec rays,
@@ -1177,6 +1266,29 @@ torch::Tensor volume_render_expected_term(SparseGridSpec& grid,
             results.data_ptr<float>()
         );
     return results;
+}
+
+std::tuple<torch::Tensor, torch::Tensor>  volume_render_med_term(SparseGridSpec& grid,
+        RaysSpec& rays, RenderOptions& opt, int max_sample) {
+    auto options =
+        torch::TensorOptions()
+        .dtype(rays.origins.dtype())
+        .layout(torch::kStrided)
+        .device(rays.origins.device())
+        .requires_grad(false);
+    torch::Tensor depths = torch::zeros({rays.origins.size(0), max_sample}, options);
+    torch::Tensor sigmas = torch::zeros({rays.origins.size(0), max_sample}, options);
+    const auto Q = rays.origins.size(0);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
+    device::render_ray_med_term_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+            grid,
+            rays,
+            opt,
+            max_sample,
+            depths.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+            sigmas.packed_accessor32<float, 2, torch::RestrictPtrTraits>()
+        );
+    return std::tuple<torch::Tensor, torch::Tensor>{depths, sigmas};
 }
 
 torch::Tensor volume_render_sigma_thresh(SparseGridSpec& grid,
