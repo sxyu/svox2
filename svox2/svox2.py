@@ -2488,7 +2488,29 @@ class SparseGrid(nn.Module):
         out['extra_loss']['l_sparsity'] = l_sparsity
         out['log_stats']['l_sparsity'] = l_sparsity
 
+        # computer surface sparsity loss
+        if B_weights.numel() > 0:
+            # interpolate surface
+            wa, wb = 1. - (samples - l), (samples - l)
+            wa, wb = wa / (wa + wb), wb / (wa + wb)
 
+            c00 = surface000[l_ids] * wa[:, 2:] + surface001[l_ids] * wb[:, 2:]
+            c01 = surface010[l_ids] * wa[:, 2:] + surface011[l_ids] * wb[:, 2:]
+            c10 = surface100[l_ids] * wa[:, 2:] + surface101[l_ids] * wb[:, 2:]
+            c11 = surface110[l_ids] * wa[:, 2:] + surface111[l_ids] * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            s = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+            real_sample_mask = torch.ones_like(s).bool()
+            real_sample_mask[fake_sample_ids, :] = False
+
+            l_ss = torch.where((alpha < 0.1) & (real_sample_mask), s, 0.).sum()
+
+        else:
+            l_ss = 0.
+        out['extra_loss']['l_ss'] = l_ss
+        out['log_stats']['l_ss'] = l_ss
 
         
         if reg:
@@ -2722,6 +2744,7 @@ class SparseGrid(nn.Module):
             s += lambda_l_dist * l_dist 
             s += lambda_l_entropy * l_entropy
             s += sparsity_loss * l_sparsity
+            s += 1. * l_ss
             # s += l_samp_dist
             s.backward()
 
@@ -3240,6 +3263,8 @@ class SparseGrid(nn.Module):
         lambda_l_samp_dist: float = 0.,
         lambda_l_di: float = 0., # l_di: loss to encourage Denser Intersection
         l_di_alpha_thresh: float = 0., # only intersections with alpha below this threshold will be applied with l_di
+        surf_sparse_alpha_thresh: float = 0., 
+        lambda_inplace_surf_sparse: float = 0., 
         l_dist_max_sample: int = 64,
         no_surface: bool = False,
     ):
@@ -3352,6 +3377,8 @@ class SparseGrid(nn.Module):
                 lambda_l_samp_dist,
                 lambda_l_di,
                 l_di_alpha_thresh,
+                surf_sparse_alpha_thresh,
+                lambda_inplace_surf_sparse,
                 l_dist_max_sample,
                 rgb_out,
                 grad_holder

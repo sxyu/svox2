@@ -1358,6 +1358,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         float const lambda_l_samp_dist, // l_samp_dist = |weighted_avg(Di, wi) - Di| 
         float const lambda_l_di,
         float const l_di_alpha_thresh,
+        float const surf_sparse_alpha_thresh,
+        float const lambda_inplace_surf_sparse,
         int const l_dist_max_sample,
         float* __restrict__ const sample_alphas,
         float* __restrict__ const sample_weights,
@@ -1903,6 +1905,24 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             ray.l,
                             grad_surface
                         );
+
+
+                        // inplace surf sparsify loss
+                        // for an intersection, if its alpha is too low
+                        // we encourage the trilinearly interpolated surface scalar to be negative
+                        // L = s, where s the trilinear interpolated surface scalar (should be 0)
+                        if (alpha < surf_sparse_alpha_thresh){
+                            float const grad_ss = lambda_inplace_surf_sparse;
+                            trilerp_backward_cuvol_one_density(
+                                    grid.links,
+                                    grads.grad_surface_out,
+                                    grads.mask_out,
+                                    grid.stride_x,
+                                    grid.size[2],
+                                    ray.l, ray.pos, grad_ss);
+                        }
+
+
                         sample_i += 1;
                     }
 
@@ -2667,6 +2687,8 @@ __global__ void render_ray_backward_kernel(
     float lambda_l_samp_dist,
     float lambda_l_di,
     float l_di_alpha_thresh,
+    float surf_sparse_alpha_thresh,
+    float lambda_inplace_surf_sparse,
     int l_dist_max_sample,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_alphas,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
@@ -2746,6 +2768,8 @@ __global__ void render_ray_backward_kernel(
         lambda_l_samp_dist,
         lambda_l_di,
         l_di_alpha_thresh,
+        surf_sparse_alpha_thresh,
+        lambda_inplace_surf_sparse,
         l_dist_max_sample,
         sample_alphas[ray_id].data(),
         sample_weights[ray_id].data(),
@@ -3138,6 +3162,8 @@ void volume_render_surf_trav_backward(
                     0.f,
                     0.f,
                     0.f,
+                    0.f,
+                    0.f,
                     0,
                     sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
@@ -3186,6 +3212,8 @@ void volume_render_surf_trav_fused(
         float lambda_l_samp_dist, // our sample distance loss
         float lambda_l_di, // l_di: loss to encourage Denser Intersection
         float l_di_alpha_thresh, // only intersections with alpha below this threshold will be applied with l_di
+        float surf_sparse_alpha_thresh,
+        float lambda_inplace_surf_sparse,
         int const l_dist_max_sample, // maximum number of samples for each ray considered for l_dist
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
@@ -3270,6 +3298,8 @@ void volume_render_surf_trav_fused(
                 lambda_l_samp_dist / Q,
                 lambda_l_di,
                 l_di_alpha_thresh,
+                surf_sparse_alpha_thresh,
+                lambda_inplace_surf_sparse,
                 l_dist_max_sample,
                 sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
