@@ -1129,23 +1129,30 @@ __device__ __inline__ void trace_ray_normal(
                         0), opt.alpha_activation_type);
 
                 if (alpha > 0) {
-                    *out = ((st[j]+t_close) / opt.step_size) * ray.world_step;
                     // determine normal
-                    const int32_t* __restrict__ link_ptr = grid.links + (grid.stride_x * ray.l[0] + grid.size[2] * ray.l[1] + ray.l[2]);
-                    #define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? grid.surface_data[link_ptr[u] * 1] : 0.f) 
-                        const float c00 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), ray.pos[2]); 
-                        const float c01 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), ray.pos[2]);
-                        const float c0 = lerp(c00, c01, ray.pos[1]);
-                        const float c10 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), ray.pos[2]);
-                        const float c11 = lerp(MAYBE_READ_LINK(offy + offx),
-                                                MAYBE_READ_LINK(offy + offx + 1), ray.pos[2]);
-                        const float c1 = lerp(c10, c11, ray.pos[1]);
-                    #undef MAYBE_READ_LINK
+                    // const int32_t* __restrict__ link_ptr = grid.links + (grid.stride_x * ray.l[0] + grid.size[2] * ray.l[1] + ray.l[2]);
+                    // #define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? grid.surface_data[link_ptr[u] * 1] : 0.f) 
+                    //     const float c00 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), ray.pos[2]); 
+                    //     const float c01 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), ray.pos[2]);
+                    //     const float c0 = lerp(c00, c01, ray.pos[1]);
+                    //     const float c10 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), ray.pos[2]);
+                    //     const float c11 = lerp(MAYBE_READ_LINK(offy + offx),
+                    //                             MAYBE_READ_LINK(offy + offx + 1), ray.pos[2]);
+                    //     const float c1 = lerp(c10, c11, ray.pos[1]);
+                    // #undef MAYBE_READ_LINK
 
-                    out[0] = c1 - c0;
-                    out[1] = ray.pos[0]*(-c10 + c11) + (1. - ray.pos[0])*(-c00 + c01);
-                    out[2] = ray.pos[0]*(ray.pos[1]*(-surface[0b110] + surface[0b111]) + (1 - ray.pos[1])*(-surface[0b100] + surface[0b101])) + \
-                             (1 - ray.pos[0])*(ray.pos[1]*(-surface[0b010] + surface[0b011]) + (1 - ray.pos[1])*(-surface[0b000] + surface[0b001]));
+                    // out[0] = c1 - c0;
+                    // out[1] = ray.pos[0]*(-c10 + c11) + (1. - ray.pos[0])*(-c00 + c01);
+                    // out[2] = ray.pos[0]*(ray.pos[1]*(-surface[0b110] + surface[0b111]) + (1 - ray.pos[1])*(-surface[0b100] + surface[0b101])) + \
+                    //          (1 - ray.pos[0])*(ray.pos[1]*(-surface[0b010] + surface[0b011]) + (1 - ray.pos[1])*(-surface[0b000] + surface[0b001]));
+
+                    compute_field_grad(
+                        grid.links, grid.surface_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        ray.l, ray.pos,
+                        out
+                    );
 
                     return;
                 }
@@ -1360,6 +1367,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         float const l_di_alpha_thresh,
         float const surf_sparse_alpha_thresh,
         float const lambda_inplace_surf_sparse,
+        float const lambda_inwards_norm_loss,
         int const l_dist_max_sample,
         float* __restrict__ const sample_alphas,
         float* __restrict__ const sample_weights,
@@ -1809,6 +1817,29 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             // printf("sparse_loss: %f\n\n", -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum));
                             // printf("_1_a * _LOG(_1_a): %f\n", _1_a * _LOG(_1_a));
                         }
+
+                        if (lambda_inwards_norm_loss > 0.f){
+                            // penalizing the alpha on surfaces with inwards normal
+                            float surf_grad[3]; 
+                            compute_field_grad(
+                                grid.links, grid.surface_data,
+                                grid.stride_x,
+                                grid.size[2],
+                                ray.l, ray.pos,
+                                surf_grad
+                            );
+                            float const surf_n = max(sqrtf(_SQR(surf_grad[0]) + _SQR(surf_grad[1]) + _SQR(surf_grad[2])), 1e-8);
+                            float const surf_norm[] = {-surf_grad[0] / surf_n, -surf_grad[1] / surf_n, -surf_grad[2] / surf_n};
+
+                            float const norm_dir_dot = surf_norm[0] * ray.dir[0] + surf_norm[1] * ray.dir[1] + surf_norm[2] * ray.dir[2];
+
+                            if (norm_dir_dot > 0.f){
+                                curr_grad_alpha += lambda_inwards_norm_loss * _SQR(norm_dir_dot);
+                            }
+
+                            // printf("voxel: [%d, %d, %d]\n", ray.l[0], ray.l[1], ray.l[2]);
+                            // printf("surf_grad: [%f, %f, %f]\n\n", surf_grad[0], surf_grad[1], surf_grad[2]);
+                        }
                         
                         // compute gradient for activation
                         float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
@@ -2191,6 +2222,28 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             // printf("weight: %f\n", weight);
                             // printf("rw: %f\n", (1.f - weight / sample_weight_sum));
                             // printf("sparse_loss: %f\n", -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum));
+                        }
+
+                        if (lambda_inwards_norm_loss > 0.f){
+                            // penalizing the alpha on surfaces with inwards normal
+                            float surf_grad[3]; 
+                            compute_field_grad(
+                                grid.links, grid.surface_data,
+                                grid.stride_x,
+                                grid.size[2],
+                                ray.l, ray.pos,
+                                surf_grad
+                            );
+                            float const surf_n = max(sqrtf(_SQR(surf_grad[0]) + _SQR(surf_grad[1]) + _SQR(surf_grad[2])), 1e-8);
+                            float const surf_norm[] = {-surf_grad[0] / surf_n, -surf_grad[1] / surf_n, -surf_grad[2] / surf_n};
+
+                            float const norm_dir_dot = surf_norm[0] * ray.dir[0] + surf_norm[1] * ray.dir[1] + surf_norm[2] * ray.dir[2];
+
+                            if (norm_dir_dot > 0.f){
+                                curr_grad_rwalpha += lambda_inwards_norm_loss * _SQR(norm_dir_dot);
+                            }
+                            // printf("voxel: [%d, %d, %d]\n", ray.l[0], ray.l[1], ray.l[2]);
+                            // printf("surf_grad: [%f, %f, %f]\n\n", surf_grad[0], surf_grad[1], surf_grad[2]);
                         }
 
                         // curr_grad_alpha is now d_mse/d_alpha_i
@@ -2689,6 +2742,7 @@ __global__ void render_ray_backward_kernel(
     float l_di_alpha_thresh,
     float surf_sparse_alpha_thresh,
     float lambda_inplace_surf_sparse,
+    float lambda_inwards_norm_loss,
     int l_dist_max_sample,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_alphas,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
@@ -2770,6 +2824,7 @@ __global__ void render_ray_backward_kernel(
         l_di_alpha_thresh,
         surf_sparse_alpha_thresh,
         lambda_inplace_surf_sparse,
+        lambda_inwards_norm_loss,
         l_dist_max_sample,
         sample_alphas[ray_id].data(),
         sample_weights[ray_id].data(),
@@ -3164,6 +3219,7 @@ void volume_render_surf_trav_backward(
                     0.f,
                     0.f,
                     0.f,
+                    0.f,
                     0,
                     sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
@@ -3214,6 +3270,7 @@ void volume_render_surf_trav_fused(
         float l_di_alpha_thresh, // only intersections with alpha below this threshold will be applied with l_di
         float surf_sparse_alpha_thresh,
         float lambda_inplace_surf_sparse,
+        float lambda_inwards_norm_loss,
         int const l_dist_max_sample, // maximum number of samples for each ray considered for l_dist
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
@@ -3300,6 +3357,7 @@ void volume_render_surf_trav_fused(
                 l_di_alpha_thresh,
                 surf_sparse_alpha_thresh,
                 lambda_inplace_surf_sparse,
+                lambda_inwards_norm_loss,
                 l_dist_max_sample,
                 sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
