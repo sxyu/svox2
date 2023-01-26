@@ -123,6 +123,7 @@ __device__ __inline__ void trace_ray_expected_term(
         const PackedSparseGridSpec& __restrict__ grid,
         SingleRaySpec& __restrict__ ray,
         const RenderOptions& __restrict__ opt,
+        float const weight_thresh,
         float* __restrict__ out) {
     if (ray.tmin > ray.tmax) {
         *out = 0.f;
@@ -131,6 +132,7 @@ __device__ __inline__ void trace_ray_expected_term(
 
     float t = ray.tmin;
     float outv = 0.f;
+    float weight_acc = 0.f;
 
     float log_transmit = 0.f;
     // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
@@ -166,6 +168,7 @@ __device__ __inline__ void trace_ray_expected_term(
             log_transmit -= pcnt;
 
             outv += weight * (t / opt.step_size) * ray.world_step;
+            weight_acc += weight;
             if (_EXP(log_transmit) < opt.stop_thresh) {
                 log_transmit = -1e3f;
                 break;
@@ -173,7 +176,80 @@ __device__ __inline__ void trace_ray_expected_term(
         }
         t += opt.step_size;
     }
-    *out = outv;
+    if (weight_acc > weight_thresh){
+        *out = outv;
+    }else{
+        *out = 0.f;
+    }
+}
+
+__device__ __inline__ void trace_ray_mode_term(
+        const PackedSparseGridSpec& __restrict__ grid,
+        SingleRaySpec& __restrict__ ray,
+        const RenderOptions& __restrict__ opt,
+        float const weight_thresh,
+        float* __restrict__ out) {
+    if (ray.tmin > ray.tmax) {
+        *out = 0.f;
+        return;
+    }
+
+    float t = ray.tmin;
+    float outv = 0.f;
+    float weight_acc = 0.f;
+    float max_weight = -1.f;
+
+    float log_transmit = 0.f;
+    // printf("tmin %f, tmax %f \n", ray.tmin, ray.tmax);
+
+    while (t <= ray.tmax) {
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            ray.pos[j] = fmaf(t, ray.dir[j], ray.origin[j]);
+            ray.pos[j] = min(max(ray.pos[j], 0.f), grid.size[j] - 1.f);
+            ray.l[j] = min(static_cast<int32_t>(ray.pos[j]), grid.size[j] - 2);
+            ray.pos[j] -= static_cast<float>(ray.l[j]);
+        }
+
+        const float skip = compute_skip_dist(ray,
+                       grid.links, grid.stride_x,
+                       grid.size[2], 0);
+
+        if (skip >= opt.step_size) {
+            // For consistency, we skip the by step size
+            t += ceilf(skip / opt.step_size) * opt.step_size;
+            continue;
+        }
+        float sigma = trilerp_cuvol_one(
+                grid.links, grid.density_data,
+                grid.stride_x,
+                grid.size[2],
+                1,
+                ray.l, ray.pos,
+                0);
+        if (sigma > opt.sigma_thresh) {
+            const float pcnt = ray.world_step * sigma;
+            const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+            log_transmit -= pcnt;
+
+            weight_acc += weight;
+            if (weight > max_weight){
+                max_weight = weight;
+                outv = (t / opt.step_size) * ray.world_step;
+            }
+
+            if (_EXP(log_transmit) < opt.stop_thresh) {
+                log_transmit = -1e3f;
+                break;
+            }
+        }
+        t += opt.step_size;
+    }
+    if (weight_acc > weight_thresh){
+        *out = outv;
+    }else{
+        *out = 0.f;
+    }
 }
 
 __device__ __inline__ void trace_ray_med_term(
@@ -935,6 +1011,7 @@ __global__ void render_ray_expected_term_kernel(
         PackedSparseGridSpec grid,
         PackedRaysSpec rays,
         RenderOptions opt,
+        float weight_thresh,
         float* __restrict__ out) {
         // const PackedSparseGridSpec& __restrict__ grid,
         // SingleRaySpec& __restrict__ ray,
@@ -947,6 +1024,29 @@ __global__ void render_ray_expected_term_kernel(
         grid,
         ray_spec,
         opt,
+        weight_thresh,
+        out + ray_id);
+}
+
+__launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void render_ray_mode_term_kernel(
+        PackedSparseGridSpec grid,
+        PackedRaysSpec rays,
+        RenderOptions opt,
+        float weight_thresh,
+        float* __restrict__ out) {
+        // const PackedSparseGridSpec& __restrict__ grid,
+        // SingleRaySpec& __restrict__ ray,
+        // const RenderOptions& __restrict__ opt,
+        // float* __restrict__ out) {
+    CUDA_GET_THREAD_ID(ray_id, rays.origins.size(0));
+    SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
+    ray_find_bounds(ray_spec, grid, opt, ray_id);
+    trace_ray_mode_term(
+        grid,
+        ray_spec,
+        opt,
+        weight_thresh,
         out + ray_id);
 }
 
@@ -1249,7 +1349,7 @@ void volume_render_cuvol_fused(
 }
 
 torch::Tensor volume_render_expected_term(SparseGridSpec& grid,
-        RaysSpec& rays, RenderOptions& opt) {
+        RaysSpec& rays, RenderOptions& opt, float weight_thresh) { // only ray with total weight > weight_thresh would return non zero depth
     auto options =
         torch::TensorOptions()
         .dtype(rays.origins.dtype())
@@ -1263,6 +1363,28 @@ torch::Tensor volume_render_expected_term(SparseGridSpec& grid,
             grid,
             rays,
             opt,
+            weight_thresh,
+            results.data_ptr<float>()
+        );
+    return results;
+}
+
+torch::Tensor volume_render_mode_term(SparseGridSpec& grid,
+        RaysSpec& rays, RenderOptions& opt, float weight_thresh) { // only ray with total weight > weight_thresh would return non zero depth
+    auto options =
+        torch::TensorOptions()
+        .dtype(rays.origins.dtype())
+        .layout(torch::kStrided)
+        .device(rays.origins.device())
+        .requires_grad(false);
+    torch::Tensor results = torch::empty({rays.origins.size(0)}, options);
+    const auto Q = rays.origins.size(0);
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
+    device::render_ray_mode_term_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+            grid,
+            rays,
+            opt,
+            weight_thresh,
             results.data_ptr<float>()
         );
     return results;

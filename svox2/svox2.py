@@ -3490,7 +3490,7 @@ class SparseGrid(nn.Module):
                                 **kwargs)['rgb']
                 return rgb_out_part
 
-    def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None, depth_type='mean', **kwargs):
+    def volume_render_depth(self, rays: Rays, sigma_thresh: Optional[float] = None, depth_type='mean', weight_thresh: float = 0., **kwargs):
         """
         Volumetric depth rendering for rays
 
@@ -3529,7 +3529,14 @@ class SparseGrid(nn.Module):
                 return _C.volume_render_expected_term(
                         self._to_cpp(),
                         rays._to_cpp(),
-                        self.opt._to_cpp())
+                        self.opt._to_cpp(),
+                        weight_thresh)
+            elif depth_type == 'mode':
+                return _C.volume_render_mode_term(
+                        self._to_cpp(),
+                        rays._to_cpp(),
+                        self.opt._to_cpp(),
+                        weight_thresh)
             elif depth_type == 'med':
                 depths, sigmas = _C.volume_render_med_term(
                                     self._to_cpp(),

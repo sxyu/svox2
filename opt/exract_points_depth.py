@@ -96,7 +96,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--depth_type",
-    choices=['mean', 'med'],
+    choices=['mean', 'med', 'mode'],
     default='mean',
 )
 parser.add_argument(
@@ -105,6 +105,9 @@ parser.add_argument(
     default=False,
     help="Delete ckpt after extraction"
 )
+parser.add_argument('--weight_thresh',
+                    type=float,
+                    default=0.5)
 
 
 # Camera adjustment
@@ -238,7 +241,7 @@ with torch.no_grad():
                            ndc_coeffs=(-1.0, -1.0))
         torch.cuda.synchronize()
 
-        pts = grid.volume_render_extract_pts(cam, depth_type=args.depth_type)
+        pts = grid.volume_render_extract_pts(cam, depth_type=args.depth_type, weight_thresh=args.weight_thresh)
         
         torch.cuda.synchronize()
 
