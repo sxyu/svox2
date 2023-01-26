@@ -2123,6 +2123,54 @@ __device__ __inline__ float surf_alpha_act_grad(
     assert(false);
 }
 
+template<class data_type_t, class voxel_index_t>
+__device__ __inline__ float compute_field_grad(
+    const int32_t* __restrict__ links,
+    const data_type_t* __restrict__ data,
+    int offx, int offy,
+    const voxel_index_t* __restrict__ l,
+    const float* __restrict__ pos,
+    float* __restrict__ out
+){
+    /**
+     * Gradient of trilinearly interpolated field at given point
+     * 
+    */
+
+    // const int32_t* __restrict__ link_ptr = grid.links + (grid.stride_x * ray.l[0] + grid.size[2] * ray.l[1] + ray.l[2]);
+    // #define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? grid.surface_data[link_ptr[u] * 1] : 0.f) 
+    //     const float c00 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), ray.pos[2]); 
+    //     const float c01 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), ray.pos[2]);
+    //     const float c0 = lerp(c00, c01, ray.pos[1]);
+    //     const float c10 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), ray.pos[2]);
+    //     const float c11 = lerp(MAYBE_READ_LINK(offy + offx),
+    //                             MAYBE_READ_LINK(offy + offx + 1), ray.pos[2]);
+    //     const float c1 = lerp(c10, c11, ray.pos[1]);
+    // #undef MAYBE_READ_LINK
+    // out[0] = c1 - c0;
+    // out[1] = ray.pos[0]*(-c10 + c11) + (1. - ray.pos[0])*(-c00 + c01);
+    // out[2] = ray.pos[0]*(ray.pos[1]*(-surface[0b110] + surface[0b111]) + (1 - ray.pos[1])*(-surface[0b100] + surface[0b101])) + \
+    //             (1 - ray.pos[0])*(ray.pos[1]*(-surface[0b010] + surface[0b011]) + (1 - ray.pos[1])*(-surface[0b000] + surface[0b001]));
+
+    const int32_t* __restrict__ link_ptr = links + (offx * l[0] + offy * l[1] + l[2]);
+
+
+#define MAYBE_READ_LINK(u) ((link_ptr[u] >= 0) ? data[link_ptr[u]] : 0.f) // fetch data only if link is non negative
+    const float ix0y0 = lerp(MAYBE_READ_LINK(0), MAYBE_READ_LINK(1), pos[2]);
+    const float ix0y1 = lerp(MAYBE_READ_LINK(offy), MAYBE_READ_LINK(offy + 1), pos[2]);
+    const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+    const float ix1y0 = lerp(MAYBE_READ_LINK(offx), MAYBE_READ_LINK(offx + 1), pos[2]);
+    const float ix1y1 = lerp(MAYBE_READ_LINK(offy + offx),
+                             MAYBE_READ_LINK(offy + offx + 1), pos[2]);
+    const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+
+    out[0] = ix1 - ix0;
+    out[1] = pos[0]*(-ix1y0 + ix1y1) + (1. - pos[0])*(-ix0y0 + ix0y1);
+    out[2] = pos[0]*(pos[1]*(-MAYBE_READ_LINK(offx+offy) + MAYBE_READ_LINK(offx+offy+1)) + (1 - pos[1])*(-MAYBE_READ_LINK(offx) + MAYBE_READ_LINK(offx+1))) + \
+                (1 - pos[0])*(pos[1]*(-MAYBE_READ_LINK(offy) + MAYBE_READ_LINK(offy+1)) + (1 - pos[1])*(-MAYBE_READ_LINK(0) + MAYBE_READ_LINK(1)));
+#undef MAYBE_READ_LINK
+}
+
 
 } // namespace device
 } // namespace

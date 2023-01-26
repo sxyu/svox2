@@ -2512,6 +2512,39 @@ class SparseGrid(nn.Module):
         out['extra_loss']['l_ss'] = l_ss
         out['log_stats']['l_ss'] = l_ss
 
+        # computer inward normal loss
+        if B_weights.numel() > 0:
+
+            wa, wb = 1. - (samples - l), (samples - l)
+            wa, wb = wa / (wa + wb), wb / (wa + wb)
+
+            c00 = surface000[l_ids] * wa[:, 2:] + surface001[l_ids] * wb[:, 2:]
+            c01 = surface010[l_ids] * wa[:, 2:] + surface011[l_ids] * wb[:, 2:]
+            c10 = surface100[l_ids] * wa[:, 2:] + surface101[l_ids] * wb[:, 2:]
+            c11 = surface110[l_ids] * wa[:, 2:] + surface111[l_ids] * wb[:, 2:]
+            c0 = c00 * wa[:, 1:2] + c01 * wb[:, 1:2]
+            c1 = c10 * wa[:, 1:2] + c11 * wb[:, 1:2]
+            s = c0 * wa[:, :1] + c1 * wb[:, :1]
+
+            surf_grad = torch.concat([
+                c1 - c0,
+                wb[:, 0, None]*(-c10 + c11) + (1. - wb[:, 0, None])*(-c00 + c01),
+                wb[:, 0, None]*(wb[:, 1, None]*(-surface110[l_ids] + surface111[l_ids]) + (1 - wb[:, 1, None])*(-surface100[l_ids] + surface101[l_ids])) + \
+                (1 - wb[:, 0, None])*(wb[:, 1, None]*(-surface010[l_ids] + surface011[l_ids]) + (1 - wb[:, 1, None])*(-surface000[l_ids] + surface001[l_ids])),
+            ], axis=-1)
+
+            surf_n = torch.clamp_min(torch.norm(surf_grad, dim=-1, keepdim=True), 1e-8)
+            surf_norm = -surf_grad / surf_n
+            surf_norm = surf_norm.detach().clone()
+
+            l_inward_norm = (alpha[:, 0] * torch.clamp_min((surf_norm * dirs[ray_ids, :]).sum(axis=-1), 0.)**2).sum()
+
+
+        else:
+            l_ss = 0.
+        out['extra_loss']['l_inward_norm'] = l_inward_norm
+        out['log_stats']['l_inward_norm'] = l_inward_norm
+
         
         if reg:
             if self.surface_type in [SURFACE_TYPE_UDF, SURFACE_TYPE_UDF_ALPHA, SURFACE_TYPE_UDF_FAKE_SAMPLE]:
@@ -2744,7 +2777,8 @@ class SparseGrid(nn.Module):
             s += lambda_l_dist * l_dist 
             s += lambda_l_entropy * l_entropy
             s += sparsity_loss * l_sparsity
-            s += 1. * l_ss
+            s += 0. * l_ss
+            s += 1. * l_inward_norm
             # s += l_samp_dist
             s.backward()
 
@@ -3265,6 +3299,7 @@ class SparseGrid(nn.Module):
         l_di_alpha_thresh: float = 0., # only intersections with alpha below this threshold will be applied with l_di
         surf_sparse_alpha_thresh: float = 0., 
         lambda_inplace_surf_sparse: float = 0., 
+        lambda_inwards_norm_loss: float = 0., 
         l_dist_max_sample: int = 64,
         no_surface: bool = False,
     ):
@@ -3379,6 +3414,7 @@ class SparseGrid(nn.Module):
                 l_di_alpha_thresh,
                 surf_sparse_alpha_thresh,
                 lambda_inplace_surf_sparse,
+                lambda_inwards_norm_loss,
                 l_dist_max_sample,
                 rgb_out,
                 grad_holder

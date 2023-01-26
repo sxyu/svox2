@@ -701,6 +701,7 @@ while True:
                         l_di_alpha_thresh = args.l_di_alpha_thresh,
                         surf_sparse_alpha_thresh = args.sparsify_surf_thresh,
                         lambda_inplace_surf_sparse = args.lambda_inplace_surf_sparse,
+                        lambda_inwards_norm_loss = args.lambda_inwards_norm_loss,
                         l_dist_max_sample = 64,
                         randomize=args.enable_random,
                         no_surface=no_surface)
