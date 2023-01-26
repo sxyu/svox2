@@ -5278,7 +5278,7 @@ class SparseGrid(nn.Module):
         surf_norm = surf_grad / torch.clamp_min(torch.sqrt((surf_grad**2.).sum(axis=-1, keepdim=True)), 1e-8)
         ra_grad = torch.concat([raw_alpha100 - raw_alpha000, raw_alpha010 - raw_alpha000, raw_alpha001 - raw_alpha000], axis=-1)
         ra_norm = ra_grad / torch.clamp_min(torch.sqrt((ra_grad**2.).sum(axis=-1, keepdim=True)), 1e-8)
-        ra_norm = ra_norm.detach().clone()
+        # ra_norm = ra_norm.detach().clone()
 
         norm_match_loss = scaling / rand_cells.shape[0] * ((surf_norm - ra_norm)**2).sum()
 
