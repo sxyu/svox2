@@ -3507,11 +3507,19 @@ class SparseGrid(nn.Module):
 
         if backend in ['surface', 'surf_trav']:
             if sigma_thresh is None:
-                cu_fn = _C.__dict__[f"volume_render_expected_term_{backend}"]
-                return cu_fn(
-                        self._to_cpp(),
-                        rays._to_cpp(),
-                        self.opt._to_cpp())
+                if depth_type == 'mode':
+                    cu_fn = _C.__dict__["volume_render_mode_term_surf_trav"]
+                    return cu_fn(
+                            self._to_cpp(),
+                            rays._to_cpp(),
+                            self.opt._to_cpp(),
+                            weight_thresh)
+                else:
+                    cu_fn = _C.__dict__[f"volume_render_expected_term_{backend}"]
+                    return cu_fn(
+                            self._to_cpp(),
+                            rays._to_cpp(),
+                            self.opt._to_cpp())
             else:
                 cu_fn = _C.__dict__[f"volume_render_sigma_thresh_{backend}"]
                 return cu_fn(
@@ -3683,8 +3691,7 @@ class SparseGrid(nn.Module):
         """
         rays = camera.gen_rays()
         if self.surface_type == SURFACE_TYPE_NONE or self.opt.backend in ['surf_trav'] or self.surface_data is None:
-            # TODO: check whether extracting from depth gives inaccuracy
-            # extrac points from depth
+            # extract points from depth
             all_depths = []
             for batch_start in range(0, camera.height * camera.width, batch_size):
                 depths = self.volume_render_depth(rays[batch_start: batch_start + batch_size], sigma_thresh, depth_type=depth_type, **kwargs)

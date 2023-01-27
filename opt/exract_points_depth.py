@@ -207,11 +207,11 @@ config_util.setup_render_opts(grid.opt, args)
 # NOTE: no_grad enables the fast image-level rendering kernel for cuvol backend only
 # other backends will manually generate rays per frame (slow)
 
-print('Only support NeRF method!')
-
-grid.surface_data = None
-grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
-grid.opt.backend = 'cuvol'
+if grid.surface_data is None:
+    grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
+    grid.opt.backend = 'cuvol'
+else:
+    grid.opt.backend = 'surf_trav'
 
 print('Render options', grid.opt)
 
