@@ -223,15 +223,15 @@ fs_std_l1_func = get_linear_lr_func(args.lambda_fake_sample_std_l1, args.lambda_
 fs_std_l2_func = get_linear_lr_func(args.lambda_fake_sample_std_l2, args.lambda_fake_sample_std_l2_final,
                             max_steps=args.lambda_fake_sample_std_l2_steps)
 
-if args.surf_lv_range_decay_type == 'linear':
-    surf_lv_range_func = get_linear_lr_func(args.surf_lv_range, args.surf_lv_range_final, lr_delay_steps=args.no_surface_init_iters,
-                                max_steps=args.surf_lv_range_decay_steps)
-elif args.surf_lv_range_decay_type == 'exp':
-    surf_lv_range_func = get_expon_lr_func(args.surf_lv_range, args.surf_lv_range_final, fix_delay_step=args.no_surface_init_iters,
-                                max_steps=args.surf_lv_range_decay_steps)
+if args.surf_lv_scale_decay_type == 'linear':
+    surf_lv_scale_func = get_linear_lr_func(args.surf_lv_scale, args.surf_lv_scale_final, lr_delay_steps=args.no_surface_init_iters,
+                                max_steps=args.surf_lv_scale_decay_steps)
+elif args.surf_lv_scale_decay_type == 'exp':
+    surf_lv_scale_func = get_expon_lr_func(args.surf_lv_scale, args.surf_lv_scale_final, fix_delay_step=args.no_surface_init_iters,
+                                max_steps=args.surf_lv_scale_decay_steps)
 else:
     # const
-    surf_lv_range_func = lambda x: args.surf_lv_range
+    surf_lv_scale_func = lambda x: args.surf_lv_scale
 
 
 if args.surf_normal_loss_lambda_type == 'linear':
@@ -252,6 +252,9 @@ if args.enable_random:
 if args.lambda_tv > 0.0 and args.surface_type in ['udf_alpha']:
     raise NotImplementedError(f'Surface type [{args.surface_type}] must not use density tv!')
 
+surf_lvs_original = None
+
+density_lvs = [ast.literal_eval(args.surf_init_density_lvs[i]) for i in range(len(args.surf_init_density_lvs))]
 
 if args.load_pretrain_density_sh is not None:
     pretrained_ckpt_path = path.join(args.load_pretrain_density_sh, 'ckpt.npz') if os.path.isdir(args.load_pretrain_density_sh) else \
@@ -274,15 +277,15 @@ if args.load_pretrain_density_sh is not None:
 
 
     grid.init_surface_from_density(
-        alpha_lv_sets=args.alpha_lv_sets,
+        density_lvs=density_lvs,
         reset_alpha=args.surface_init_reset_alpha,
         alpha_rescale=args.surf_init_alpha_rescale,
         surface_rescale=args.surface_init_rescale,
         reset_all=args.surf_init_reset_all,
-        prune_threshold=args.alpha_lv_sets / 2,
-        surf_lv_range=args.surf_lv_range,
-        surf_lv_num=args.surf_lv_num
+        prune_threshold=min(density_lvs) / 2,
         )
+
+    surf_lvs_original = grid.level_set_data.clone()
 
     # reset opt for surface rendering
     config_util.setup_render_opts(grid.opt, args)
@@ -567,6 +570,7 @@ while True:
     #     gc.collect()
 
     def train_step():
+        global surf_lvs_original
         print('Train step')
         # pbar = tqdm(range(gstep_id_base, gstep_id_base+epoch_size, args.batch_size), total=batches_per_epoch, initial=gstep_id_base)
         pbar = tqdm(
@@ -613,14 +617,13 @@ while True:
                 grid.fake_sample_std = fake_sample_std_func(gstep_id)
 
             # update surf lv sets if needed
-            if args.surf_lv_num > 1:
-                if gstep_id >= args.surf_lv_range_decay_steps and args.surf_lv_range_decay_type != 'const':
+            if surf_lvs_original is not None and len(grid.level_set_data) > 1 and args.surf_lv_scale_decay_type != 'const':
+                if gstep_id >= args.surf_lv_scale_decay_steps:
                     # decay to single lv set
                     grid.level_set_data = torch.tensor([0.], dtype=grid.level_set_data.dtype, device=grid.level_set_data.device)
                 else:
-                    surf_lv_range = surf_lv_range_func(gstep_id)
-                    grid.level_set_data = torch.linspace(-surf_lv_range, surf_lv_range, args.surf_lv_num, dtype=grid.level_set_data.dtype, device=grid.level_set_data.device)
-
+                    surf_lv_scale = surf_lv_scale_func(gstep_id)
+                    grid.level_set_data = surf_lvs_original * surf_lv_scale 
             
 
             ############ Density Based Surface Init #################
@@ -633,15 +636,15 @@ while True:
                     grid.save(ckpt_path, step_id=gstep_id)
 
                 grid.init_surface_from_density(
-                    alpha_lv_sets=args.alpha_lv_sets,
+                    density_lvs=density_lvs,
                     reset_alpha=args.surface_init_reset_alpha,
                     alpha_rescale=args.surf_init_alpha_rescale,
                     surface_rescale=args.surface_init_rescale,
                     reset_all=args.surf_init_reset_all,
-                    prune_threshold=args.alpha_lv_sets / 2,
-                    surf_lv_range=args.surf_lv_range,
-                    surf_lv_num=args.surf_lv_num
+                    prune_threshold=min(density_lvs) / 2,
                     )
+
+                surf_lvs_original = grid.surface_data.clone()
 
                 # reset opt for surface rendering
                 config_util.setup_render_opts(grid.opt, args)

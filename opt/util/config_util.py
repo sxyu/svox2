@@ -250,9 +250,14 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surface_init_freeze', type=lambda x: int(float(x)), default=
                         0,
                         help='freeze surface for a few more iterations after density init')
-    group.add_argument('--alpha_lv_sets', type=float, default=
-                        0.1,
-                        help='Value of alpha used to init surface')
+    # group.add_argument('--alpha_lv_sets', type=float, default=
+    #                     0.1,
+    #                     help='Value of alpha used to init surface')
+    group.add_argument('--surf_init_density_lvs',
+                            # type=str,
+                            nargs="+",
+                            default=[50],
+                        help='The level sets of density used to initialize the surfaces ')
     group.add_argument('--surf_init_alpha_rescale', type=float, default=None,
                         help='Rescale the raw values of alpha after surface init from nerf')
     group.add_argument('--surface_init_rescale', type=float, default=
@@ -294,10 +299,11 @@ def setup_train_conf(return_parpser=False):
                         #  2000,
                     help='batch size')
 
-    group.add_argument('--surf_lv_range', type=float, default=2e-2)
-    group.add_argument('--surf_lv_range_final', type=float, default=1e-5)
-    group.add_argument('--surf_lv_num', type=int, default=1)
-    group.add_argument('--surf_lv_range_decay_steps', type=lambda x: int(float(x)), default=100000)
+    group.add_argument('--surf_lv_scale', type=float, default=1, help='scale down the surf lv sets to allow surface to converge')
+    group.add_argument('--surf_lv_scale_final', type=float, default=1e-6)
+    group.add_argument('--surf_lv_scale_decay_steps', type=lambda x: int(float(x)), default=100000)
+    group.add_argument('--surf_lv_scale_decay_type', type=str, default='const', 
+                        choices=['exp', 'linear', 'const'])
 
     # TODO: make the lr higher near the end
     group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
@@ -482,8 +488,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--lambda_normal_loss', type=float, default=0)
     group.add_argument('--surf_normal_loss_lambda_type', type=str, default='const', 
                         choices=['const', 'linear'])
-    group.add_argument('--surf_lv_range_decay_type', type=str, default='linear', 
-                        choices=['exp', 'linear', 'const'])
+
     group.add_argument('--lambda_normal_loss_final', type=float, default=0)
     group.add_argument('--lambda_normal_loss_delay_steps', type=float, default=0)
     group.add_argument('--lambda_normal_loss_decay_steps', type=float, default=0)

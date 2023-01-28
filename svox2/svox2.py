@@ -2906,7 +2906,7 @@ class SparseGrid(nn.Module):
 
     def init_surface_from_density(
         self, 
-        alpha_lv_sets=0.5, 
+        density_lvs=[0.5], 
         reset_alpha=False, 
         alpha_rescale=None, 
         surface_rescale=0.1, 
@@ -2914,8 +2914,6 @@ class SparseGrid(nn.Module):
         reset_all=False,
         prune_threshold=1e-8,
         dilate=2,
-        surf_lv_range=5.,
-        surf_lv_num=1,
         ):
         '''
         Initialize surface data from density values
@@ -2925,6 +2923,7 @@ class SparseGrid(nn.Module):
         with torch.no_grad():
 
             if self.opt.alpha_activation_type == SIGMOID_FN:
+                raise NotImplementedError
                 device = self.density_data.device
                 # reset surface level set
                 # currently only support single lv set
@@ -2964,15 +2963,13 @@ class SparseGrid(nn.Module):
                 # alpha lv set is used as sigma lv set
                 device = self.density_data.device
 
-                if surf_lv_num == 1:
-                    self.level_set_data = torch.tensor([0.], device=device)
-                else:
-                    self.level_set_data = torch.linspace(-surf_lv_range, surf_lv_range, surf_lv_num, dtype=self.density_data.dtype, device=device)
+                zero_lv_density = density_lvs[len(density_lvs) // 2]
+                self.level_set_data = torch.tensor(density_lvs, device=device) - zero_lv_density
 
                 surface_data = self.density_data.detach().clone()
-                surface_data = (surface_data - alpha_lv_sets)
+                surface_data = (surface_data - zero_lv_density)
                 self.surface_data = nn.Parameter(surface_data.to(torch.float32))
-                # surface_data = (surface_data - alpha_lv_sets)*surface_rescale + self.level_set_data[0]
+                # surface_data = (surface_data - zero_lv_density)*surface_rescale + self.level_set_data[0]
 
                 self.prune_grid(prune_threshold, dilate, prune_surf=False)
                 
@@ -3020,7 +3017,10 @@ class SparseGrid(nn.Module):
 
                 # surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
                 # self.surface_data = nn.Parameter(surface_data.to(torch.float32))
-                self.surface_data.data = self.surface_data.data/norm_grad.mean() + self.level_set_data[len(self.level_set_data) // 2]
+                self.surface_data.data = self.surface_data.data/norm_grad.mean() # + self.level_set_data[len(self.level_set_data) // 2]
+                self.level_set_data = self.level_set_data / norm_grad.mean()
+
+                print(f"Surf lvs: {self.level_set_data}")
 
                 if alpha_rescale is not None:
                     self.density_data.data *= alpha_rescale
