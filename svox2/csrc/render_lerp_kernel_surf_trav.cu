@@ -1844,6 +1844,9 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     const float  pcnt = -_LOG(max(1.f - alpha, 1e-8));
                     const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
+
+                    // printf("raw_alpha: %f\n", raw_alpha);
+                    // printf("weight: %f\n", weight);
                     
 
                     const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(

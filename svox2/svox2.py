@@ -2451,8 +2451,8 @@ class SparseGrid(nn.Module):
             na = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-8)
             l_entropy = torch.where(B_weights > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
 
-            na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
-            l_entropy = torch.where(B_alpha > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
+            # na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
+            # l_entropy = torch.where(B_alpha > 0., -na * torch.log(torch.clamp_min(na, 1e-8)), torch.tensor(0., dtype=torch.float, device='cuda'))
 
             l_entropy = l_entropy.sum(axis=-1).mean()
 
@@ -2480,7 +2480,7 @@ class SparseGrid(nn.Module):
             nB_weights = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-10)
             B_sigma = -torch.log(1-B_alpha)
             # B_sigma = -torch.log(1-B_alpha)
-            l_sparsity = (torch.log(B_sigma) * (1. - nB_weights.detach().clone())).sum()
+            l_sparsity = (torch.log(torch.clamp_min(B_sigma, 1e-8)) * (1. - nB_weights.detach().clone())).sum()
 
             B_sigma.retain_grad()
         else:
@@ -2778,7 +2778,7 @@ class SparseGrid(nn.Module):
             s += lambda_l_entropy * l_entropy
             s += sparsity_loss * l_sparsity
             s += 0. * l_ss
-            s += 1. * l_inward_norm
+            s += 0. * l_inward_norm
             # s += l_samp_dist
             s.backward()
 

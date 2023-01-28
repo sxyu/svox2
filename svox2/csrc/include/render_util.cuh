@@ -2117,7 +2117,7 @@ __device__ __inline__ float surf_alpha_act_grad(
         case SIGMOID_FN:
             return (alpha * (1-alpha));
         case EXP_FN:
-            return (alpha >= 0.) ? 1 - alpha : 0.;
+            return (alpha > 0.) ? 1 - alpha : 0.; // alpha = 0. means density <= 0 is turned off
     }
 
     assert(false);
