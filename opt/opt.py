@@ -505,8 +505,12 @@ while True:
                                     global_step=step_id, dataformats='HWC')
 
             if args.log_pts and not no_surface:
-                pred_pts = grid.extract_pts(n_sample=args.surf_eval_n_sample, density_thresh=args.surf_eval_intersect_th, scene_scale=2./3., to_world=True)
-                pred_pts = pred_pts.cpu().detach().numpy()
+                pred_pts = []
+                for lv_set in grid.level_set_data:
+                    pred_pts.append(
+                        grid.extract_pts(n_sample=args.surf_eval_n_sample, density_thresh=args.surf_eval_intersect_th, scene_scale=2./3., to_world=True, surf_lv_set=lv_set)
+                        )
+                pred_pts = torch.concat(pred_pts, axis=0).cpu().detach().numpy()
 
                 if args.eval_cf:
                     if pred_pts.size > 0:   
