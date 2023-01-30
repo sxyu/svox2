@@ -350,7 +350,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--lambda_fake_sample_std_l2_final', type=float, default=1e-2)
     group.add_argument('--lambda_fake_sample_std_l2_steps', type=lambda x: int(float(x)), default=100000)
 
-    group.add_argument('--fs_std_decay_type', type=str, default='const', 
+    group.add_argument('--fs_std_decay_type', type=str, default='exp', 
                         choices=['exp', 'linear', 'const'])
     group.add_argument('--fake_sample_std', type=float, default=1, help='std for fake samples')
     group.add_argument('--fake_sample_std_final', type=float, default=0.05)
