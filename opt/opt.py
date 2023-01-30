@@ -204,8 +204,6 @@ lr_surface_func = get_expon_lr_func(args.lr_surface, args.lr_surface_final, args
                                   args.lr_surface_delay_mult, args.lr_surface_decay_steps, args.lr_surf_fix_delay)
 lr_fake_sample_std_func = get_expon_lr_func(args.lr_fake_sample_std, args.lr_fake_sample_std_final, args.lr_fake_sample_std_delay_steps,
                                   args.lr_fake_sample_std_delay_mult, args.lr_fake_sample_std_decay_steps)
-fake_sample_std_func = get_expon_lr_func(args.fake_sample_std, args.fake_sample_std_final, 0,
-                                  1., args.fake_sample_std_decay_steps, args.fake_sample_std_delay)
 lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_sh_surf_func = get_expon_lr_func(args.lr_sh_surf, args.lr_sh_surf_final, args.lr_sh_surf_delay_steps,
@@ -237,6 +235,18 @@ else:
 if args.surf_normal_loss_lambda_type == 'linear':
     lambda_surf_normal_loss_func = get_linear_lr_func(args.lambda_normal_loss, args.lambda_normal_loss_final, 
                                     args.lambda_normal_loss_delay_steps, args.lambda_normal_loss_decay_steps)
+
+
+if args.fs_std_decay_type == 'linear':
+    fake_sample_std_func = get_linear_lr_func(args.fake_sample_std, args.fake_sample_std_final, lr_delay_steps=args.fake_sample_std_delay,
+                                max_steps=args.fake_sample_std_decay_steps)
+elif args.fs_std_decay_type == 'exp':
+    fake_sample_std_func = get_expon_lr_func(args.fake_sample_std, args.fake_sample_std_final, 0,
+                                    1., args.fake_sample_std_decay_steps, args.fake_sample_std_delay)
+else:
+    # const
+    fake_sample_std_func = lambda x: args.fake_sample_std
+
 
 lr_sigma_factor = 1.0
 lr_surface_factor = 1.0

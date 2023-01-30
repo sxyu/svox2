@@ -305,6 +305,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surf_lv_scale_decay_type', type=str, default='const', 
                         choices=['exp', 'linear', 'const'])
 
+
     # TODO: make the lr higher near the end
     group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
     group.add_argument('--lr_sigma', type=float, default=3e1, help='SGD/rmsprop lr for sigma')
@@ -349,6 +350,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--lambda_fake_sample_std_l2_final', type=float, default=1e-2)
     group.add_argument('--lambda_fake_sample_std_l2_steps', type=lambda x: int(float(x)), default=100000)
 
+    group.add_argument('--fs_std_decay_type', type=str, default='const', 
+                        choices=['exp', 'linear', 'const'])
     group.add_argument('--fake_sample_std', type=float, default=1, help='std for fake samples')
     group.add_argument('--fake_sample_std_final', type=float, default=0.05)
     group.add_argument('--fake_sample_std_decay_steps', type=lambda x: int(float(x)), default=50000)
