@@ -2449,6 +2449,7 @@ class SparseGrid(nn.Module):
         # computer entropy loss (info nerf)
         if B_weights.numel() > 0:
             na = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-8)
+            na = B_weights
             l_entropy = torch.where(B_weights > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
 
             # na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
@@ -3292,6 +3293,7 @@ class SparseGrid(nn.Module):
         lambda_l1: float = 0.,
         lambda_l_dist: float = 0.,
         lambda_l_entropy: float = 0.,
+        no_norm_weight_l_entropy: bool = False,
         lambda_l_dist_a: float = 0.,
         lambda_l_entropy_a: float = 0.,
         lambda_l_samp_dist: float = 0.,
@@ -3407,6 +3409,7 @@ class SparseGrid(nn.Module):
                 lambda_l1,
                 lambda_l_dist,
                 lambda_l_entropy,
+                no_norm_weight_l_entropy,
                 lambda_l_dist_a,
                 lambda_l_entropy_a,
                 lambda_l_samp_dist,
