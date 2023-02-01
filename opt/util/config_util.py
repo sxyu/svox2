@@ -263,6 +263,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surface_init_rescale', type=float, default=
                         0.1,
                         help='Rescale the raw values of surfaces')
+    group.add_argument('--surf_init_type', type=str, default='density',
+                        choices=['density', 'reweight'])
     group.add_argument('--surface_init_reset_alpha',action='store_true', default=False,
                         help='Reset alpha value after no surface init')
     group.add_argument('--surf_init_reset_all',action='store_true', default=False,
@@ -426,7 +428,7 @@ def setup_train_conf(return_parpser=False):
                     help='evaluate every x epochs')
     group.add_argument('--eval_every_iter', type=lambda x: int(float(x)), default=10000,
                     help='evaluate every x iterations')
-    group.add_argument('--extract_mesh_every', type=lambda x: int(float(x)), default=100000,
+    group.add_argument('--extract_mesh_every', type=lambda x: int(float(x)), default=1000000,
                     help='extract mesh every x iterations')
     group.add_argument('--mesh_sigma_thresh', type=float, default=None,
                     help='extract mesh threshold')

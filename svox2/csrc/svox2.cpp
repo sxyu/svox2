@@ -104,6 +104,8 @@ Tensor dilate(Tensor);
 void accel_dist_prop(Tensor);
 void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
                         Tensor, Tensor);
+void sparse_grid_weight_render(SparseGridSpec &, CameraSpec &, float, float, Tensor,
+                        Tensor, Tensor);
 // void sample_cubemap(Tensor, Tensor, bool, Tensor);
 
 // Loss
@@ -189,6 +191,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(dilate);
   _REG_FUNC(accel_dist_prop);
   _REG_FUNC(grid_weight_render);
+  _REG_FUNC(sparse_grid_weight_render);
   // _REG_FUNC(sample_cubemap);
 
   // Optimizer

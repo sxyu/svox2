@@ -2915,6 +2915,8 @@ class SparseGrid(nn.Module):
         reset_all=False,
         prune_threshold=1e-8,
         dilate=2,
+        init_type='density', # init from density or weight
+        weight_init_cams=None,
         ):
         '''
         Initialize surface data from density values
@@ -2960,73 +2962,157 @@ class SparseGrid(nn.Module):
                 self.surface_data = nn.Parameter(surface_data.to(torch.float32))
 
             else:
-                # alpha_raw is activated via exp (similiar to density)
-                # alpha lv set is used as sigma lv set
-                device = self.density_data.device
+                if init_type == 'density':
+                    # alpha_raw is activated via exp (similiar to density)
+                    # alpha lv set is used as sigma lv set
+                    device = self.density_data.device
 
-                zero_lv_density = density_lvs[len(density_lvs) // 2]
-                self.level_set_data = torch.tensor(density_lvs, device=device) - zero_lv_density
+                    zero_lv_density = density_lvs[len(density_lvs) // 2]
+                    self.level_set_data = torch.tensor(density_lvs, device=device) - zero_lv_density
 
-                surface_data = self.density_data.detach().clone()
-                surface_data = (surface_data - zero_lv_density)
-                self.surface_data = nn.Parameter(surface_data.to(torch.float32))
-                # surface_data = (surface_data - zero_lv_density)*surface_rescale + self.level_set_data[0]
+                    surface_data = self.density_data.detach().clone()
+                    surface_data = (surface_data - zero_lv_density)
+                    self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+                    # surface_data = (surface_data - zero_lv_density)*surface_rescale + self.level_set_data[0]
 
-                self.prune_grid(prune_threshold, dilate, prune_surf=False)
-                
-                # better rescale using average grad of surface data
-                rand_cells = self._get_rand_cells_non_empty(0.1, contiguous=True)
-                xyz = rand_cells
-                z = (xyz % self.links.shape[2]).long()
-                xy = xyz / self.links.shape[2]
-                y = (xy % self.links.shape[1]).long()
-                x = (xy / self.links.shape[1]).long()
+                    self.prune_grid(prune_threshold, dilate, prune_surf=False)
+                    
+                    # better rescale using average grad of surface data
+                    rand_cells = self._get_rand_cells_non_empty(0.1, contiguous=True)
+                    xyz = rand_cells
+                    z = (xyz % self.links.shape[2]).long()
+                    xy = xyz / self.links.shape[2]
+                    y = (xy % self.links.shape[1]).long()
+                    x = (xy / self.links.shape[1]).long()
 
-                # filter out cells at the edge
-                edge_mask = (x >= self.links.shape[0] - 1) | (y >= self.links.shape[1] - 1) | (z >= self.links.shape[2] - 1)
+                    # filter out cells at the edge
+                    edge_mask = (x >= self.links.shape[0] - 1) | (y >= self.links.shape[1] - 1) | (z >= self.links.shape[2] - 1)
 
-                x, y, z = x[~edge_mask], y[~edge_mask], z[~edge_mask]            
+                    x, y, z = x[~edge_mask], y[~edge_mask], z[~edge_mask]            
 
-                link000 = self.links[x,y,z]
-                link100 = self.links[x+1,y,z]
-                link010 = self.links[x,y+1,z]
-                link001 = self.links[x,y,z+1]
+                    link000 = self.links[x,y,z]
+                    link100 = self.links[x+1,y,z]
+                    link010 = self.links[x,y+1,z]
+                    link001 = self.links[x,y,z+1]
 
-                # filter out cells that are near empty cell
-                invalid_mask = (link000 < 0) | (link100 < 0) | (link010 < 0) | (link001 < 0)
-                x, y, z = x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]
+                    # filter out cells that are near empty cell
+                    invalid_mask = (link000 < 0) | (link100 < 0) | (link010 < 0) | (link001 < 0)
+                    x, y, z = x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]
 
-                link000 = link000[~invalid_mask].long()
-                link100 = link100[~invalid_mask].long()
-                link010 = link010[~invalid_mask].long()
-                link001 = link001[~invalid_mask].long()
+                    link000 = link000[~invalid_mask].long()
+                    link100 = link100[~invalid_mask].long()
+                    link010 = link010[~invalid_mask].long()
+                    link001 = link001[~invalid_mask].long()
 
-                surf000 = self.surface_data[link000]
-                surf100 = self.surface_data[link100]
-                surf010 = self.surface_data[link010]
-                surf001 = self.surface_data[link001]
-                
-                # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
-                # this allows fake sample distance to be calculated easier
-                h = self._get_h().to(device)
+                    surf000 = self.surface_data[link000]
+                    surf100 = self.surface_data[link100]
+                    surf010 = self.surface_data[link010]
+                    surf001 = self.surface_data[link001]
+                    
+                    # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
+                    # this allows fake sample distance to be calculated easier
+                    h = self._get_h().to(device)
 
-                norm_grad = torch.sqrt(
-                    ((surf100 - surf000) / h) ** 2. + \
-                    ((surf010 - surf000) / h) ** 2. + \
-                    ((surf001 - surf000) / h) ** 2.
-                )
+                    norm_grad = torch.sqrt(
+                        ((surf100 - surf000) / h) ** 2. + \
+                        ((surf010 - surf000) / h) ** 2. + \
+                        ((surf001 - surf000) / h) ** 2.
+                    )
 
-                # surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
-                # self.surface_data = nn.Parameter(surface_data.to(torch.float32))
-                self.surface_data.data = self.surface_data.data/norm_grad.mean() # + self.level_set_data[len(self.level_set_data) // 2]
-                self.level_set_data = self.level_set_data / norm_grad.mean()
+                    # surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
+                    # self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+                    self.surface_data.data = self.surface_data.data/norm_grad.mean() # + self.level_set_data[len(self.level_set_data) // 2]
+                    self.level_set_data = self.level_set_data / norm_grad.mean()
 
-                print(f"Surf lvs: {self.level_set_data}")
+                    print(f"Surf lvs: {self.level_set_data}")
 
-                if alpha_rescale is not None:
-                    self.density_data.data *= alpha_rescale
+                    if alpha_rescale is not None:
+                        self.density_data.data *= alpha_rescale
 
-                # self.density_data.data = self.density_data.data.max() - self.density_data.data
+                    # self.density_data.data = self.density_data.data.max() - self.density_data.data
+                else:
+                    device = self.density_data.device
+                    zero_lv_density = density_lvs[len(density_lvs) // 2]
+                    self.level_set_data = torch.tensor(density_lvs, device=device, dtype=torch.float32) - zero_lv_density
+
+                    reso = self.links.shape
+                    gsz = torch.tensor(reso)
+                    offset = (self._offset * gsz).to(device=device)
+                    scaling = (self._scaling * gsz).to(device=device)
+                    max_t_grid = torch.zeros(reso, dtype=torch.float32, device=device)
+                    weight_render_stop_thresh = 0.
+
+                    for cam in weight_init_cams:
+                        _C.sparse_grid_weight_render(
+                            self._to_cpp(), cam._to_cpp(),
+                            0.5, # step size
+                            weight_render_stop_thresh,
+                            offset, scaling, max_t_grid
+                        )
+                    # self.surface_data = nn.Parameter(max_t_grid[self.links >= 0][:, None] - zero_lv_density)
+
+                    weight_mask = max_t_grid[self.links >= 0][:, None]
+                    # weight_mask [weight_mask < 0.05] = 0.
+
+                    surface_data = self.density_data.detach().clone() * weight_mask
+                    surface_data = (surface_data - zero_lv_density)
+                    self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+                    # surface_data = (surface_data - zero_lv_density)*surface_rescale + self.level_set_data[0]
+
+                    self.prune_grid(prune_threshold, dilate, prune_surf=False)
+                    
+                    # better rescale using average grad of surface data
+                    rand_cells = self._get_rand_cells_non_empty(1, contiguous=True)
+                    xyz = rand_cells
+                    z = (xyz % self.links.shape[2]).long()
+                    xy = xyz / self.links.shape[2]
+                    y = (xy % self.links.shape[1]).long()
+                    x = (xy / self.links.shape[1]).long()
+
+                    # filter out cells at the edge
+                    edge_mask = (x >= self.links.shape[0] - 1) | (y >= self.links.shape[1] - 1) | (z >= self.links.shape[2] - 1)
+
+                    x, y, z = x[~edge_mask], y[~edge_mask], z[~edge_mask]            
+
+                    link000 = self.links[x,y,z]
+                    link100 = self.links[x+1,y,z]
+                    link010 = self.links[x,y+1,z]
+                    link001 = self.links[x,y,z+1]
+
+                    # filter out cells that are near empty cell
+                    invalid_mask = (link000 < 0) | (link100 < 0) | (link010 < 0) | (link001 < 0)
+                    x, y, z = x[~invalid_mask], y[~invalid_mask], z[~invalid_mask]
+
+                    link000 = link000[~invalid_mask].long()
+                    link100 = link100[~invalid_mask].long()
+                    link010 = link010[~invalid_mask].long()
+                    link001 = link001[~invalid_mask].long()
+
+                    surf000 = self.surface_data[link000]
+                    surf100 = self.surface_data[link100]
+                    surf010 = self.surface_data[link010]
+                    surf001 = self.surface_data[link001]
+                    
+                    # note that we assume same aspect ratio for xyz when converting sdf from grid coord to world coord
+                    # this allows fake sample distance to be calculated easier
+                    h = self._get_h().to(device)
+
+                    norm_grad = torch.sqrt(
+                        ((surf100 - surf000) / h) ** 2. + \
+                        ((surf010 - surf000) / h) ** 2. + \
+                        ((surf001 - surf000) / h) ** 2.
+                    )
+
+                    # surface_data = surface_data/norm_grad.mean() + self.level_set_data[0]
+                    # self.surface_data = nn.Parameter(surface_data.to(torch.float32))
+                    self.surface_data.data = self.surface_data.data/norm_grad.mean() # + self.level_set_data[len(self.level_set_data) // 2]
+                    self.level_set_data = self.level_set_data / norm_grad.mean()
+
+                    print(f"Surf lvs: {self.level_set_data}")
+
+                    if alpha_rescale is not None:
+                        self.density_data.data *= alpha_rescale
+
 
 
 

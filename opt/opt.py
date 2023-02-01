@@ -27,7 +27,7 @@ import numpy as np
 import math
 import cv2
 from util.dataset import datasets
-from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap, get_linear_lr_func
+from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap, get_linear_lr_func, pose_spherical
 from util import config_util
 import ast
 import sklearn.neighbors as skln
@@ -286,6 +286,35 @@ if args.load_pretrain_density_sh is not None:
     grid.accelerate()
 
 
+    # repeats = 10
+    # angles = np.linspace(-180, 180, (100) // repeats + 1)[:-1]
+    # angles = np.concatenate([angles for _ in range(repeats)])
+    # elevations = np.linspace(-90, 90, 100)
+    # c2ws = [
+    #     pose_spherical(
+    #         angle,
+    #         ele,
+    #         2.5,
+    #         np.array([0,0,0]),
+    #         vec_up=args.vec_up,
+    #     )
+    #     for ele, angle in zip(elevations, angles)
+    # ]
+    # # c2ws = np.stack(c2ws, axis=0)
+    # # c2ws = torch.from_numpy(c2ws).to(device=device)
+
+    # weight_init_cams = [
+    #         svox2.Camera(torch.from_numpy(c2w).to(device=device),
+    #                     dset.intrins.get('fx', i),
+    #                     dset.intrins.get('fy', i),
+    #                     dset.intrins.get('cx', i),
+    #                     dset.intrins.get('cy', i),
+    #                     width=dset.get_image_size(i)[1],
+    #                     height=dset.get_image_size(i)[0],
+    #                     ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(c2ws)
+    #     ]
+
+
     grid.init_surface_from_density(
         density_lvs=density_lvs,
         reset_alpha=args.surface_init_reset_alpha,
@@ -293,7 +322,20 @@ if args.load_pretrain_density_sh is not None:
         surface_rescale=args.surface_init_rescale,
         reset_all=args.surf_init_reset_all,
         prune_threshold=min(density_lvs) / 2,
+        init_type=args.surf_init_type,
+        weight_init_cams=resample_cameras,
         )
+
+    # pred_pts = []
+    # for lv_set in grid.level_set_data:
+    #     pred_pts.append(
+    #         grid.extract_pts(n_sample=args.surf_eval_n_sample, density_thresh=args.surf_eval_intersect_th, scene_scale=2./3., to_world=True, surf_lv_set=lv_set)
+    #         )
+    # pred_pts = torch.concat(pred_pts, axis=0).cpu().detach().numpy()
+    # out_dir = f'{args.train_dir}/coarse_pts_eval/{0}'
+    # os.makedirs(out_dir, exist_ok=True)
+    # np.save(f'{out_dir}/pts.npy', pred_pts)
+    # write_vis_pcd(f'{out_dir}/pts.ply', pred_pts)
 
     surf_lvs_original = grid.level_set_data.clone()
 
@@ -711,6 +753,7 @@ while True:
                         lambda_l1 = args.img_lambda_l1_ratio,
                         lambda_l_dist = args.lambda_l_dist,
                         lambda_l_entropy = args.lambda_l_entropy,
+                        no_norm_weight_l_entropy = args.no_norm_weight_l_entropy,
                         lambda_l_dist_a = args.lambda_l_dist_a,
                         lambda_l_entropy_a = args.lambda_l_entropy_a,
                         lambda_l_samp_dist = args.lambda_l_samp_dist,
@@ -1018,7 +1061,7 @@ while True:
                     eval_step(step_id=gstep_id)
                     gc.collect()
 
-            if (gstep_id % args.extract_mesh_every == 0) and not no_surface and not args.tune_mode:
+            if (gstep_id % args.extract_mesh_every == 0) and gstep_id > 0 and not no_surface and not args.tune_mode:
                 obj_path = path.join(args.train_dir, 'mesh', f'mesh_{gstep_id:05d}.obj')
                 os.makedirs(path.join(args.train_dir, 'mesh'), exist_ok=True)
                 grid.extract_mesh(obj_path, args.mesh_sigma_thresh)
