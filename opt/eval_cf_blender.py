@@ -65,6 +65,7 @@ if __name__ == '__main__':
     parser.add_argument('--no_pts_save', action='store_true', default=False)
     parser.add_argument('--log_tune_hparam_config_path', type=str, default=None,
                        help='Log hyperparamters being tuned to tensorboard based on givn config.json path')
+    parser.add_argument('--hparam_save_name', type=str, default='hparam_pts')
     args = parser.parse_args()
 
     thresh = args.downsample_density
@@ -177,6 +178,9 @@ if __name__ == '__main__':
 
     # read image eval metrics if avaliable
     img_eval_path = Path(args.input_path).parent / '..' / 'render_eval.txt'
+    if not img_eval_path.exists():
+        img_eval_path = Path(args.input_path).parent / '..' / '..' / 'render_eval.txt'
+
     if img_eval_path.exists():
         with img_eval_path.open('r') as f:
             psnr = float(f.readline().split(':')[-1].strip())
@@ -223,7 +227,10 @@ if __name__ == '__main__':
         for hp in tune_conf['params']:
             arg = hp['text'].split('=')[0].strip()
             value = getattr(train_args, arg)
-            hparams[arg] = value
+            if type(value) is list:
+                hparams[arg] = str(value)
+            else:
+                hparams[arg] = value
         
         metrics = {
             'Chamfer/d2s': mean_d2s,
@@ -238,7 +245,7 @@ if __name__ == '__main__':
             metrics['Image/psnr'] = psnr
 
         # summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.input_path)}/../'))
-        summary_writer.add_hparams(hparams, metrics, run_name='hparam_mesh' if mesh_eval else 'hparam_pts')
+        summary_writer.add_hparams(hparams, metrics, run_name=args.hparam_save_name)
         summary_writer.flush()
     else:
 

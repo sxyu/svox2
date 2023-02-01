@@ -45,7 +45,7 @@ parser.add_argument(
 parser.add_argument(
     "--offset", type=str, default="0,0,0", help="Center point to rotate around (only if not --traj)"
 )
-parser.add_argument("--radius", type=float, default=2.0, help="Radius of orbit (only if not --traj)")
+parser.add_argument("--radius", type=float, default=2.5, help="Radius of orbit (only if not --traj)")
 parser.add_argument(
     "--elevation",
     type=float,
@@ -137,8 +137,11 @@ else:
 
 args.offset = np.array(list(map(float, args.offset.split(","))))
 if args.traj_type == 'spiral':
-    angles = np.linspace(-180, 180, args.num_views + 1)[:-1]
-    elevations = np.linspace(args.elevation, args.elevation2, args.num_views)
+    
+    repeats = 10
+    angles = np.linspace(-180, 180, (args.num_views) // repeats + 1)[:-1]
+    angles = np.concatenate([angles for _ in range(repeats)])
+    elevations = np.linspace(-90, 90, args.num_views)
     c2ws = [
         pose_spherical(
             angle,
@@ -148,16 +151,6 @@ if args.traj_type == 'spiral':
             vec_up=args.vec_up,
         )
         for ele, angle in zip(elevations, angles)
-    ]
-    c2ws += [
-        pose_spherical(
-            angle,
-            ele,
-            args.radius,
-            args.offset,
-            vec_up=args.vec_up,
-        )
-        for ele, angle in zip(reversed(elevations), angles)
     ]
     c2ws = np.stack(c2ws, axis=0)
 elif args.traj_type == 'test':
