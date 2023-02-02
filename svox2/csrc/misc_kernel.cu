@@ -333,9 +333,9 @@ __device__ __inline__ void sprase_grid_trace_ray(
             pos[j] -= l[j];
         }
 
-        const float skip = compute_skip_dist(ray,
-                       grid.links, grid.stride_x,
-                       grid.size[2], 0);
+        // const float skip = compute_skip_dist(ray,
+        //                grid.links, grid.stride_x,
+        //                grid.size[2], 0);
 
         // if (skip >= step_size) {
         //     // For consistency, we skip the by step size

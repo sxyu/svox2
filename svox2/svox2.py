@@ -2450,7 +2450,7 @@ class SparseGrid(nn.Module):
         if B_weights.numel() > 0:
             na = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-8)
             na = B_weights
-            l_entropy = torch.where(B_weights > 0., -na * torch.log(na), torch.tensor(0., dtype=torch.float, device='cuda'))
+            l_entropy = torch.where(B_weights > 0., -na * torch.log(torch.clamp_min(na, 1e-8)), torch.tensor(0., dtype=torch.float, device='cuda'))
 
             # na = B_alpha / torch.clamp_min(B_alpha.sum(axis=-1, keepdim=True), 1e-8)
             # l_entropy = torch.where(B_alpha > 0., -na * torch.log(torch.clamp_min(na, 1e-8)), torch.tensor(0., dtype=torch.float, device='cuda'))
@@ -2479,7 +2479,7 @@ class SparseGrid(nn.Module):
         # computer sparsity loss
         if B_weights.numel() > 0:
             nB_weights = B_weights / torch.clamp_min(B_weights.sum(axis=-1, keepdim=True), 1e-10)
-            B_sigma = -torch.log(1-B_alpha)
+            B_sigma = -torch.log(torch.clamp_min(1-B_alpha, 1e-8))
             # B_sigma = -torch.log(1-B_alpha)
             l_sparsity = (torch.log(torch.clamp_min(B_sigma, 1e-8)) * (1. - nB_weights.detach().clone())).sum()
 
@@ -2542,7 +2542,7 @@ class SparseGrid(nn.Module):
 
 
         else:
-            l_ss = 0.
+            l_inward_norm = 0.
         out['extra_loss']['l_inward_norm'] = l_inward_norm
         out['log_stats']['l_inward_norm'] = l_inward_norm
 
@@ -2901,6 +2901,8 @@ class SparseGrid(nn.Module):
             self.links = init_links.view(reso).to(device=device)
             kept_ratio = torch.count_nonzero(valid_mask) / valid_mask.numel()
             print(f'{kept_ratio} of the grids are kept after nerf init!')
+
+            self.accelerate()
 
             return kept_ratio.item
 

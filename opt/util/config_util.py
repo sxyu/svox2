@@ -256,7 +256,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--surf_init_density_lvs',
                             # type=str,
                             nargs="+",
-                            default=[50],
+                            default=["50"],
                         help='The level sets of density used to initialize the surfaces ')
     group.add_argument('--surf_init_alpha_rescale', type=float, default=None,
                         help='Rescale the raw values of alpha after surface init from nerf')

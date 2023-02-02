@@ -62,9 +62,14 @@ __device__ __inline__ void trace_ray_cuvol(
             ray.pos[j] -= static_cast<float>(ray.l[j]); // get trilinear interpolate distances
         }
 
+        // if (lane_id == 0) printf("=============\n");
         const float skip = compute_skip_dist(ray,
                        grid.links, grid.stride_x,
-                       grid.size[2], 0);
+                       grid.size[2], 0, lane_id);
+
+        // if (lane_id == 0) printf("skip: %f\n", skip);
+        // if (lane_id == 0) printf("ray next pos: [%f, %f, %f]\n", fmaf(t+skip, ray.dir[0], ray.origin[0]), fmaf(t+skip, ray.dir[1], ray.origin[1]), fmaf(t+skip, ray.dir[2], ray.origin[2]));
+
 
         if (skip >= opt.step_size) {
             // For consistency, we skip the by step size

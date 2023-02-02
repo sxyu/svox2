@@ -287,7 +287,8 @@ __device__ __inline__ float compute_skip_dist(
         SingleRaySpec& __restrict__ ray,
         const int32_t* __restrict__ links,
         int offx, int offy,
-        int pos_offset = 0) {
+        int pos_offset = 0,
+        uint32_t lane_id = 0) {
     const int32_t link_val = links[offx * (ray.l[0] + pos_offset) +
                                    offy * (ray.l[1] + pos_offset) +
                                    (ray.l[2] + pos_offset)];
@@ -301,19 +302,40 @@ __device__ __inline__ float compute_skip_dist(
     // Consider caching the invdir for the ray
     float tmin = 0.f;
     float tmax = 1e9f;
+    // int hit_dim = -1; // which axis does the AABB hit
+    // int axis_coord = -1; // exact coord of the hit axis
+    // if (lane_id == 0) printf("ray.l: [%d, %d, %d]\n", ray.l[0], ray.l[1], ray.l[2]);
+    // if (lane_id == 0) printf("ray.pos: [%f, %f, %f]\n", ray.pos[0], ray.pos[1], ray.pos[2]);
+    // if (lane_id == 0) printf("link_val: %d\n", link_val);
+    // if (lane_id == 0) printf("cell_ul_shift: %d\n", cell_ul_shift);
+    // if (lane_id == 0) printf("cell_side_len: %d\n", cell_side_len);
+
 #pragma unroll
     for (int i = 0; i < 3; ++i) {
+        
         int ul = (((ray.l[i] + pos_offset) >> cell_ul_shift) << cell_ul_shift);
         ul -= ray.l[i] + pos_offset;
+
+        // if (lane_id == 0) printf("i: %d\n", i);
+        // if (lane_id == 0) printf("ul: %d\n", ul);
+        // if (lane_id == 0) printf("ul - ray.pos[i] + pos_offset: %f\n", ul - ray.pos[i] + pos_offset);
+        // if (lane_id == 0) printf("ul + cell_side_len - ray.pos[i] + pos_offset: %f\n", ul + cell_side_len - ray.pos[i] + pos_offset);
 
         const float invdir = 1.0 / ray.dir[i];
         const float t1 = (ul - ray.pos[i] + pos_offset) * invdir;
         const float t2 = (ul + cell_side_len - ray.pos[i] + pos_offset) * invdir;
         if (ray.dir[i] != 0.f) {
             tmin = max(tmin, min(t1, t2));
-            tmax = min(tmax, max(t1, t2));
+            // tmax = min(tmax, max(t1, t2));
+            if (max(t1, t2) < tmax){
+                tmax = max(t1, t2);
+                // hit_dim = i;
+                // axis_coord = (t1 > t2) ? (ul + ray.l[i]): (ul + cell_side_len + ray.l[i]);
+            }
         }
     }
+    // if (lane_id == 0) printf("hit_dim: %d\n", hit_dim);
+    // if (lane_id == 0) printf("axis_coord: %d\n", axis_coord);
 
 //     const uint32_t cell_ul_shift = 1 - dist;
 //     const uint32_t cell_br_shift = -cell_ul_shift;

@@ -28,6 +28,8 @@ const int TRACE_RAY_BG_CUDA_THREADS = 128;
 const int MIN_BG_BLOCKS_PER_SM = 8;
 typedef cub::WarpReduce<float> WarpReducef;
 
+const int USE_ACC_SKIP = true;
+
 namespace device {
 
 
@@ -85,6 +87,75 @@ __device__ __inline__ void trace_ray_surf_trav(
         voxel_l[0] = next_voxel[0];
         voxel_l[1] = next_voxel[1];
         voxel_l[2] = next_voxel[2];
+
+
+        if (USE_ACC_SKIP){
+            const int32_t link_val = grid.links[grid.stride_x * (voxel_l[0]) + grid.size[2] * (voxel_l[1]) + (voxel_l[2])];
+            if (link_val < -1){
+                // compute skip
+                const uint32_t dist = -link_val;
+                const uint32_t cell_ul_shift = (dist - 1);
+                const uint32_t cell_side_len = (1 << cell_ul_shift) - 1.f;
+
+                // AABB intersection
+                // Consider caching the invdir for the ray
+                // float tmin = 0.f;
+                float t_skip = 1e9f;
+                int hit_dim = -1; // which axis does the AABB hit
+                int axis_coord = -1; // exact coord of the hit axis
+
+                // if (lane_id == 0) printf("=============\n");
+                // if (lane_id == 0) printf("ray.l: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+                // // if (lane_id == 0) printf("ray.dir: [%f, %f, %f]\n", ray.dir[0], ray.dir[1], ray.dir[2]);
+                // if (lane_id == 0) printf("link_val: %d\n", link_val);
+                // if (lane_id == 0) printf("cell_ul_shift: %d\n", cell_ul_shift);
+                // if (lane_id == 0) printf("cell_side_len: %d\n", cell_side_len);
+
+    #pragma unroll
+                    for (int i = 0; i < 3; ++i) {
+                        
+                        int ul = ((voxel_l[i]) >> cell_ul_shift) << cell_ul_shift;
+
+
+                        const float invdir = 1.0 / ray.dir[i];
+                        const float t1 = (ul - ray.origin[i]) * invdir;
+                        const float t2 = (ul + cell_side_len - ray.origin[i]) * invdir;
+
+                        // if (lane_id == 0) printf("i: %d\n", i);
+                        // if (lane_id == 0) printf("ul: %d\n", ul);
+                        // if (lane_id == 0) printf("ul - ray.origin[i]: %f\n", ul - ray.origin[i]);
+                        // if (lane_id == 0) printf("ul + cell_side_len - ray.origin[i]: %f\n", ul + cell_side_len - ray.origin[i]);
+                        // if (lane_id == 0) printf("t1: %f\n", t1);
+                        // if (lane_id == 0) printf("t2: %f\n", t2);
+
+                        if (ray.dir[i] != 0.f) {
+                            // tmin = max(tmin, min(t1, t2));
+                            // t_skip = min(t_skip, max(t1, t2));
+                            if ((max(t1, t2) > 0.f) && (max(t1, t2) < t_skip)){
+                                t_skip = max(t1, t2);
+                                hit_dim = i;
+                                axis_coord = (t1 > t2) ? (ul) : (ul + cell_side_len);
+                            }
+                        }
+                    }
+
+                    // if (lane_id == 0) printf("hit_dim: %d\n", hit_dim);
+                    // if (lane_id == 0) printf("axis_coord: %d\n", axis_coord);
+                    // if (lane_id == 0) printf("t_skip: %f\n", t_skip);
+                    // if (lane_id == 0) printf("t: %f\n", t);
+
+                    if (t_skip > t){
+                        t = t_skip;
+                        voxel_l[0] = static_cast<int>(fmaf(t_skip, ray.dir[0], ray.origin[0]));
+                        voxel_l[1] = static_cast<int>(fmaf(t_skip, ray.dir[1], ray.origin[1]));
+                        voxel_l[2] = static_cast<int>(fmaf(t_skip, ray.dir[2], ray.origin[2]));
+                        voxel_l[hit_dim] = axis_coord;
+
+                        // if (lane_id == 0) printf("voxel_l: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+                    }
+            }
+        }
+
 
         // Find close and far intersections between ray and voxel
         int32_t const close_plane[] = {
@@ -147,6 +218,11 @@ __device__ __inline__ void trace_ray_surf_trav(
         ){
             continue;
         }
+
+
+        // if (lane_id == 0) printf("####################\n");
+        // if (lane_id == 0) printf("non empty voxel:: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+        // if (lane_id == 0) printf("####################\n");
 
 
         // check minimal of alpha raw
@@ -484,6 +560,48 @@ __device__ __inline__ void trace_ray_expected_term(
         voxel_l[1] = next_voxel[1];
         voxel_l[2] = next_voxel[2];
 
+        if (USE_ACC_SKIP){
+            const int32_t link_val = grid.links[grid.stride_x * (voxel_l[0]) + grid.size[2] * (voxel_l[1]) + (voxel_l[2])];
+            if (link_val < -1){
+                // compute skip
+                const uint32_t dist = -link_val;
+                const uint32_t cell_ul_shift = (dist - 1);
+                const uint32_t cell_side_len = (1 << cell_ul_shift) - 1.f;
+
+                // AABB intersection
+                // Consider caching the invdir for the ray
+                // float tmin = 0.f;
+                float t_skip = 1e9f;
+                int hit_dim = -1; // which axis does the AABB hit
+                int axis_coord = -1; // exact coord of the hit axis
+#pragma unroll
+                    for (int i = 0; i < 3; ++i) {
+                        
+                        int ul = ((voxel_l[i]) >> cell_ul_shift) << cell_ul_shift;
+                        const float invdir = 1.0 / ray.dir[i];
+                        const float t1 = (ul - ray.origin[i]) * invdir;
+                        const float t2 = (ul + cell_side_len - ray.origin[i]) * invdir;
+
+                        if (ray.dir[i] != 0.f) {
+                            // tmin = max(tmin, min(t1, t2));
+                            // t_skip = min(t_skip, max(t1, t2));
+                            if ((max(t1, t2) > 0.f) && (max(t1, t2) < t_skip)){
+                                t_skip = max(t1, t2);
+                                hit_dim = i;
+                                axis_coord = (t1 > t2) ? (ul) : (ul + cell_side_len);
+                            }
+                        }
+                    }
+                    if (t_skip > t){
+                        t = t_skip;
+                        voxel_l[0] = static_cast<int>(fmaf(t_skip, ray.dir[0], ray.origin[0]));
+                        voxel_l[1] = static_cast<int>(fmaf(t_skip, ray.dir[1], ray.origin[1]));
+                        voxel_l[2] = static_cast<int>(fmaf(t_skip, ray.dir[2], ray.origin[2]));
+                        voxel_l[hit_dim] = axis_coord;
+                    }
+            }
+        }
+
         // Find close and far intersections between ray and voxel
         int32_t const close_plane[] = {
             ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
@@ -633,6 +751,7 @@ __device__ __inline__ void trace_ray_expected_term(
 
     *out = outv;
 }
+
 __device__ __inline__ void trace_ray_mode_term(
         const PackedSparseGridSpec& __restrict__ grid,
         SingleRaySpec& __restrict__ ray,
@@ -1662,6 +1781,48 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         voxel_l[0] = next_voxel[0];
         voxel_l[1] = next_voxel[1];
         voxel_l[2] = next_voxel[2];
+
+        if (USE_ACC_SKIP){
+            const int32_t link_val = grid.links[grid.stride_x * (voxel_l[0]) + grid.size[2] * (voxel_l[1]) + (voxel_l[2])];
+            if (link_val < -1){
+                // compute skip
+                const uint32_t dist = -link_val;
+                const uint32_t cell_ul_shift = (dist - 1);
+                const uint32_t cell_side_len = (1 << cell_ul_shift) - 1.f;
+
+                // AABB intersection
+                // Consider caching the invdir for the ray
+                // float tmin = 0.f;
+                float t_skip = 1e9f;
+                int hit_dim = -1; // which axis does the AABB hit
+                int axis_coord = -1; // exact coord of the hit axis
+#pragma unroll
+                    for (int i = 0; i < 3; ++i) {
+                        
+                        int ul = ((voxel_l[i]) >> cell_ul_shift) << cell_ul_shift;
+                        const float invdir = 1.0 / ray.dir[i];
+                        const float t1 = (ul - ray.origin[i]) * invdir;
+                        const float t2 = (ul + cell_side_len - ray.origin[i]) * invdir;
+
+                        if (ray.dir[i] != 0.f) {
+                            // tmin = max(tmin, min(t1, t2));
+                            // t_skip = min(t_skip, max(t1, t2));
+                            if ((max(t1, t2) > 0.f) && (max(t1, t2) < t_skip)){
+                                t_skip = max(t1, t2);
+                                hit_dim = i;
+                                axis_coord = (t1 > t2) ? (ul) : (ul + cell_side_len);
+                            }
+                        }
+                    }
+                    if (t_skip > t){
+                        t = t_skip;
+                        voxel_l[0] = static_cast<int>(fmaf(t_skip, ray.dir[0], ray.origin[0]));
+                        voxel_l[1] = static_cast<int>(fmaf(t_skip, ray.dir[1], ray.origin[1]));
+                        voxel_l[2] = static_cast<int>(fmaf(t_skip, ray.dir[2], ray.origin[2]));
+                        voxel_l[hit_dim] = axis_coord;
+                    }
+            }
+        }
 
         // Find close and far intersections between ray and voxel
         int32_t const close_plane[] = {
