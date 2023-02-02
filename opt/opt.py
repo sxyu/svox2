@@ -324,6 +324,7 @@ if args.load_pretrain_density_sh is not None:
         prune_threshold=min(density_lvs) / 2,
         init_type=args.surf_init_type,
         weight_init_cams=resample_cameras,
+        visibility_pruning_scale=args.visibility_pruning_scale,
         )
 
     # pred_pts = []
@@ -336,6 +337,8 @@ if args.load_pretrain_density_sh is not None:
     # os.makedirs(out_dir, exist_ok=True)
     # np.save(f'{out_dir}/pts.npy', pred_pts)
     # write_vis_pcd(f'{out_dir}/pts.ply', pred_pts)
+
+    # grid.save(f'{args.train_dir}/ckpt_init.npz')
 
     surf_lvs_original = grid.level_set_data.clone()
 

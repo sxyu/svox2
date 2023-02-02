@@ -265,6 +265,7 @@ def setup_train_conf(return_parpser=False):
                         help='Rescale the raw values of surfaces')
     group.add_argument('--surf_init_type', type=str, default='density',
                         choices=['density', 'reweight'])
+    group.add_argument('--visibility_pruning_scale', type=float, default=0.01)
     group.add_argument('--surface_init_reset_alpha',action='store_true', default=False,
                         help='Reset alpha value after no surface init')
     group.add_argument('--surf_init_reset_all',action='store_true', default=False,

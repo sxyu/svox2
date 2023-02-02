@@ -2919,6 +2919,7 @@ class SparseGrid(nn.Module):
         dilate=2,
         init_type='density', # init from density or weight
         weight_init_cams=None,
+        visibility_pruning_scale=0, # remove surfaces at voxels that have less visibility than scale * most visible voxel
         ):
         '''
         Initialize surface data from density values
@@ -3054,7 +3055,7 @@ class SparseGrid(nn.Module):
                     # self.surface_data = nn.Parameter(max_t_grid[self.links >= 0][:, None] - zero_lv_density)
 
                     weight_mask = max_t_grid[self.links >= 0][:, None]
-                    # weight_mask [weight_mask < 0.05] = 0.
+                    # weight_mask [weight_mask < 0.95] = 0.
 
                     surface_data = self.density_data.detach().clone() * weight_mask
                     surface_data = (surface_data - zero_lv_density)
@@ -3114,6 +3115,27 @@ class SparseGrid(nn.Module):
 
                     if alpha_rescale is not None:
                         self.density_data.data *= alpha_rescale
+
+                if visibility_pruning_scale > 0:
+                    # visibility prunning
+                    visibility_grid = torch.zeros_like(self.surface_data, dtype=torch.float32)[:, 0]
+
+                    for cam in weight_init_cams:
+                        _C.sparse_grid_visbility_render_surf(
+                            self._to_cpp(), 
+                            cam._to_cpp(),
+                            visibility_grid
+                        )
+
+                    visibility_grid = visibility_grid.view([-1, 1])
+
+                    max_vis = visibility_grid.max()
+                    thresh_vis = 0.01 * max_vis
+                    surf_min = self.surface_data.data.min()
+
+                    self.surface_data.data[visibility_grid < thresh_vis] = (visibility_grid[visibility_grid < thresh_vis] - thresh_vis) / thresh_vis * surf_min
+
+
 
 
 

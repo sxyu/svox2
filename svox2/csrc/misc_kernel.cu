@@ -10,6 +10,9 @@
 #include "data_spec_packed.cuh"
 #include "cubemap_util.cuh"
 
+#include <thrust/extrema.h>
+#include <thrust/execution_policy.h>
+
 namespace {
 
 const int MISC_CUDA_THREADS = 256;
@@ -396,6 +399,217 @@ __device__ __inline__ void sprase_grid_trace_ray(
     }
 }
 
+
+// Fast single-channel rendering for weight-thresholding
+__device__ __inline__ void sparse_grid_visbility_trace_ray_surf(
+        const PackedSparseGridSpec& __restrict__ grid,
+        SingleRaySpec ray,
+        float* __restrict__ visibility_out) {
+
+    // Warning: modifies ray.origin
+    transform_coord(ray.origin, grid._scaling, grid._offset);
+    // Warning: modifies ray.dir
+    _get_delta_scale(grid._scaling, ray.dir);
+
+    float t, tmax;
+    {
+        float t1, t2;
+        t = 0.0f;
+        tmax = 2e3f;
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            const float invdir = 1.0 / ray.dir[i];
+            t1 = (-0.5f - ray.origin[i]) * invdir;
+            t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;
+            if (ray.dir[i] != 0.f) {
+                t = max(t, min(t1, t2));
+                tmax = min(tmax, max(t1, t2));
+            }
+        }
+    }
+
+    // printf("t, tmax: [%f, %f]\n", t, tmax);
+    if (t > tmax) {
+        // Ray doesn't hit box
+        return;
+    }
+    float pos[3];
+    int32_t l[3];
+
+    float log_light_intensity = 0.f;
+    const int stride0 = grid.size[1] * grid.size[2];
+    const int stride1 = grid.size[2];
+
+    double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
+
+    int32_t voxel_l[3];
+    int32_t next_voxel[3];
+#pragma unroll 3
+    for (int j = 0; j < 3; ++j) {
+        next_voxel[j] = static_cast<int32_t>(fmaf(t, ray.dir[j], ray.origin[j])); // fmaf(x,y,z) = (x*y)+z
+        next_voxel[j] = min(max(next_voxel[j], 0), grid.size[j] - 2);
+    }
+
+    // float visibility = 1.f;
+
+
+    while (t <= tmax) {
+
+        voxel_l[0] = next_voxel[0];
+        voxel_l[1] = next_voxel[1];
+        voxel_l[2] = next_voxel[2];
+        // printf("voxel: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+
+        // assign visibility to current voxel
+
+        int const offx = grid.stride_x, offy = grid.size[2];
+        const int32_t* __restrict__ link_ptr = grid.links + (offx * voxel_l[0] + offy * voxel_l[1] + voxel_l[2]);
+
+        // if (link_ptr[0] >=0 ){
+        //     printf("voxel: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
+        //     atomicMax(visibility_out+ link_ptr[0], visibility);
+        // }
+
+        // #define MAYBE_ASSIGN_VIS(u) if (link_ptr[u] >= 0) atomicMax(visibility_out+ link_ptr[u], visibility)
+        #define MAYBE_ASSIGN_VIS(u) if (link_ptr[u] >= 0) atomicAdd(visibility_out+ link_ptr[u], 1.f)
+        MAYBE_ASSIGN_VIS(0);
+        MAYBE_ASSIGN_VIS(1);
+        MAYBE_ASSIGN_VIS(stride1);
+        MAYBE_ASSIGN_VIS(stride1+1);
+        MAYBE_ASSIGN_VIS(stride0);
+        MAYBE_ASSIGN_VIS(stride0+1);
+        MAYBE_ASSIGN_VIS(stride0+stride1);
+        MAYBE_ASSIGN_VIS(stride0+stride1+1);
+        #undef MAYBE_ASSIGN_VIS
+
+
+
+        // Find close and far intersections between ray and voxel
+        int32_t const close_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0] : voxel_l[0]+1,
+            ray.dir[1] > 0.f ? voxel_l[1] : voxel_l[1]+1,
+            ray.dir[2] > 0.f ? voxel_l[2] : voxel_l[2]+1,
+        };
+        int32_t const far_plane[] = {
+            ray.dir[0] > 0.f ? voxel_l[0]+1 : voxel_l[0],
+            ray.dir[1] > 0.f ? voxel_l[1]+1 : voxel_l[1],
+            ray.dir[2] > 0.f ? voxel_l[2]+1 : voxel_l[2],
+        };
+
+        // threshold t_close by 0.f to prevent cases where camera origin is within the voxel
+        float const t_close = max(max(
+            max((static_cast<float>(close_plane[0])-ray.origin[0])/ray.dir[0], (static_cast<float>(close_plane[1])-ray.origin[1])/ray.dir[1]),
+            (static_cast<float>(close_plane[2])-ray.origin[2])/ray.dir[2]), 0.f);
+        
+        float const t_fars [] = {
+            (static_cast<float>(far_plane[0])-ray.origin[0])/ray.dir[0],
+            (static_cast<float>(far_plane[1])-ray.origin[1])/ray.dir[1],
+            (static_cast<float>(far_plane[2])-ray.origin[2])/ray.dir[2]
+            };
+
+        float const t_far = min(min(t_fars[0], t_fars[1]), t_fars[2]);
+
+        t = t_far;
+
+        if (t_far == t_fars[0]){
+            next_voxel[0] += (ray.dir[0] > 0.f) ?  1 : -1;
+            if ((next_voxel[0] < 0) || (next_voxel[0] >= grid.size[0]-1)) t = ray.tmax + 1.f;
+        }else if (t_far == t_fars[1]){
+            next_voxel[1] += (ray.dir[1] > 0.f) ?  1 : -1;
+            if ((next_voxel[1] < 0) || (next_voxel[1] >= grid.size[1]-1)) t = ray.tmax + 1.f;
+        }else{
+            next_voxel[2] += (ray.dir[2] > 0.f) ?  1 : -1;
+            if ((next_voxel[2] < 0) || (next_voxel[2] >= grid.size[2]-1)) t = ray.tmax + 1.f;
+        }
+
+
+        // skip voxel if any of the vertices is turned off
+        if ((voxel_l[0] + 1 >= grid.size[0]) || (voxel_l[1] + 1 >= grid.size[1]) || (voxel_l[2] + 1 >= grid.size[2]) \
+            || (link_ptr[0] < 0) || (link_ptr[1] < 0) || (link_ptr[offy] < 0) || (link_ptr[offy+1] < 0) \
+            || (link_ptr[offx] < 0) || (link_ptr[offx+1] < 0) || (link_ptr[offx+offy] < 0) || (link_ptr[offx+offy+1] < 0)
+        ){
+            continue;
+        }
+
+
+        double const new_origin[] = {ray.origin[0] + t_close*ray.dir[0], ray.origin[1] + t_close*ray.dir[1], ray.origin[2] + t_close*ray.dir[2]};
+
+        // find intersections
+        double const surface[8] = {
+            grid.surface_data[link_ptr[0]],
+            grid.surface_data[link_ptr[1]],
+            grid.surface_data[link_ptr[offy]],
+            grid.surface_data[link_ptr[offy+1]],
+            grid.surface_data[link_ptr[offx]],
+            grid.surface_data[link_ptr[offx+1]],
+            grid.surface_data[link_ptr[offx+offy]],
+            grid.surface_data[link_ptr[offx+offy+1]],
+        };
+
+        double fs[4];
+        double const new_norm_origin[] = {new_origin[0] - voxel_l[0], new_origin[1] - voxel_l[1], new_origin[2] - voxel_l[2]};
+        // surface_to_cubic_equation(surface, new_origin, ray_dir_d, voxel_l, fs);
+        surface_to_cubic_equation_01(surface, new_norm_origin, ray_dir_d, fs);
+
+        const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8);
+        for (int i=0; i < grid.level_set_num; ++i){
+            double const lv_set = grid.level_set_data[i];
+            if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
+                continue;
+            }
+
+            ////////////// CUBIC ROOT SOLVING //////////////
+            double st[3] = {-1, -1, -1}; // sample t
+            // note that it's now distance from new origin to intersections
+
+            cubic_equation_solver_vieta(
+                fs[0] - lv_set, fs[1], fs[2], fs[3],
+                1e-8, // float eps
+                1e-10, // double eps
+                st
+                );
+
+
+            ////////////// TRILINEAR INTERPOLATE //////////////
+            for (int j=0; j < 3; ++j){
+                if (st[j] <= 0){
+                    // ignore intersection at negative direction
+                    continue;
+                }
+
+#pragma unroll 3
+                for (int k=0; k < 3; ++k){
+                    // assert(!isnan(st[j]));
+                    ray.pos[k] = fmaf(static_cast<float>(st[j]), ray.dir[k], static_cast<float>(new_origin[k])); // fmaf(x,y,z) = (x*y)+z
+                    ray.l[k] = min(voxel_l[k], grid.size[k] - 2); // get l
+                    ray.pos[k] -= static_cast<float>(ray.l[k]); // get trilinear interpolate distances
+                }
+
+                // check if intersection is within grid
+                if ((ray.pos[0] < 0) | (ray.pos[0] > 1) | (ray.pos[1] < 0) | (ray.pos[1] > 1) | (ray.pos[2] < 0) | (ray.pos[2] > 1)){
+                    continue;
+                }
+
+                // vox_has_sample = true;
+                // float alpha = trilerp_cuvol_one(
+                //         grid.links, grid.density_data,
+                //         grid.stride_x,
+                //         grid.size[2],
+                //         1,
+                //         ray.l, ray.pos,
+                //         0);
+
+                // visibility = 0.f;
+
+                return;
+
+
+            }
+
+        }
+    }
+}
+
 // Fast single-channel rendering for surface weight-thresholding
 __device__ __inline__ void grid_trace_ray_surface(
         const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> density_data,
@@ -615,6 +829,21 @@ __global__ void sparse_grid_weight_render_kernel(
 }
 
 __launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
+__global__ void sparse_grid_visbility_render_surf_kernel(
+    PackedSparseGridSpec grid,
+    PackedCameraSpec cam,
+    float* __restrict__ visibility_out) {
+    CUDA_GET_THREAD_ID(tid, cam.width * cam.height);
+    int iy = tid / cam.width, ix = tid % cam.width;
+    float dir[3], origin[3];
+    cam2world_ray(ix, iy, cam, dir, origin);
+    sparse_grid_visbility_trace_ray_surf(
+        grid,
+        SingleRaySpec(origin, dir),
+        visibility_out);
+}
+
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
 __global__ void grid_surface_weight_render_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
         density_data,
@@ -777,6 +1006,24 @@ void sparse_grid_weight_render(
         offset.data_ptr<float>(),
         scaling.data_ptr<float>(),
         grid_weight_out.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+    CUDA_CHECK_ERRORS;
+}
+
+void sparse_grid_visbility_render_surf(
+    SparseGridSpec& grid, CameraSpec& cam,
+    torch::Tensor visibility_out) {
+    DEVICE_GUARD(grid.density_data);
+    grid.check();
+    cam.check();
+    const size_t Q = size_t(cam.width) * cam.height;
+
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
+
+    device::sparse_grid_visbility_render_surf_kernel<<<blocks, MISC_CUDA_THREADS>>>(
+        grid,
+        cam,
+        visibility_out.data_ptr<float>()
+    );
     CUDA_CHECK_ERRORS;
 }
 
