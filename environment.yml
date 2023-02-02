@@ -22,7 +22,7 @@ dependencies:
       - moviepy
       - matplotlib
       - scipy>=1.6.0
-  - pytorch
+  - pytorch=1.11.0
   - torchvision
   - cudatoolkit
   - tqdm
