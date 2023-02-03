@@ -2981,7 +2981,7 @@ class SparseGrid(nn.Module):
                     self.prune_grid(prune_threshold, dilate, prune_surf=False)
                     
                     # better rescale using average grad of surface data
-                    rand_cells = self._get_rand_cells_non_empty(0.1, contiguous=True)
+                    rand_cells = self._get_rand_cells_non_empty(1, contiguous=True)
                     xyz = rand_cells
                     z = (xyz % self.links.shape[2]).long()
                     xy = xyz / self.links.shape[2]

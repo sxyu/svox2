@@ -28,7 +28,7 @@ const int TRACE_RAY_BG_CUDA_THREADS = 128;
 const int MIN_BG_BLOCKS_PER_SM = 8;
 typedef cub::WarpReduce<float> WarpReducef;
 
-const int USE_ACC_SKIP = true;
+const int USE_ACC_SKIP = false;
 
 namespace device {
 
