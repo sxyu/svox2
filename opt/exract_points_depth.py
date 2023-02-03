@@ -84,10 +84,10 @@ parser.add_argument(
     help="density for downsampling the pts, set to 0 to disable"
 )
 parser.add_argument(
-    "--intersect_th",
+    "--depth_sigma_thresh",
     type=float,
-    default=0.1,
-    help="alpha threshold for determining intersections"
+    default=None,
+    help="threshold for determining intersections"
 )
 parser.add_argument(
     "--out_path",
@@ -96,7 +96,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--depth_type",
-    choices=['mean', 'med', 'mode'],
+    choices=['mean', 'med', 'mode', 'thresh'],
     default='mean',
 )
 parser.add_argument(
@@ -234,7 +234,8 @@ with torch.no_grad():
                            ndc_coeffs=(-1.0, -1.0))
         torch.cuda.synchronize()
 
-        pts = grid.volume_render_extract_pts(cam, depth_type=args.depth_type, weight_thresh=args.weight_thresh)
+        pts = grid.volume_render_extract_pts(cam, depth_type=args.depth_type, weight_thresh=args.weight_thresh, 
+                                             sigma_thresh=args.depth_sigma_thresh if args.depth_type == 'thresh' else None) 
         
         torch.cuda.synchronize()
 

@@ -216,7 +216,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("basis_data", &SparseGridSpec::basis_data)
       .def_readwrite("background_links", &SparseGridSpec::background_links)
       .def_readwrite("background_data", &SparseGridSpec::background_data)
-      .def_readwrite("fake_sample_std", &SparseGridSpec::fake_sample_std);
+      .def_readwrite("fake_sample_std", &SparseGridSpec::fake_sample_std)
+      .def_readwrite("truncated_vol_render_a", &SparseGridSpec::truncated_vol_render_a);
 
   py::class_<CameraSpec>(m, "CameraSpec")
       .def(py::init<>())
@@ -257,7 +258,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("no_surf_grad_from_sh", &RenderOptions::no_surf_grad_from_sh)
       .def_readwrite("alpha_activation_type", &RenderOptions::alpha_activation_type)
       .def_readwrite("fake_sample_l_dist", &RenderOptions::fake_sample_l_dist)
-      .def_readwrite("fake_sample_normalize_surf", &RenderOptions::fake_sample_normalize_surf);
+      .def_readwrite("fake_sample_normalize_surf", &RenderOptions::fake_sample_normalize_surf)
+      .def_readwrite("only_outward_intersect", &RenderOptions::only_outward_intersect)
+      .def_readwrite("truncated_vol_render", &RenderOptions::truncated_vol_render);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
   // .def_readwrite("random_sigma_std_background",

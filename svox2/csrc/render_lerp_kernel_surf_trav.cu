@@ -51,7 +51,8 @@ __device__ __inline__ void trace_ray_surf_trav(
     const uint32_t lane_colorgrp_id = lane_id % grid.basis_dim; // (9) every basis in SH has a lane
     const uint32_t lane_colorgrp = lane_id / grid.basis_dim;
 
-    int sample_i = 0;
+    int sample_i = 0; // this is for sample alpha/weight caching
+    int intersect_i = -1; // this is for truncated vol render
 
     double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
 
@@ -262,11 +263,21 @@ __device__ __inline__ void trace_ray_surf_trav(
         bool vox_has_surf = false;
 
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8);
+//         double surf_min = surface[0];
+//         double surf_max = surface[0];
+// #pragma unroll 7
+//         for (int j=0; j<7; ++j){
+//             surf_min = min(surf_min, surface[j+1]);
+//             surf_max = max(surf_max, surface[j+1]);
+//         }
         for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
             }
+            // if ((lv_set < surf_min) || (lv_set > surf_max)){
+            //     continue;
+            // }
 
             vox_has_surf = true;
 
@@ -335,7 +346,29 @@ __device__ __inline__ void trace_ray_surf_trav(
                 // }
 
                 vox_has_sample = true;
-                float alpha = trilerp_cuvol_one(
+
+                if (opt.only_outward_intersect){
+                    // check if directly of normal is outwards
+                    float surf_grad[3]; 
+                    compute_field_grad(
+                        grid.links, grid.surface_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        ray.l, ray.pos,
+                        surf_grad
+                    );
+                    // note that the actual dir of surf norm would be negative of surf_grad
+                    float const norm_dir_dot = -(surf_grad[0] * ray.dir[0] + surf_grad[1] * ray.dir[1] + surf_grad[2] * ray.dir[2]);
+                    
+                    if (norm_dir_dot >= 0.f){
+                        // surface norm facing inwards, skip the intersection!
+                        continue;
+                    }
+                }
+
+                // we now have valid intersection for volume rendering
+                ++intersect_i;
+                float const raw_alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
                         grid.size[2],
@@ -343,8 +376,12 @@ __device__ __inline__ void trace_ray_surf_trav(
                         ray.l, ray.pos,
                         0);
 
-                if (alpha > opt.sigma_thresh) {
-                    alpha = surf_alpha_act(alpha, opt.alpha_activation_type);
+                if (raw_alpha > opt.sigma_thresh) {
+                    float const alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);
+                    float const trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    float const rwalpha = alpha * trunc_reweight;
+
+
                     float lane_color = trilerp_cuvol_one(
                                     grid.links,
                                     grid.sh_data,
@@ -355,9 +392,9 @@ __device__ __inline__ void trace_ray_surf_trav(
                     lane_color *= sphfunc_val[lane_colorgrp_id]; // bank conflict
 
                     // const float pcnt = ray.world_step * sigma;
-                    const float pcnt = -1 * _LOG(1 - alpha);
+                    const float pcnt = -1 * _LOG(1 - rwalpha);
                     const float weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
-                    log_transmit -= pcnt; // log_trans = sum(log(1-alpha)) = log(prod(1-alpha))
+                    log_transmit -= pcnt; // log_trans = sum(log(1-rwalpha)) = log(prod(1-rwalpha))
                     // log_transmit is now T_{i+1}
 
                     float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
@@ -366,8 +403,8 @@ __device__ __inline__ void trace_ray_surf_trav(
 
                     // save weights and sample dist for l_dist gradient
                     if ((lane_id==0) && (sample_weights != nullptr) && (sample_i < l_dist_max_sample)){
-                        // save alpha for now
-                        sample_alphas[sample_i] = alpha;
+                        // save rwalpha for now
+                        sample_alphas[sample_i] = rwalpha;
                         sample_weights[sample_i] = weight;
                         sample_ts[sample_i] = t_close + st[j];
                         sample_i += 1;
@@ -391,8 +428,7 @@ __device__ __inline__ void trace_ray_surf_trav(
             //     printf("taking fake sample for: [%d, %d, %d]\n", voxel_l[0], voxel_l[1], voxel_l[2]);
             // }
 
-            // https://math.stackexchange.com/questions/967268/finding-the-closest-distance-between-a-point-a-curve
-            
+            // https://math.stackexchange.com/questions/967268/finding-the-closest-distance-between-a-point-a-curve            
 
 
 
@@ -464,6 +500,8 @@ __device__ __inline__ void trace_ray_surf_trav(
                     // re-weight alpha using a simple gaussian
                     alpha = alpha * _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
 
+                    float const trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    alpha = alpha * trunc_reweight;
 
                     float lane_color = trilerp_cuvol_one(
                                     grid.links,
@@ -752,7 +790,7 @@ __device__ __inline__ void trace_ray_expected_term(
     *out = outv;
 }
 
-__device__ __inline__ void trace_ray_mode_term(
+__device__ __inline__ void trace_ray_mode_term_surf_trav(
         const PackedSparseGridSpec& __restrict__ grid,
         SingleRaySpec& __restrict__ ray,
         const RenderOptions& __restrict__ opt,
@@ -762,6 +800,8 @@ __device__ __inline__ void trace_ray_mode_term(
         *out = 0.f;
         return;
     }
+
+    // printf("using correct trace_ray_mode_term_surf_trav\n");
 
     double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
     double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
@@ -935,7 +975,7 @@ __device__ __inline__ void trace_ray_mode_term(
 
                     if (weight > max_weight){
                         max_weight = weight;
-                        outv = (t / opt.step_size) * ray.world_step;
+                        outv = ((st[j]+t_close) / opt.step_size) * ray.world_step;
                     }
                 }
             }
@@ -1705,7 +1745,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
     double const  ray_dir_d[] = {ray.dir[0], ray.dir[1], ray.dir[2]};
     // double const  ray_origin_d[] = {ray.origin[0], ray.origin[1], ray.origin[2]};
 
-    int sample_i = 0;
+    int sample_i = 0; // this is for sample alpha/weight caching
+    int intersect_i = -1; // this is for truncated vol render
 
     float sample_alpha_sum = 0.f;
     float sample_weight_sum = 0.f;
@@ -1930,11 +1971,21 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         bool vox_has_surf = false;
         
         const auto mnmax = thrust::minmax_element(thrust::device, surface, surface+8); 
+//         double surf_min = surface[0];
+//         double surf_max = surface[0];
+// #pragma unroll 7
+//         for (int j=0; j<7; ++j){
+//             surf_min = min(surf_min, surface[j+1]);
+//             surf_max = max(surf_max, surface[j+1]);
+//         }
         for (int i=0; i < grid.level_set_num; ++i){
             double const lv_set = grid.level_set_data[i];
             if ((lv_set < *mnmax.first) || (lv_set > *mnmax.second)){
                 continue;
             }
+            // if ((lv_set < surf_min) || (lv_set > surf_max)){
+            //     continue;
+            // }
 
             vox_has_surf = true;
 
@@ -1983,6 +2034,28 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                 // if (lane_id==0) printf("backpass intersection at: %f\n",  t_close + st[st_id]);
 
                 vox_has_sample = true;
+
+                if (opt.only_outward_intersect){
+                    // check if directly of normal is outwards
+                    float surf_grad[3]; 
+                    compute_field_grad(
+                        grid.links, grid.surface_data,
+                        grid.stride_x,
+                        grid.size[2],
+                        ray.l, ray.pos,
+                        surf_grad
+                    );
+                    // note that the actual dir of surf norm would be negative of surf_grad
+                    float const norm_dir_dot = -(surf_grad[0] * ray.dir[0] + surf_grad[1] * ray.dir[1] + surf_grad[2] * ray.dir[2]);
+                    
+                    if (norm_dir_dot >= 0.f){
+                        // surface norm facing inwards, skip the intersection!
+                        continue;
+                    }
+                }
+
+                // we now have valid intersection for volume rendering
+                ++intersect_i;
                 float const  raw_alpha = trilerp_cuvol_one(
                         grid.links, grid.density_data,
                         grid.stride_x,
@@ -1991,9 +2064,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         ray.l, ray.pos,
                         0);
 
-                float const  alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);
 
                 if (raw_alpha > opt.sigma_thresh) {
+                    float const  alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);
+                    float const trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    float const rwalpha = alpha * trunc_reweight;
+
+
                     float lane_color = trilerp_cuvol_one(
                                     grid.links,
                                     grid.sh_data,
@@ -2004,11 +2081,9 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     float weighted_lane_color = lane_color * sphfunc_val[lane_colorgrp_id];
 
-                    const float  pcnt = -_LOG(max(1.f - alpha, 1e-8));
+                    const float  pcnt = -_LOG(max(1.f - rwalpha, 1e-8));
                     const float  weight = _EXP(log_transmit) * (1.f - _EXP(-pcnt));
 
-                    // printf("raw_alpha: %f\n", raw_alpha);
-                    // printf("weight: %f\n", weight);
                     
 
                     const float lane_color_total = WarpReducef(temp_storage).HeadSegmentedSum(
@@ -2045,11 +2120,11 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                     // accum is now d_mse/d_pred_c * sum(wi * ci)[i=current+1~N]
                     accum -= weight * total_color;
-                    // compute d_mse/d_alpha_i
-                    float  curr_grad_alpha = accum / min(alpha-1.f, -1e-8f) + total_color * _EXP(log_transmit); 
+                    // compute d_mse/d_rwalpha_i
+                    float  curr_grad_rwalpha = accum / min(rwalpha-1.f, -1e-8f) + total_color * _EXP(log_transmit); 
 
                     if (lane_id == 0){
-                        // add grad to alpha from l_dist -- weight version
+                        // add grad to rwalpha from l_dist -- weight version
                         if (lambda_l_dist > 0.f){
                             float Dldist_Dai = 0.f; 
                             float log_Tk = log_transmit; // log(T_i)
@@ -2066,19 +2141,19 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                     // if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_transmit));
                                 } else {
                                     log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8));
-                                    Dldist_Dai += Dldist_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f);
-                                    // if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f));
+                                    Dldist_Dai += Dldist_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(rwalpha-1.f, -1e-8f);
+                                    // if (lane_id == 0) printf("Dwk_Dai: %f\n",  _EXP(log_Tk) * sample_alphas[k] / min(rwalpha-1.f, -1e-8f));
                                 }
                             }
 
-                            curr_grad_alpha += lambda_l_dist * Dldist_Dai;
-                            ASSERT_NUM(curr_grad_alpha);
+                            curr_grad_rwalpha += lambda_l_dist * Dldist_Dai;
+                            ASSERT_NUM(curr_grad_rwalpha);
                         }
-                        // if (lane_id == 0) printf("grad l_dist to alpha: %f\n", lambda_l_dist * l_dist_grad_alpha * log_transmit);
+                        // if (lane_id == 0) printf("grad l_dist to rwalpha: %f\n", lambda_l_dist * l_dist_grad_rwalpha * log_transmit);
 
                         if (lambda_l_entropy > 0.f){
                             if (no_norm_weight_l_entropy){
-                                // add grad to alpha from l_entropy -- weight version
+                                // add grad to rwalpha from l_entropy -- weight version
                                 float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8)) + 1.f);
                                 // if (lane_id == 0) printf("sample_i: %d\n", sample_i);
                                 // if (lane_id == 0) printf("Den_Dwi: %f\n", Den_Dwi);
@@ -2093,13 +2168,13 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                 for (int k=sample_i+1; k <valid_sample_n; ++k){
                                     float const Den_Dwk = -(_LOG(max(sample_weights[k], 1e-8)) + 1.f);
                                     log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8)); 
-                                    Den_Dai += Den_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f); // Dwk_Dai
+                                    Den_Dai += Den_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(rwalpha-1.f, -1e-8f); // Dwk_Dai
                                 }
-                                curr_grad_alpha += lambda_l_entropy * Den_Dai; 
-                                ASSERT_NUM(curr_grad_alpha);
+                                curr_grad_rwalpha += lambda_l_entropy * Den_Dai; 
+                                ASSERT_NUM(curr_grad_rwalpha);
 
                             } else {
-                                // add grad to alpha from l_entropy -- weight version
+                                // add grad to rwalpha from l_entropy -- weight version
                                 float const Den_Dwi = -(_LOG(max(sample_weights[sample_i], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum + Den_Dwsum; // note Dwsum_Dwi is always 1
                                 // ASSERT_NUM(Den_Dwi);
                                 float Den_Dai = Den_Dwi * _EXP(log_transmit);
@@ -2111,10 +2186,10 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                 for (int k=sample_i+1; k <valid_sample_n; ++k){
                                     float const Den_Dwk = -(_LOG(max(sample_weights[k], 1e-8) / sample_weight_sum) + 1.f)/sample_weight_sum + Den_Dwsum;
                                     log_Tk += _LOG(max(1.f-sample_alphas[k-1], 1e-8)); 
-                                    Den_Dai += Den_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(alpha-1.f, -1e-8f); // Dwk_Dai
+                                    Den_Dai += Den_Dwk * _EXP(log_Tk) * sample_alphas[k] / min(rwalpha-1.f, -1e-8f); // Dwk_Dai
                                 }
-                                curr_grad_alpha += lambda_l_entropy * Den_Dai; 
-                                ASSERT_NUM(curr_grad_alpha);
+                                curr_grad_rwalpha += lambda_l_entropy * Den_Dai; 
+                                ASSERT_NUM(curr_grad_rwalpha);
                             }
                         }
                     }
@@ -2184,25 +2259,25 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                 l_dist_grad_alpha += sample_alphas[sample_j] * abs(sample_ts[sample_i] - sample_ts[sample_j]);
                             }
                             // printf("l_dist_grad_alpha: %f\n", l_dist_grad_alpha);
-                            curr_grad_alpha += lambda_l_dist_a * l_dist_grad_alpha;
+                            curr_grad_rwalpha += lambda_l_dist_a * l_dist_grad_alpha;
                         }
 
                         // add grad to alpha from l_entropy
                         if (lambda_l_entropy_a > 0.f){
                             float const Den_Dai = -(_LOG(max(sample_alphas[sample_i], 1e-8) / sample_alpha_sum) + 1.f)/sample_alpha_sum;
-                            curr_grad_alpha += lambda_l_entropy_a * (Den_Dai + Den_Dasum); // note Dwsum_Dwi is always 1
+                            curr_grad_rwalpha += lambda_l_entropy_a * (Den_Dai + Den_Dasum); // note Dwsum_Dwi is always 1
                         }
                         
                         if (sparsity_loss > 0.f) {
                             // // Log Alpha version
-                            // curr_grad_alpha += sparsity_loss / max(alpha, 1e-8);
+                            // curr_grad_rwalpha += sparsity_loss / max(alpha, 1e-8);
 
                             // // L1 version
-                            // curr_grad_alpha += sparsity_loss;
+                            // curr_grad_rwalpha += sparsity_loss;
 
                             // Log raw alpha version -- log(raw_a) * (1-norm_w)
                             float const _1_a = max(1.f-alpha, 1e-8); // 1 - alpha
-                            curr_grad_alpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum);
+                            curr_grad_rwalpha += -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum);
                             // printf("weight: %f\n", weight);
                             // printf("rw: %f\n", (1.f - weight / sample_weight_sum));
                             // printf("sparse_loss: %f\n\n", -sparsity_loss * (1.f/min(_1_a * _LOG(_1_a), -1e-8)) * (1.f - weight / sample_weight_sum));
@@ -2225,7 +2300,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             float const norm_dir_dot = surf_norm[0] * ray.dir[0] + surf_norm[1] * ray.dir[1] + surf_norm[2] * ray.dir[2];
 
                             if (norm_dir_dot > 0.f){
-                                curr_grad_alpha += lambda_inwards_norm_loss * _SQR(norm_dir_dot);
+                                curr_grad_rwalpha += lambda_inwards_norm_loss * _SQR(norm_dir_dot);
                             }
 
                             // printf("voxel: [%d, %d, %d]\n", ray.l[0], ray.l[1], ray.l[2]);
@@ -2233,6 +2308,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         }
                         
                         // compute gradient for activation
+                        float const curr_grad_alpha = curr_grad_rwalpha * trunc_reweight;
                         float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
                         // if (sparsity_loss > 0.f) {
                         //     // Log Alpha version
@@ -2437,7 +2513,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     
                     // re-weight alpha using a simple gaussian
                     float const  reweight = _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
-                    float const  rw_alpha = alpha * reweight;
+                    float const  trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    float const  rw_alpha = alpha * reweight * trunc_reweight;
 
 
                     float lane_color = trilerp_cuvol_one(
@@ -2664,7 +2741,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // }
 
                         // curr_grad_alpha is now d_mse/d_alpha_i
-                        float curr_grad_alpha = curr_grad_rwalpha * reweight;
+                        float curr_grad_alpha = curr_grad_rwalpha * reweight * trunc_reweight;
                         
                         // compute gradient for activation
                         float  curr_grad_raw_alpha = curr_grad_alpha * surf_alpha_act_grad(alpha, opt.alpha_activation_type);
@@ -2687,7 +2764,9 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         // gradient to surface via fake sample
                         // via curr_grad_rwalpha
 
-                        float const grad_fake_dist = curr_grad_rwalpha * (-alpha) * fake_sample_dist * reweight / _SQR(grid.fake_sample_std);
+
+                        float grad_fake_dist = curr_grad_rwalpha * (-alpha * trunc_reweight * fake_sample_dist * reweight / _SQR(grid.fake_sample_std)); // TODO check!
+
                         
                         ASSERT_NUM(grad_fake_dist);
 
@@ -2751,7 +2830,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                         // assign grad for fake sample std if enabled
                         if (grads.grad_fake_sample_std_out != nullptr){
-                            float const grad_std = curr_grad_rwalpha * alpha * _SQR(fake_sample_dist) * reweight / _CUBIC(grid.fake_sample_std);
+                            float grad_std = curr_grad_rwalpha * alpha * _SQR(fake_sample_dist) * reweight * trunc_reweight / _CUBIC(grid.fake_sample_std);
 
                             atomicAdd(grads.grad_fake_sample_std_out, grad_std);
                         }
@@ -3369,7 +3448,7 @@ __global__ void render_ray_expected_term_kernel(
 }
 
 __launch_bounds__(TRACE_RAY_CUDA_THREADS, MIN_BLOCKS_PER_SM)
-__global__ void render_ray_mode_term_kernel(
+__global__ void render_ray_mode_term_kernel_surf_trav(
         PackedSparseGridSpec grid,
         PackedRaysSpec rays,
         RenderOptions opt,
@@ -3382,7 +3461,7 @@ __global__ void render_ray_mode_term_kernel(
     CUDA_GET_THREAD_ID(ray_id, rays.origins.size(0));
     SingleRaySpec ray_spec(rays.origins[ray_id].data(), rays.dirs[ray_id].data());
     ray_find_bounds(ray_spec, grid, opt, ray_id);
-    trace_ray_mode_term(
+    trace_ray_mode_term_surf_trav(
         grid,
         ray_spec,
         opt,
@@ -3863,7 +3942,7 @@ torch::Tensor volume_render_mode_term_surf_trav(SparseGridSpec& grid,
     torch::Tensor results = torch::empty({rays.origins.size(0)}, options);
     const auto Q = rays.origins.size(0);
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, TRACE_RAY_CUDA_THREADS);
-    device::render_ray_mode_term_kernel<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
+    device::render_ray_mode_term_kernel_surf_trav<<<blocks, TRACE_RAY_CUDA_THREADS>>>(
             grid,
             rays,
             opt,

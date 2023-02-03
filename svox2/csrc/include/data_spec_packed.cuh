@@ -45,7 +45,8 @@ struct PackedSparseGridSpec {
           _scaling{spec._scaling.data_ptr<float>()[0],
                    spec._scaling.data_ptr<float>()[1],
                    spec._scaling.data_ptr<float>()[2]},
-         fake_sample_std(spec.fake_sample_std) {
+         fake_sample_std(spec.fake_sample_std),
+         truncated_vol_render_a(spec.truncated_vol_render_a){
     }
 
     float* __restrict__ density_data;
@@ -69,6 +70,7 @@ struct PackedSparseGridSpec {
     const float _offset[3];
     const float _scaling[3];
     const float fake_sample_std;
+    const float truncated_vol_render_a;
 };
 
 struct PackedGridOutputGrads {

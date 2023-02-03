@@ -63,6 +63,8 @@ class RenderOptions:
     alpha_activation_type: int = EXP_FN
     fake_sample_l_dist: bool = True
     fake_sample_normalize_surf: bool = True
+    only_outward_intersect: bool = False
+    truncated_vol_render: bool = False
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -84,6 +86,8 @@ class RenderOptions:
         opt.alpha_activation_type = self.alpha_activation_type
         opt.fake_sample_l_dist = self.fake_sample_l_dist
         opt.fake_sample_normalize_surf = self.fake_sample_normalize_surf
+        opt.only_outward_intersect = self.only_outward_intersect
+        opt.truncated_vol_render = self.truncated_vol_render
         #  opt.randomize = randomize
         #  opt.random_sigma_std = self.random_sigma_std
         #  opt.random_sigma_std_background = self.random_sigma_std_background
@@ -750,6 +754,7 @@ class SparseGrid(nn.Module):
 
         self.surface_data = None
         self.fake_sample_std = None # variance parameter for fake samples
+        self.truncated_vol_render_a = 1 # only allow a single intersection
         if trainable_fake_sample_std:
             self.fake_sample_std = nn.Parameter(
                     torch.tensor([[1.]], dtype=torch.float32, device=device)
@@ -2380,6 +2385,21 @@ class SparseGrid(nn.Module):
 
         B_to_sample_mask = (torch.arange(MS)[None, :].repeat([B, 1]).to(origins.device) < ray_bin[:, None])
         B_alpha[B_to_sample_mask] = alpha[:,0].to(B_rgb.dtype) # [N_samples]
+
+        if self.opt.truncated_vol_render:
+            fs_mask = torch.zeros_like(alpha).bool()
+            fs_mask[fake_sample_ids] = True
+
+            B_fs_mask = torch.zeros((B, MS), device=origins.device).bool()
+            B_fs_mask[B_to_sample_mask] = fs_mask[:,0]
+
+            intersect_ids = torch.clamp_min(torch.cumsum((~B_fs_mask).long(), dim=-1) - 1, 0)
+
+
+            rw = .5 * (1. - torch.cos(torch.pi * torch.clamp_max(torch.clamp_min(self.truncated_vol_render_a-intersect_ids, 0.), 1.)))
+
+            B_alpha = B_alpha * rw
+
 
         rgb_sh = rgb.reshape(-1, 3, self.basis_dim)
         B_rgb[B_to_sample_mask,:] = torch.clamp_min(
@@ -6153,6 +6173,7 @@ class SparseGrid(nn.Module):
                 gspec.fake_sample_std = self.fake_sample_std.item()
             else:
                 gspec.fake_sample_std = self.fake_sample_std
+        gspec.truncated_vol_render_a = self.truncated_vol_render_a
         return gspec
 
     def _grid_size(self):

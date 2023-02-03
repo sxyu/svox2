@@ -53,6 +53,7 @@ struct SparseGridSpec {
   uint8_t surface_type;
   Tensor basis_data;
   float fake_sample_std;
+  float truncated_vol_render_a;
 
   inline void check() {
     CHECK_INPUT(density_data);
@@ -182,6 +183,9 @@ struct RenderOptions {
   uint8_t alpha_activation_type;
   bool fake_sample_l_dist;
   bool fake_sample_normalize_surf;
+
+  bool only_outward_intersect;
+  bool truncated_vol_render;
   // bool randomize;
   // float random_sigma_std;
   // float random_sigma_std_background;

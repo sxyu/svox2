@@ -154,6 +154,12 @@ def define_common_args(parser : configargparse.ArgumentParser):
     group.add_argument('--no_fake_sample_normalize_surf', 
                         action='store_true',
                         default=False)
+    group.add_argument('--only_outward_intersect', 
+                        action='store_true',
+                        default=False)
+    group.add_argument('--truncated_vol_render', 
+                        action='store_true',
+                        default=False)
 
 
 def build_data_options(args):
@@ -215,6 +221,8 @@ def setup_render_opts(opt, args):
     opt.alpha_activation_type = 0 if args.surf_alpha_sigmoid_act else 1
     opt.fake_sample_l_dist = not args.no_fake_sample_l_dist
     opt.fake_sample_normalize_surf = not args.no_fake_sample_normalize_surf
+    opt.only_outward_intersect = args.only_outward_intersect
+    opt.truncated_vol_render = args.truncated_vol_render
 
 
 def setup_train_conf(return_parpser=False):
@@ -359,6 +367,13 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--fake_sample_std_final', type=float, default=0.05)
     group.add_argument('--fake_sample_std_decay_steps', type=lambda x: int(float(x)), default=50000)
     group.add_argument('--fake_sample_std_delay', type=lambda x: int(float(x)), default=0)
+
+    group.add_argument('--trunc_vol_a_decay_type', type=str, default='exp', 
+                        choices=['exp', 'linear', 'const'])
+    group.add_argument('--truncated_vol_render_a', type=float, default=1, help='std for fake samples')
+    group.add_argument('--truncated_vol_render_a_final', type=float, default=0.05)
+    group.add_argument('--truncated_vol_render_a_decay_steps', type=lambda x: int(float(x)), default=50000)
+    group.add_argument('--truncated_vol_render_a_delay', type=lambda x: int(float(x)), default=0)
 
 
     group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")

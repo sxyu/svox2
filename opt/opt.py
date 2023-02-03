@@ -247,6 +247,16 @@ else:
     # const
     fake_sample_std_func = lambda x: args.fake_sample_std
 
+if args.trunc_vol_a_decay_type == 'linear':
+    trunc_vol_a_func = get_linear_lr_func(args.truncated_vol_render_a, args.truncated_vol_render_a_final, lr_delay_steps=args.truncated_vol_render_a_delay,
+                                max_steps=args.truncated_vol_render_a_decay_steps)
+elif args.trunc_vol_a_decay_type == 'exp':
+    trunc_vol_a_func = get_expon_lr_func(args.truncated_vol_render_a, args.truncated_vol_render_a_final, 0,
+                                    1., args.truncated_vol_render_a_decay_steps, args.truncated_vol_render_a_delay)
+else:
+    # const
+    trunc_vol_a_func = lambda x: args.truncated_vol_render_a
+
 
 lr_sigma_factor = 1.0
 lr_surface_factor = 1.0
@@ -674,6 +684,7 @@ while True:
                 # grid.fake_sample_std = torch.tensor(fake_sample_std, 
                 # device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
                 grid.fake_sample_std = fake_sample_std_func(gstep_id)
+            grid.truncated_vol_render_a = trunc_vol_a_func(gstep_id)
 
             # update surf lv sets if needed
             if surf_lvs_original is not None and len(grid.level_set_data) > 1 and args.surf_lv_scale_decay_type != 'const':
@@ -828,6 +839,7 @@ while True:
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std.item(), global_step=gstep_id)
                 if grid.fake_sample_std is not None:
                     summary_writer.add_scalar("fake_sample_std", grid.fake_sample_std, global_step=gstep_id)
+                summary_writer.add_scalar("truncated_vol_render_a", grid.truncated_vol_render_a, global_step=gstep_id)
                 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
                     summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
                 if grid.use_background:
