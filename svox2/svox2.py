@@ -5047,7 +5047,7 @@ class SparseGrid(nn.Module):
         ), "CUDA extension is currently required for total variation"
 
         assert not logalpha, "No longer supported"
-        rand_cells = self._get_rand_cells(sparse_frac, contiguous=contiguous)
+        rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
         if rand_cells is not None:
             if rand_cells.size(0) > 0:
                 _C.tv_grad_sparse(self.links, self.surface_data,
@@ -5055,11 +5055,12 @@ class SparseGrid(nn.Module):
                         self._get_sparse_grad_indexer(),
                         0, 1, scaling,
                         logalpha, logalpha_delta,
-                        False,
+                        True,
                         self.opt.last_sample_opaque,
                         ndc_coeffs[0], ndc_coeffs[1],
                         grad)
         else:
+            raise NotImplementedError
             _C.tv_grad(self.links, self.surface_data, 0, 1, scaling,
                     logalpha, logalpha_delta,
                     False,
@@ -6262,6 +6263,8 @@ class SparseGrid(nn.Module):
         '''
         grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
         non_empty_ids = torch.where(self.links.view(-1) >= 0)[0].int()
+        if sparse_frac >= 1.:
+            return non_empty_ids.long().to(self.links.device)
         non_empty_num = len(non_empty_ids)
         if frac_of_remaining:
             sparse_num = int(non_empty_num * sparse_frac)
