@@ -35,6 +35,11 @@ parser.add_argument(
     default=None
 )
 parser.add_argument(
+    "--data_path",
+    type=str,
+    default=None
+)
+parser.add_argument(
     "--debug_alpha",
     action='store_true', 
     default=False,
@@ -73,6 +78,13 @@ parser.add_argument(
 args = parser.parse_args()
 device = 'cuda:0'
 
+
+dset = None
+if args.data_path is not None:
+    dset = datasets['auto'](args.data_path, split="train")
+    scene_scale = dset.scene_scale
+else:
+    scene_scale = 2./3. # assume blender
 
 if not path.isfile(args.ckpt):
     args.ckpt = path.join(args.ckpt, 'ckpt.npz')
@@ -128,10 +140,27 @@ else:
 
 all_pts = []
 for lv_set in surf_lv_set:
-    pts = grid.extract_pts(n_sample=args.n_sample, density_thresh=args.intersect_th, scene_scale=2./3., to_world=True, surf_lv_set=lv_set)
+    pts = grid.extract_pts(n_sample=args.n_sample, density_thresh=args.intersect_th, scene_scale=scene_scale, to_world=True, surf_lv_set=lv_set)
+    pts = pts.cpu().detach().numpy()
+
+    if dset is not None and hasattr(dset, 'pt_rescale'):
+        # rescale for DTU
+        pts = dset.world2rescale(pts)
+
+    if args.downsample_density > 0:
+        nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=args.downsample_density, algorithm='kd_tree', n_jobs=-1)
+        nn_engine.fit(pts)
+        rnn_idxs = nn_engine.radius_neighbors(pts, radius=args.downsample_density, return_distance=False)
+        mask = np.ones(pts.shape[0], dtype=np.bool_)
+        for curr, idxs in enumerate(rnn_idxs):
+            if mask[curr]:
+                mask[idxs] = 0
+                mask[curr] = 1
+        pts = pts[mask]
+
     all_pts.append(pts)
 
-all_pts = torch.concat(all_pts, axis=0).cpu().detach().numpy()
+all_pts = np.concatenate(all_pts, axis=0)
 if args.downsample_density > 0:
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=args.downsample_density, algorithm='kd_tree', n_jobs=-1)
     nn_engine.fit(all_pts)

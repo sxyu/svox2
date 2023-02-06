@@ -12,6 +12,7 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 import json
 from util import config_util
+from pathlib import Path
 
 def sample_single_tri(input_):
     n1, n2, v1, v2, tri_vert = input_
@@ -34,7 +35,7 @@ if __name__ == '__main__':
     mp.freeze_support()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--pts_dir', type=str, default='/home/tw554/plenoxels/opt/ckpt/dtu_scan63/reso_256_low_den_lr_2')
+    parser.add_argument('--input_path', type=str, default=None)
     parser.add_argument('--scan', type=int, default=1)
     parser.add_argument('--dataset_dir', type=str, default='/home/tw554/plenoxels/data/dtu_eval/SampleSet/MVS Data')
     parser.add_argument('--downsample_density', type=float, default=0.2)
@@ -46,18 +47,19 @@ if __name__ == '__main__':
     parser.add_argument('--no_pts_save', action='store_true', default=False)
     parser.add_argument('--log_tune_hparam_config_path', type=str, default=None,
                        help='Log hyperparamters being tuned to tensorboard based on givn config.json path')
+    parser.add_argument('--hparam_save_name', type=str, default='hparam_pts')
     args = parser.parse_args()
 
     thresh = args.downsample_density
 
     pbar = tqdm(total=8)
     pbar.set_description('read data pcd')
-    if os.path.isdir(args.pts_dir):
-        data_pcd = np.load(f'{args.pts_dir}/pts.npy')
+    if os.path.isdir(args.input_path):
+        data_pcd = np.load(f'{args.input_path}/pts.npy')
     else:
-        data_pcd = np.load(args.pts_dir)
+        data_pcd = np.load(args.input_path)
 
-    summary_writer = SummaryWriter(f'{os.path.dirname(args.pts_dir)}/../')
+    summary_writer = SummaryWriter(f'{os.path.dirname(args.input_path)}/../')
 
 
     pbar.update(1)
@@ -68,14 +70,15 @@ if __name__ == '__main__':
     pbar.update(1)
     pbar.set_description('downsample pcd')
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=thresh, algorithm='kd_tree', n_jobs=-1)
-    nn_engine.fit(data_pcd)
-    rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
-    mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
-    for curr, idxs in enumerate(rnn_idxs):
-        if mask[curr]:
-            mask[idxs] = 0
-            mask[curr] = 1
-    data_down = data_pcd[mask]
+    # nn_engine.fit(data_pcd)
+    # rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
+    # mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
+    # for curr, idxs in enumerate(rnn_idxs):
+    #     if mask[curr]:
+    #         mask[idxs] = 0
+    #         mask[curr] = 1
+    # data_down = data_pcd[mask]
+    data_down = data_pcd
 
     pbar.update(1)
     pbar.set_description('masking data pcd')
@@ -117,6 +120,10 @@ if __name__ == '__main__':
     dist_s2d, idx_s2d = nn_engine.kneighbors(stl_above, n_neighbors=1, return_distance=True)
     mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
 
+    # accuracy = np.count_nonzero(dist_d2s < args.f1_dist) / len(dist_d2s)
+    # completeness = np.count_nonzero(dist_s2d < args.f1_dist) / len(dist_s2d)
+    # f1 = 2. / (1./np.clip(accuracy, 1e-10, None) + 1./ np.clip(completeness, 1e-10, None))
+
 
     pbar.update(1)
     pbar.set_description('visualize error')
@@ -138,6 +145,24 @@ if __name__ == '__main__':
     pbar.close()
     over_all = (mean_d2s + mean_s2d) / 2
     print(mean_d2s, mean_s2d, over_all)
+
+    # read image eval metrics if avaliable
+    img_eval_path = Path(args.input_path).parent / '..' / 'render_eval.txt'
+    if not img_eval_path.exists():
+        img_eval_path = Path(args.input_path).parent / '..' / '..' / 'render_eval.txt'
+
+    if img_eval_path.exists():
+        with img_eval_path.open('r') as f:
+            psnr = float(f.readline().split(':')[-1].strip())
+    else:
+        psnr = None
+
+    print(f'======= eval result =======')
+    print(f'Mean d2s: {mean_d2s}')
+    print(f'Mean s2d: {mean_s2d}')
+    print(f'Avg cf: {over_all}')
+    print(f'psnr: {psnr}\n')
+
     if args.out_dir is not None:
         os.makedirs(args.out_dir, exist_ok=True)
         if not args.no_pts_save:
@@ -148,13 +173,15 @@ if __name__ == '__main__':
         with open(f'{args.out_dir}/cf.txt', 'w') as f:
             f.write(f'Mean d2s: {mean_d2s}\n')
             f.write(f'Mean s2d: {mean_s2d}\n')
-            f.write(f'Over all: {over_all}\n')
+            f.write(f'Avg cf: {over_all}\n')
+
+            f.write(f'psnr: {psnr}\n')
 
 
     # log hparams for tuning tasks
     if args.log_tune_hparam_config_path is not None:
         train_args = config_util.setup_train_conf(return_parpser=True).parse_known_args(
-            args=['-c', f'{os.path.dirname(args.pts_dir)}/../config.yaml',
+            args=['-c', f'{os.path.dirname(args.input_path)}/../config.yaml',
             '--data_dir', 'foo']
             )[0]
         with open(args.log_tune_hparam_config_path, 'r') as f:
@@ -163,19 +190,25 @@ if __name__ == '__main__':
         for hp in tune_conf['params']:
             arg = hp['text'].split('=')[0].strip()
             value = getattr(train_args, arg)
-            hparams[arg] = value
+            if type(value) is list:
+                hparams[arg] = str(value)
+            else:
+                hparams[arg] = value
         
         metrics = {
             'Chamfer/d2s': mean_d2s,
             'Chamfer/s2d': mean_s2d,
             'Chamfer/mean': over_all,
         }
-        summary_writer.add_hparams(hparams, metrics, run_name=os.path.realpath(f'{os.path.dirname(args.pts_dir)}/../'))
+        if psnr is not None:
+            metrics['Image/psnr'] = psnr
+        summary_writer.add_hparams(hparams, metrics, run_name=args.hparam_save_name)
         summary_writer.flush()
-        
-
-    summary_writer.add_scalar('Chamfer/d2s', mean_d2s, global_step=0)
-    summary_writer.add_scalar('Chamfer/s2d', mean_s2d, global_step=0)
-    summary_writer.add_scalar('Chamfer/mean', over_all, global_step=0)
-    summary_writer.flush()
-    summary_writer.close()
+    else:
+        summary_writer.add_scalar('Chamfer/d2s', mean_d2s, global_step=0)
+        summary_writer.add_scalar('Chamfer/s2d', mean_s2d, global_step=0)
+        summary_writer.add_scalar('Chamfer/mean', over_all, global_step=0)
+        if psnr is not None:
+            summary_writer.add_scalar('Image/psnr', psnr, global_step=0)
+        summary_writer.flush()
+        summary_writer.close()

@@ -153,7 +153,7 @@ if __name__ == '__main__':
     mean_s2d = dist_s2d[dist_s2d < max_dist].mean()
     accuracy = np.count_nonzero(dist_d2s < args.f1_dist) / len(dist_d2s)
     completeness = np.count_nonzero(dist_s2d < args.f1_dist) / len(dist_s2d)
-    f1 = 2. / (1./accuracy + 1./completeness)
+    f1 = 2. / (1./np.clip(accuracy, 1e-10, None) + 1./ np.clip(completeness, 1e-10, None))
 
     vis_dist = args.visualize_threshold
     R = np.array([[1,0,0]], dtype=np.float64)
