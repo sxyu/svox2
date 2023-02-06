@@ -685,6 +685,11 @@ while True:
                 # device=grid.fake_sample_std.device, dtype=grid.fake_sample_std.dtype)
                 grid.fake_sample_std = fake_sample_std_func(gstep_id)
             grid.truncated_vol_render_a = trunc_vol_a_func(gstep_id)
+            if args.trunc_vol_render_lv_remove:
+                # remove surface level set that definitely won't be used
+                intersect_ids = torch.arange(grid.level_set_data.shape[0])
+                rws = grid.trunc_vol_render_rw(intersect_ids)
+                grid.level_set_data = grid.level_set_data[rws > 1e-8]
 
             # update surf lv sets if needed
             if surf_lvs_original is not None and len(grid.level_set_data) > 1 and args.surf_lv_scale_decay_type != 'const':

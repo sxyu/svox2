@@ -160,6 +160,9 @@ def define_common_args(parser : configargparse.ArgumentParser):
     group.add_argument('--truncated_vol_render', 
                         action='store_true',
                         default=False)
+    group.add_argument('--trunc_vol_render_lv_remove', 
+                        action='store_true',
+                        default=False)
 
 
 def build_data_options(args):

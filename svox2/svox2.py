@@ -2395,8 +2395,7 @@ class SparseGrid(nn.Module):
 
             intersect_ids = torch.clamp_min(torch.cumsum((~B_fs_mask).long(), dim=-1) - 1, 0)
 
-
-            rw = .5 * (1. - torch.cos(torch.pi * torch.clamp_max(torch.clamp_min(self.truncated_vol_render_a-intersect_ids, 0.), 1.)))
+            rw = self.trunc_vol_render_rw(intersect_ids)
 
             B_alpha = B_alpha * rw
 
@@ -4656,6 +4655,9 @@ class SparseGrid(nn.Module):
 
         np.save(path, sdf_voxel)
 
+    def trunc_vol_render_rw(self, intersect_ids):
+        return .5 * (1. - torch.cos(torch.pi * torch.clamp_max(torch.clamp_min(self.truncated_vol_render_a-intersect_ids, 0.), 1.)))
+
 
     @classmethod
     def load(cls, path: str, device: Union[torch.device, str] = "cpu"):
@@ -6264,7 +6266,7 @@ class SparseGrid(nn.Module):
         grid_size = self.links.size(0) * self.links.size(1) * self.links.size(2)
         non_empty_ids = torch.where(self.links.view(-1) >= 0)[0].int()
         if sparse_frac >= 1.:
-            return non_empty_ids.long().to(self.links.device)
+            return non_empty_ids.to(self.links.device)
         non_empty_num = len(non_empty_ids)
         if frac_of_remaining:
             sparse_num = int(non_empty_num * sparse_frac)
