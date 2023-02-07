@@ -1604,6 +1604,7 @@ class SparseGrid(nn.Module):
         reg: bool = False,
         lambda_l_dist: float = 0,
         lambda_l_entropy: float = 0,
+        lambda_conv_mode_samp: float = 0,
     ):
         """
         gradcheck version for surface rendering
@@ -2386,13 +2387,14 @@ class SparseGrid(nn.Module):
         B_to_sample_mask = (torch.arange(MS)[None, :].repeat([B, 1]).to(origins.device) < ray_bin[:, None])
         B_alpha[B_to_sample_mask] = alpha[:,0].to(B_rgb.dtype) # [N_samples]
 
-        if self.opt.truncated_vol_render:
-            fs_mask = torch.zeros_like(alpha).bool()
+        fs_mask = torch.zeros_like(alpha).bool()
+        if self.opt.surf_fake_sample:
             fs_mask[fake_sample_ids] = True
 
-            B_fs_mask = torch.zeros((B, MS), device=origins.device).bool()
-            B_fs_mask[B_to_sample_mask] = fs_mask[:,0]
+        B_fs_mask = torch.zeros((B, MS), device=origins.device).bool()
+        B_fs_mask[B_to_sample_mask] = fs_mask[:,0]
 
+        if self.opt.truncated_vol_render:
             intersect_ids = torch.clamp_min(torch.cumsum((~B_fs_mask).long(), dim=-1) - 1, 0)
 
             rw = self.trunc_vol_render_rw(intersect_ids)
@@ -2480,6 +2482,20 @@ class SparseGrid(nn.Module):
             l_entropy = 0.
         out['extra_loss']['l_entropy'] = l_entropy
         out['log_stats']['l_entropy'] = l_entropy
+
+        # computer l convergence loss
+        if B_weights.numel() > 0 and lambda_conv_mode_samp > 0:
+            max_sample_ids = B_weights.max(axis=-1).indices
+            l_conv_mode_samp = torch.abs(B_ts - B_ts[torch.arange(0, B), max_sample_ids][..., None])
+            l_conv_mode_samp[B_fs_mask] = 0. # do not apply to fs
+            if self.opt.truncated_vol_render:
+                l_conv_mode_samp[rw < 1e-8] = 0. # do not apply to truncated samples
+
+            l_conv_mode_samp = torch.sum(l_conv_mode_samp)
+        else:
+            l_conv_mode_samp = 0.
+        out['extra_loss']['l_conv_mode_samp'] = l_conv_mode_samp
+        out['log_stats']['l_conv_mode_samp'] = l_conv_mode_samp
 
         # computer sample distance loss
         if B_weights.numel() > 0:
@@ -2799,6 +2815,7 @@ class SparseGrid(nn.Module):
             s += sparsity_loss * l_sparsity
             s += 0. * l_ss
             s += 0. * l_inward_norm
+            s += lambda_conv_mode_samp *  l_conv_mode_samp
             # s += l_samp_dist
             s.backward()
 
@@ -3431,6 +3448,7 @@ class SparseGrid(nn.Module):
         surf_sparse_alpha_thresh: float = 0., 
         lambda_inplace_surf_sparse: float = 0., 
         lambda_inwards_norm_loss: float = 0., 
+        lambda_conv_mode_samp: float = 0., 
         l_dist_max_sample: int = 64,
         no_surface: bool = False,
     ):
@@ -3547,6 +3565,7 @@ class SparseGrid(nn.Module):
                 surf_sparse_alpha_thresh,
                 lambda_inplace_surf_sparse,
                 lambda_inwards_norm_loss,
+                lambda_conv_mode_samp,
                 l_dist_max_sample,
                 rgb_out,
                 grad_holder

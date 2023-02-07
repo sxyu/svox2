@@ -553,6 +553,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--lambda_l_di', type=float, default=0.0)
     group.add_argument('--l_di_alpha_thresh', type=float, default=0.0)
     group.add_argument('--lambda_inwards_norm_loss', type=float, default=0.0)
+    group.add_argument('--lambda_conv_mode_samp', type=float, default=0.0)
     group.add_argument('--lambda_sparsify_alpha', type=float, default=
                         0.0,
                         help="Weight for sparsity loss on log alpha. Used for surface optimization. Note that it works differently to plenoxel sparsity")

@@ -1731,6 +1731,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         float const surf_sparse_alpha_thresh,
         float const lambda_inplace_surf_sparse,
         float const lambda_inwards_norm_loss,
+        float const lambda_conv_mode_samp, // loss to encourage intersections to move to sample with highest weight. Not applied to samples that are truncated
         int const l_dist_max_sample,
         float* __restrict__ const sample_alphas,
         float* __restrict__ const sample_weights,
@@ -1777,6 +1778,15 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
             shared_Dmeant_sign += samp_dist_abs_sign;
         }
     }
+
+    int max_sample_id = 0;
+    float max_weight = 0.f;
+    for (int i=0; i<l_dist_max_sample; ++i){
+        if (sample_weights[i] > max_weight){
+            max_weight = sample_weights[i];
+            max_sample_id = i;
+        }
+    } 
 
     // if (lane_id == 0) printf("sample_t_mean: %f\n", sample_t_mean);
     // if (lane_id == 0) printf("valid_sample_n: %d\n", valid_sample_n);
@@ -2375,6 +2385,15 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             grad_st += lambda_l_samp_dist * grad_l_samp_dist;
                         }
 
+
+                        if ((lambda_conv_mode_samp > 0.f) && (trunc_reweight > 1e-8f)){
+                            // only apply to valid intersections that are not truncated
+                            // l_conv_mode_samp = |ti - t_mode|
+                            float const grad_conv_mode_samp = (sample_ts[sample_i] > sample_ts[max_sample_id]) ? 1.f : \
+                                                              ((sample_ts[sample_i] < sample_ts[max_sample_id]) ? -1.f : 0.f);
+                            grad_st += lambda_conv_mode_samp * grad_conv_mode_samp;
+                        }
+
                         // printf("sample_i: %d\n", sample_i);
                         // printf("sample_ts[sample_i]: %f\n", sample_ts[sample_i]);
                         // printf("grad_l_samp_dist: %f\n", grad_l_samp_dist);
@@ -2420,8 +2439,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                     ray.l, ray.pos, grad_ss);
                         }
 
-
-                        sample_i += 1;
+                        if (sample_i < l_dist_max_sample-1) sample_i += 1;
                     }
 
 
@@ -2694,7 +2712,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                                 curr_grad_rwalpha += lambda_l_entropy_a * (Den_Dai + Den_Dasum); // note Dwsum_Dwi is always 1
                             }
 
-                            sample_i += 1;
+                            if (sample_i < l_dist_max_sample-1) sample_i += 1;
                             // note that for fake sample, we don't have grad to st
                         }
 
@@ -3241,6 +3259,7 @@ __global__ void render_ray_backward_kernel(
     float surf_sparse_alpha_thresh,
     float lambda_inplace_surf_sparse,
     float lambda_inwards_norm_loss,
+    float lambda_conv_mode_samp,
     int l_dist_max_sample,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_alphas,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> sample_weights,
@@ -3324,6 +3343,7 @@ __global__ void render_ray_backward_kernel(
         surf_sparse_alpha_thresh,
         lambda_inplace_surf_sparse,
         lambda_inwards_norm_loss,
+        lambda_conv_mode_samp,
         l_dist_max_sample,
         sample_alphas[ray_id].data(),
         sample_weights[ray_id].data(),
@@ -3742,6 +3762,7 @@ void volume_render_surf_trav_backward(
                     0.f,
                     0.f,
                     0.f,
+                    0.f,
                     0,
                     sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                     sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
@@ -3794,6 +3815,7 @@ void volume_render_surf_trav_fused(
         float surf_sparse_alpha_thresh,
         float lambda_inplace_surf_sparse,
         float lambda_inwards_norm_loss,
+        float lambda_conv_mode_samp,
         int const l_dist_max_sample, // maximum number of samples for each ray considered for l_dist
         torch::Tensor rgb_out,
         GridOutputGrads& grads) {
@@ -3882,6 +3904,7 @@ void volume_render_surf_trav_fused(
                 surf_sparse_alpha_thresh,
                 lambda_inplace_surf_sparse,
                 lambda_inwards_norm_loss,
+                lambda_conv_mode_samp,
                 l_dist_max_sample,
                 sample_alphas.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
                 sample_weights.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
