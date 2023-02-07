@@ -689,7 +689,11 @@ while True:
                 # remove surface level set that definitely won't be used
                 intersect_ids = torch.arange(grid.level_set_data.shape[0])
                 rws = grid.trunc_vol_render_rw(intersect_ids)
-                grid.level_set_data = grid.level_set_data[rws > 1e-8]
+                new_lv_set = grid.level_set_data[rws > 1e-8]
+                if len(new_lv_set) < len(grid.level_set_data):
+                    # scale density up to allow lower lv data to be optimized
+                    grid.density_data.data[:] += args.trunc_vol_lv_rm_density_add * (len(grid.level_set_data) - len(new_lv_set))
+                    grid.level_set_data = new_lv_set
 
             # update surf lv sets if needed
             if surf_lvs_original is not None and len(grid.level_set_data) > 1 and args.surf_lv_scale_decay_type != 'const':

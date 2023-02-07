@@ -2268,7 +2268,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             curr_grad_rwalpha += lambda_l_entropy_a * (Den_Dai + Den_Dasum); // note Dwsum_Dwi is always 1
                         }
                         
-                        if (sparsity_loss > 0.f) {
+                        if ((sparsity_loss > 0.f) && (raw_alpha > 0.f)) {
                             // // Log Alpha version
                             // curr_grad_rwalpha += sparsity_loss / max(alpha, 1e-8);
 
@@ -2698,7 +2698,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                             // note that for fake sample, we don't have grad to st
                         }
 
-                        if (sparsity_loss > 0.f) {
+                        if ((sparsity_loss > 0.f) && (raw_alpha > 0.f)) {
                             // // Log Alpha version
                             // curr_grad_rwalpha += sparsity_loss / max(rw_alpha, 1e-8);
 

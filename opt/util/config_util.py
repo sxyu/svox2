@@ -378,6 +378,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--truncated_vol_render_a_decay_steps', type=lambda x: int(float(x)), default=50000)
     group.add_argument('--truncated_vol_render_a_delay', type=lambda x: int(float(x)), default=0)
 
+    group.add_argument('--trunc_vol_lv_rm_density_add', type=float, default=0)
+
 
     group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
     group.add_argument('--lr_sh', type=float, default=

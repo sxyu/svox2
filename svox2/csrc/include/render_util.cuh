@@ -1334,13 +1334,20 @@ __device__ __inline__ void calc_cubic_root_grad_vieta(
             double const _Dst_Db_ = -1./3.;
             double const A = -sign(R) * cbrt(abs(R) + sqrt(_SQR(R) - _CUBIC(Q)));
 
+            // double const _DA_DR = (R >= 0.) ? 
+            //     (-(R/(3.*sqrt(-_CUBIC(Q) + _SQR(R))) + 1./3.)/cbrt(_SQR( R + sqrt(-_CUBIC(Q) + _SQR(R)))))
+            //     :((R/(3.*sqrt(-_CUBIC(Q) + _SQR(R))) - 1./3.)/cbrt(_SQR(-R + sqrt(-_CUBIC(Q) + _SQR(R)))));
+
+
+            double const sqrt__cubicQ_sqrR = max(sqrt(-_CUBIC(Q) + _SQR(R)), 1e-10);
+
             double const _DA_DR = (R >= 0.) ? 
-                (-(R/(3.*sqrt(-_CUBIC(Q) + _SQR(R))) + 1./3.)/cbrt(_SQR( R + sqrt(-_CUBIC(Q) + _SQR(R)))))
-                :((R/(3.*sqrt(-_CUBIC(Q) + _SQR(R))) - 1./3.)/cbrt(_SQR(-R + sqrt(-_CUBIC(Q) + _SQR(R)))));
+                (-(R/(3.*sqrt__cubicQ_sqrR) + 1./3.)/  max(cbrt(_SQR( R + sqrt__cubicQ_sqrR)), 1e-10))
+                :((R/(3.*sqrt__cubicQ_sqrR) - 1./3.)/  max(cbrt(_SQR(-R + sqrt__cubicQ_sqrR)), 1e-10));
 
             double const _DA_DQ = (R >= 0.) ? 
-                  (_SQR(Q)/(2.*sqrt(-_CUBIC(Q) + _SQR(R))*cbrt(_SQR( R + sqrt(-_CUBIC(Q) + _SQR(R))))))
-                :(-_SQR(Q)/(2.*sqrt(-_CUBIC(Q) + _SQR(R))*cbrt(_SQR(-R + sqrt(-_CUBIC(Q) + _SQR(R))))));
+                  (_SQR(Q)/(2.*sqrt__cubicQ_sqrR*cbrt(_SQR( R + sqrt__cubicQ_sqrR))))
+                :(-_SQR(Q)/(2.*sqrt__cubicQ_sqrR*cbrt(_SQR(-R + sqrt__cubicQ_sqrR))));
 
             double const _DB_DA = (A==0.) ? 0. : -Q/_SQR(A);
             double const _DB_DQ_ = (A==0.) ? 0. : 1./A;
