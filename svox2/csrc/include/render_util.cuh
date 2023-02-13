@@ -2135,10 +2135,13 @@ __device__ __inline__ float surf_alpha_act(
 
 __device__ __inline__ float truncated_vol_render_rw(
     const float x,
-    const float a
+    const float a,
+    const float clamp_min
 ){
     // truncated hann
-    return .5f * (1.f - __cosf(CUDART_PI * min(max(a-x, 0.f), 1.f)));
+    // return .5f * (1.f - __cosf(CUDART_PI * min(max(a-x, 0.f), 1.f)));
+
+    return max(.5f * (1.f - __cosf(CUDART_PI * min(max(a-x, 0.f), 1.f))), clamp_min);
 
     // exp
     // return _EXP(-.5f * _SQR(x/a))

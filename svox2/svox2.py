@@ -65,6 +65,7 @@ class RenderOptions:
     fake_sample_normalize_surf: bool = True
     only_outward_intersect: bool = False
     truncated_vol_render: bool = False
+    trunc_vol_weight_min: float = 0.
 
     def _to_cpp(self, randomize: bool = False):
         """
@@ -88,6 +89,7 @@ class RenderOptions:
         opt.fake_sample_normalize_surf = self.fake_sample_normalize_surf
         opt.only_outward_intersect = self.only_outward_intersect
         opt.truncated_vol_render = self.truncated_vol_render
+        opt.trunc_vol_weight_min = self.trunc_vol_weight_min
         #  opt.randomize = randomize
         #  opt.random_sigma_std = self.random_sigma_std
         #  opt.random_sigma_std_background = self.random_sigma_std_background
@@ -4675,7 +4677,12 @@ class SparseGrid(nn.Module):
         np.save(path, sdf_voxel)
 
     def trunc_vol_render_rw(self, intersect_ids):
-        return .5 * (1. - torch.cos(torch.pi * torch.clamp_max(torch.clamp_min(self.truncated_vol_render_a-intersect_ids, 0.), 1.)))
+        # return .5 * (1. - torch.cos(torch.pi * torch.clamp_max(torch.clamp_min(self.truncated_vol_render_a-intersect_ids, 0.), 1.)))
+
+        return torch.clamp_min(
+            .5 * (1. - torch.cos(torch.pi * torch.clamp_max(torch.clamp_min(self.truncated_vol_render_a-intersect_ids, 0.), 1.))),
+            1e-3
+        )
 
 
     @classmethod

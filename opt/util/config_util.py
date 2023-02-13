@@ -163,6 +163,13 @@ def define_common_args(parser : configargparse.ArgumentParser):
     group.add_argument('--trunc_vol_render_lv_remove', 
                         action='store_true',
                         default=False)
+    # group.add_argument('--trunc_vol_render_lv_end_remove', 
+    #                     action='store_true',
+    #                     default=False,
+    #                     help='remove redundent lv sets only in the end')
+    group.add_argument('--trunc_vol_weight_min', 
+                         type=float,
+                         default=0.)
 
 
 def build_data_options(args):
@@ -226,6 +233,7 @@ def setup_render_opts(opt, args):
     opt.fake_sample_normalize_surf = not args.no_fake_sample_normalize_surf
     opt.only_outward_intersect = args.only_outward_intersect
     opt.truncated_vol_render = args.truncated_vol_render
+    opt.trunc_vol_weight_min = args.trunc_vol_weight_min
 
 
 def setup_train_conf(return_parpser=False):

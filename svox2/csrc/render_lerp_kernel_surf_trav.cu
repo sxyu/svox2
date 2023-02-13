@@ -376,9 +376,11 @@ __device__ __inline__ void trace_ray_surf_trav(
                         ray.l, ray.pos,
                         0);
 
+
                 if (raw_alpha > opt.sigma_thresh) {
                     float const alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);
-                    float const trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    float const trunc_reweight = (opt.truncated_vol_render) ? \
+                        (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a, opt.trunc_vol_weight_min)) : (1.f);
                     float const rwalpha = alpha * trunc_reweight;
 
 
@@ -500,7 +502,8 @@ __device__ __inline__ void trace_ray_surf_trav(
                     // re-weight alpha using a simple gaussian
                     alpha = alpha * _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
 
-                    float const trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    float const trunc_reweight = (opt.truncated_vol_render) ? \
+                        (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a, opt.trunc_vol_weight_min)) : (1.f);
                     alpha = alpha * trunc_reweight;
 
                     float lane_color = trilerp_cuvol_one(
@@ -2077,7 +2080,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
 
                 if (raw_alpha > opt.sigma_thresh) {
                     float const  alpha = surf_alpha_act(raw_alpha, opt.alpha_activation_type);
-                    float const trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    float const trunc_reweight = (opt.truncated_vol_render) ? \
+                        (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a, opt.trunc_vol_weight_min)) : (1.f);
                     float const rwalpha = alpha * trunc_reweight;
 
 
@@ -2531,7 +2535,8 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                     
                     // re-weight alpha using a simple gaussian
                     float const  reweight = _EXP(-.5 * _SQR(fake_sample_dist/grid.fake_sample_std));
-                    float const  trunc_reweight = (opt.truncated_vol_render) ? (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a)) : (1.f);
+                    float const  trunc_reweight = (opt.truncated_vol_render) ? \
+                        (truncated_vol_render_rw(intersect_i, grid.truncated_vol_render_a, opt.trunc_vol_weight_min)) : (1.f);
                     float const  rw_alpha = alpha * reweight * trunc_reweight;
 
 

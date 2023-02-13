@@ -186,6 +186,7 @@ struct RenderOptions {
 
   bool only_outward_intersect;
   bool truncated_vol_render;
+  float trunc_vol_weight_min;
   // bool randomize;
   // float random_sigma_std;
   // float random_sigma_std_background;

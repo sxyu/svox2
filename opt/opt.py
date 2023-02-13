@@ -1102,6 +1102,11 @@ while True:
                 secs = (global_stop_time - global_start_time).total_seconds()
                 timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
                 timings_file.write(f"{secs / 60}\n")
+                # if args.trunc_vol_render_lv_end_remove:
+                #     # remove surface level set that definitely won't be used
+                #     intersect_ids = torch.arange(grid.level_set_data.shape[0])
+                #     rws = grid.trunc_vol_render_rw(intersect_ids)
+                #     grid.level_set_data = grid.level_set_data[rws > 1e-8]
                 if not args.tune_nosave:
                     ckpt_path = path.join(args.train_dir, f'ckpt.npz')
                     grid.save(ckpt_path, step_id=gstep_id)

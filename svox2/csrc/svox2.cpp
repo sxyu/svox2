@@ -260,7 +260,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("fake_sample_l_dist", &RenderOptions::fake_sample_l_dist)
       .def_readwrite("fake_sample_normalize_surf", &RenderOptions::fake_sample_normalize_surf)
       .def_readwrite("only_outward_intersect", &RenderOptions::only_outward_intersect)
-      .def_readwrite("truncated_vol_render", &RenderOptions::truncated_vol_render);
+      .def_readwrite("truncated_vol_render", &RenderOptions::truncated_vol_render)
+      .def_readwrite("trunc_vol_weight_min", &RenderOptions::trunc_vol_weight_min);
   // .def_readwrite("randomize", &RenderOptions::randomize)
   // .def_readwrite("random_sigma_std", &RenderOptions::random_sigma_std)
   // .def_readwrite("random_sigma_std_background",
