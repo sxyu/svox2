@@ -1,5 +1,5 @@
 # Standard NeRF Blender dataset loader
-from .util import Rays, Intrin, select_or_shuffle_rays
+from .util import Rays, MaskedRays, Intrin, select_or_shuffle_rays
 from .dataset_base import DatasetBase
 import torch
 import torch.nn.functional as F
@@ -132,7 +132,7 @@ class DTUDataset(DatasetBase):
         self.c2w[:, :3, 3] *= scene_scale
 
         self.gt = torch.stack(all_gt).float() / 255.0
-        self.mask = torch.stack(all_mask).float() / 255.0
+        self.mask = torch.stack(all_mask)[..., 0] >= 50
         if self.gt.size(-1) == 4:
             if white_bkgd:
                 # Apply alpha channel
@@ -188,15 +188,18 @@ class DTUDataset(DatasetBase):
                 self.gt.permute([0, 3, 1, 2]), size=(self.h, self.w), mode="area"
             ).permute([0, 2, 3, 1])
             gt = gt.reshape(self.n_images, -1, 3)
+            mask = self.mask.reshape(self.n_images, -1)
         else:
             gt = self.gt.reshape(self.n_images, -1, 3)
+            mask = self.mask.reshape(self.n_images, -1)
         origins = self.c2w[:, None, :3, 3].expand(-1, self.h * self.w, -1).contiguous()
         if self.split == "train":
             origins = origins.view(-1, 3)
             dirs = dirs.view(-1, 3)
             gt = gt.reshape(-1, 3)
+            mask = mask.reshape(-1)
 
-        self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
+        self.rays_init = MaskedRays(origins=origins, dirs=dirs, gt=gt, mask=mask)
         self.rays = self.rays_init
 
     def near_far_from_sphere(self, rays_o, rays_d):

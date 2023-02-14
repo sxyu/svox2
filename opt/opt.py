@@ -323,7 +323,16 @@ if args.load_pretrain_density_sh is not None:
     #                     height=dset.get_image_size(i)[0],
     #                     ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(c2ws)
     #     ]
+    if hasattr(dset.rays, "mask"):
+        batch_origins = dset.rays.origins
+        batch_dirs = dset.rays.dirs
+        batch_mask = dset.rays.mask
+        mask_pruning_rays = svox2.Rays(batch_origins, batch_dirs, batch_mask)
+    else:
+        mask_pruning_rays = None
+    mask_pruning_rays = None
 
+    # grid.opt.near_clip = 0.5
 
     grid.init_surface_from_density(
         density_lvs=density_lvs,
@@ -335,6 +344,7 @@ if args.load_pretrain_density_sh is not None:
         init_type=args.surf_init_type,
         weight_init_cams=resample_cameras,
         visibility_pruning_scale=args.visibility_pruning_scale,
+        mask_pruning_rays=mask_pruning_rays
         )
 
     # pred_pts = []
@@ -348,7 +358,7 @@ if args.load_pretrain_density_sh is not None:
     # np.save(f'{out_dir}/pts.npy', pred_pts)
     # write_vis_pcd(f'{out_dir}/pts.ply', pred_pts)
 
-    # grid.save(f'{args.train_dir}/ckpt_init.npz')
+    grid.save(f'{args.train_dir}/ckpt_init.npz')
 
     surf_lvs_original = grid.level_set_data.clone()
 
@@ -748,11 +758,12 @@ while True:
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
+            batch_mask = dset.rays.mask[batch_begin: batch_end] if hasattr(dset.rays, "mask") else None
             if batch_origins.shape[0] == 0:
                 # empty batch, skip
                 continue
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
-            rays = svox2.Rays(batch_origins, batch_dirs)
+            rays = svox2.Rays(batch_origins, batch_dirs, batch_mask)
 
             # with Timing("Fused pass"):
             if not USE_KERNEL and not no_surface:

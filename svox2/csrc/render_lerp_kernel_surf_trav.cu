@@ -1712,6 +1712,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
         const float* __restrict__ grad_output, // array[3], MSE gradient wrt rgb channel
         const float* __restrict__ color_cache,
         SingleRaySpec& __restrict__ ray,
+        bool const ray_mask,
         const RenderOptions& __restrict__ opt,
         uint32_t lane_id,
         const float* __restrict__ sphfunc_val,
@@ -3326,6 +3327,7 @@ __global__ void render_ray_backward_kernel(
         grad_out,
         color_cache + ray_id * 3,
         ray_spec[ray_blk_id],
+        rays.masks[ray_id],
         opt,
         lane_id,
         sphfunc_val[ray_blk_id],

@@ -31,6 +31,30 @@ class Rays:
 
     def __len__(self):
         return self.origins.size(0)
+    
+@dataclass
+class MaskedRays:
+    origins: Union[torch.Tensor, List[torch.Tensor]]
+    dirs: Union[torch.Tensor, List[torch.Tensor]]
+    gt: Union[torch.Tensor, List[torch.Tensor]]
+    mask: Union[torch.Tensor, List[torch.Tensor]]
+
+    def to(self, *args, **kwargs):
+        origins = self.origins.to(*args, **kwargs)
+        dirs = self.dirs.to(*args, **kwargs)
+        gt = self.gt.to(*args, **kwargs)
+        mask = self.mask.to(*args, **kwargs)
+        return MaskedRays(origins, dirs, gt, mask)
+
+    def __getitem__(self, key):
+        origins = self.origins[key]
+        dirs = self.dirs[key]
+        gt = self.gt[key]
+        mask = self.mask[key]
+        return MaskedRays(origins, dirs, gt, mask)
+
+    def __len__(self):
+        return self.origins.size(0)
 
 @dataclass
 class Intrin:

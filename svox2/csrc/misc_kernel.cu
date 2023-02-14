@@ -399,6 +399,113 @@ __device__ __inline__ void sprase_grid_trace_ray(
     }
 }
 
+// Fast single-channel rendering for weight-thresholding
+__device__ __inline__ void sprase_grid_mask_trace_ray(
+        const PackedSparseGridSpec& __restrict__ grid,
+        SingleRaySpec ray,
+        float near_clip,
+        // float stop_thresh,
+        float* __restrict__ grid_mask) {
+
+    float step_size = 0.1;
+    float stop_thresh = 0.f; 
+
+    // Warning: modifies ray.origin
+    transform_coord(ray.origin, grid._scaling, grid._offset);
+    // Warning: modifies ray.dir
+    const float world_step = _get_delta_scale(grid._scaling, ray.dir) * step_size;
+
+    float t, tmax;
+    {
+        float t1, t2;
+        t = 0.0f;
+        tmax = 2e3f;
+#pragma unroll 3
+        for (int i = 0; i < 3; ++i) {
+            const float invdir = 1.0 / ray.dir[i];
+            t1 = (-0.5f - ray.origin[i]) * invdir;
+            t2 = (grid.size[i] - 0.5f  - ray.origin[i]) * invdir;
+            if (ray.dir[i] != 0.f) {
+                t = max(t, min(t1, t2));
+                tmax = min(tmax, max(t1, t2));
+            }
+        }
+    }
+    if (t < near_clip) t = near_clip;
+
+    if (t > tmax) {
+        // Ray doesn't hit box
+        return;
+    }
+    float pos[3];
+    int32_t l[3];
+
+    // float log_light_intensity = 0.f;
+    const int stride0 = grid.size[1] * grid.size[2];
+    const int stride1 = grid.size[2];
+    while (t <= tmax) {
+#pragma unroll 3
+        for (int j = 0; j < 3; ++j) {
+            pos[j] = ray.origin[j] + t * ray.dir[j];
+            pos[j] = min(max(pos[j], 0.f), grid.size[j] - 1.f);
+            l[j] = (int32_t) pos[j];
+            l[j] = min(l[j], grid.size[j] - 2);
+            pos[j] -= l[j];
+        }
+
+        // float log_att;
+        const int idx = l[0] * stride0 + l[1] * stride1 + l[2];
+
+        // float sigma;
+        // {
+        //     // Trilerp
+        //     const float* __restrict__ sigma000 = grid.density_data + idx;
+        //     const float* __restrict__ sigma100 = sigma000 + stride0;
+        //     const float ix0y0 = lerp(sigma000[0], sigma000[1], pos[2]);
+        //     const float ix0y1 = lerp(sigma000[stride1], sigma000[stride1 + 1], pos[2]);
+        //     const float ix1y0 = lerp(sigma100[0], sigma100[1], pos[2]);
+        //     const float ix1y1 = lerp(sigma100[stride1], sigma100[stride1 + 1], pos[2]);
+        //     const float ix0 = lerp(ix0y0, ix0y1, pos[1]);
+        //     const float ix1 = lerp(ix1y0, ix1y1, pos[1]);
+        //     sigma = lerp(ix0, ix1, pos[0]);
+        // }
+
+        const int32_t* __restrict__ link_ptr = grid.links + idx;
+
+        #define MAYBE_ASSIGN_MASK(u) if (link_ptr[u] >= 0) atomicMax(grid_mask + link_ptr[u], 1.f)
+        MAYBE_ASSIGN_MASK(0);
+        MAYBE_ASSIGN_MASK(1);
+        MAYBE_ASSIGN_MASK(stride1);
+        MAYBE_ASSIGN_MASK(stride1+1);
+        MAYBE_ASSIGN_MASK(stride0);
+        MAYBE_ASSIGN_MASK(stride0+1);
+        MAYBE_ASSIGN_MASK(stride0+stride1);
+        MAYBE_ASSIGN_MASK(stride0+stride1+1);
+        #undef MAYBE_ASSIGN_MASK
+
+        // if (sigma > 1e-8f) {
+        //     log_att = -world_step * sigma;
+        //     const float weight = _EXP(log_light_intensity) * (1.f - _EXP(log_att));
+        //     log_light_intensity += log_att;
+        //     // float* __restrict__ max_wt_ptr_000 = grid_weight.data() + idx;
+        //     // atomicMax(max_wt_ptr_000, weight);
+        //     // atomicMax(max_wt_ptr_000 + 1, weight);
+        //     // atomicMax(max_wt_ptr_000 + stride1, weight);
+        //     // atomicMax(max_wt_ptr_000 + stride1 + 1, weight);
+        //     // float* __restrict__ max_wt_ptr_100 = max_wt_ptr_000 + stride0;
+        //     // atomicMax(max_wt_ptr_100, weight);
+        //     // atomicMax(max_wt_ptr_100 + 1, weight);
+        //     // atomicMax(max_wt_ptr_100 + stride1, weight);
+        //     // atomicMax(max_wt_ptr_100 + stride1 + 1, weight);
+
+        //     if (_EXP(log_light_intensity) < stop_thresh) {
+        //         break;
+        //     }
+        // }
+        t += step_size;
+    }
+}
+
 
 // Fast single-channel rendering for weight-thresholding
 __device__ __inline__ void sparse_grid_visbility_trace_ray_surf(
@@ -844,6 +951,27 @@ __global__ void sparse_grid_visbility_render_surf_kernel(
 }
 
 __launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
+__global__ void sparse_grid_mask_render(
+    PackedSparseGridSpec grid,
+    PackedRaysSpec rays,
+    float near_clip,
+    float* __restrict__ grid_mask) {
+    CUDA_GET_THREAD_ID(tid, int(rays.origins.size(0)));    
+    const int ray_id = tid;
+
+    SingleRaySpec ray_spec;
+    ray_spec.set(rays.origins[ray_id].data(),
+                 rays.dirs[ray_id].data());
+
+    // cam2world_ray(ix, iy, cam, dir, origin);
+    sprase_grid_mask_trace_ray(
+        grid,
+        ray_spec,
+        near_clip,
+        grid_mask);
+}
+
+__launch_bounds__(MISC_CUDA_THREADS, MISC_MIN_BLOCKS_PER_SM)
 __global__ void grid_surface_weight_render_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits>
         density_data,
@@ -1023,6 +1151,25 @@ void sparse_grid_visbility_render_surf(
         grid,
         cam,
         visibility_out.data_ptr<float>()
+    );
+    CUDA_CHECK_ERRORS;
+}
+
+void sparse_grid_mask_render(
+    SparseGridSpec& grid, RaysSpec& rays, float near_clip,
+    torch::Tensor grid_mask) {
+    DEVICE_GUARD(grid.density_data);
+    grid.check();
+    rays.check();
+    const auto Q = rays.origins.size(0);
+
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, MISC_CUDA_THREADS);
+
+    device::sparse_grid_mask_render<<<blocks, MISC_CUDA_THREADS>>>(
+        grid,
+        rays,
+        near_clip,
+        grid_mask.data_ptr<float>()
     );
     CUDA_CHECK_ERRORS;
 }

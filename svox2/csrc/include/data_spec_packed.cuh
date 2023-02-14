@@ -118,9 +118,13 @@ struct PackedCameraSpec {
 struct PackedRaysSpec {
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> origins;
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> dirs;
+    // const torch::PackedTensorAccessor32<bool, 1, torch::RestrictPtrTraits> masks;
+    bool* __restrict__ masks;
     PackedRaysSpec(RaysSpec& spec) :
         origins(spec.origins.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
-        dirs(spec.dirs.packed_accessor32<float, 2, torch::RestrictPtrTraits>())
+        dirs(spec.dirs.packed_accessor32<float, 2, torch::RestrictPtrTraits>()),
+        // masks(spec.masks.packed_accessor32<bool, 1, torch::RestrictPtrTraits>())
+        masks(spec.masks.data_ptr<bool>())
     { }
 };
 

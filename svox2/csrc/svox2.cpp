@@ -107,6 +107,7 @@ void grid_weight_render(Tensor, CameraSpec &, float, float, bool, Tensor,
 void sparse_grid_weight_render(SparseGridSpec &, CameraSpec &, float, float, Tensor,
                         Tensor, Tensor);
 void sparse_grid_visbility_render_surf(SparseGridSpec &, CameraSpec &, Tensor);
+void sparse_grid_mask_render(SparseGridSpec &, RaysSpec &, float, Tensor);
 // void sample_cubemap(Tensor, Tensor, bool, Tensor);
 
 // Loss
@@ -194,6 +195,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   _REG_FUNC(grid_weight_render);
   _REG_FUNC(sparse_grid_weight_render);
   _REG_FUNC(sparse_grid_visbility_render_surf);
+  _REG_FUNC(sparse_grid_mask_render);
   // _REG_FUNC(sample_cubemap);
 
   // Optimizer
@@ -234,7 +236,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::class_<RaysSpec>(m, "RaysSpec")
       .def(py::init<>())
       .def_readwrite("origins", &RaysSpec::origins)
-      .def_readwrite("dirs", &RaysSpec::dirs);
+      .def_readwrite("dirs", &RaysSpec::dirs)
+      .def_readwrite("masks", &RaysSpec::masks);
 
   py::class_<RayVoxIntersecSpec>(m, "RayVoxIntersecSpec")
       .def(py::init<>())

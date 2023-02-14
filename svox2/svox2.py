@@ -110,6 +110,7 @@ class RenderOptions:
 class Rays:
     origins: torch.Tensor
     dirs: torch.Tensor
+    masks: Optional[torch.Tensor] = None
 
     def _to_cpp(self):
         """
@@ -118,14 +119,19 @@ class Rays:
         spec = _C.RaysSpec()
         spec.origins = self.origins
         spec.dirs = self.dirs
+        spec.masks = self.masks
         return spec
 
+    def __post_init__(self):
+        if self.masks is None:
+            self.masks = torch.ones_like(self.origins[...,0]).bool()
+
     def __getitem__(self, key):
-        return Rays(self.origins[key], self.dirs[key])
+        return Rays(self.origins[key], self.dirs[key], self.masks[key])
 
     @property
     def is_cuda(self) -> bool:
-        return self.origins.is_cuda and self.dirs.is_cuda
+        return self.origins.is_cuda and self.dirs.is_cuda and self.masks.is_cuda
 
 @dataclass
 class RayVoxIntersecs:
@@ -2958,6 +2964,7 @@ class SparseGrid(nn.Module):
         init_type='density', # init from density or weight
         weight_init_cams=None,
         visibility_pruning_scale=0, # remove surfaces at voxels that have less visibility than scale * most visible voxel
+        mask_pruning_rays=None # remove density of masks cells
         ):
         '''
         Initialize surface data from density values
@@ -2965,6 +2972,44 @@ class SparseGrid(nn.Module):
         alpha_rescale: if not None, rescale the alpha raw values
         '''
         with torch.no_grad():
+
+            if mask_pruning_rays is not None:
+                # first set grid that never intersect with object rays
+                ray_mask = mask_pruning_rays.masks
+                # select obj rays
+                mask_pruning_rays = Rays(mask_pruning_rays.origins[ray_mask].to(self.density_data.device), 
+                                         mask_pruning_rays.dirs[ray_mask].to(self.density_data.device))
+
+                grid_obj_mask = torch.zeros_like(self.density_data, dtype=torch.float32)[:, 0]
+                batch_size = 1024 * 16
+                for i in range(0, mask_pruning_rays.origins.shape[0], batch_size):
+                    _C.sparse_grid_mask_render(
+                        self._to_cpp(), 
+                        mask_pruning_rays[i:i+batch_size]._to_cpp(),
+                        self.opt.near_clip,
+                        grid_obj_mask
+                    )
+                self.density_data.data *= grid_obj_mask.float()[:, None]
+
+                # set voxels that don't contain foreground object to density 0
+                ray_mask = ~mask_pruning_rays.masks
+                # select empty rays
+                mask_pruning_rays = Rays(mask_pruning_rays.origins[ray_mask].to(self.density_data.device), 
+                                         mask_pruning_rays.dirs[ray_mask].to(self.density_data.device))
+
+                grid_empty_mask = torch.zeros_like(self.density_data, dtype=torch.float32)[:, 0]
+                batch_size = 1024 * 16
+                for i in range(0, mask_pruning_rays.origins.shape[0], batch_size):
+                    _C.sparse_grid_mask_render(
+                        self._to_cpp(), 
+                        mask_pruning_rays[i:i+batch_size]._to_cpp(),
+                        self.opt.near_clip,
+                        grid_empty_mask
+                    )
+
+                self.density_data.data *= (~grid_empty_mask.bool()).float()[:, None]
+
+
 
             if self.opt.alpha_activation_type == SIGMOID_FN:
                 raise NotImplementedError
