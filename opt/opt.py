@@ -358,7 +358,7 @@ if args.load_pretrain_density_sh is not None:
     # np.save(f'{out_dir}/pts.npy', pred_pts)
     # write_vis_pcd(f'{out_dir}/pts.ply', pred_pts)
 
-    grid.save(f'{args.train_dir}/ckpt_init.npz')
+    # grid.save(f'{args.train_dir}/ckpt_init.npz')
 
     surf_lvs_original = grid.level_set_data.clone()
 
@@ -922,7 +922,8 @@ while True:
                             scaling=args.lambda_tv_surface,
                             sparse_frac=args.tv_surface_sparsity,
                             ndc_coeffs=dset.ndc_coeffs,
-                            contiguous=args.tv_contiguous)
+                            contiguous=args.tv_contiguous,
+                            alpha_dependency=args.surf_tv_alpha_dependency)
 
                 if lambda_surf_normal_loss > 0.0 and not args.fused_surf_norm_reg:
                     # with Timing("normal_loss"):

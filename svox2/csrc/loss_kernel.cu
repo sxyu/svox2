@@ -807,6 +807,84 @@ __global__ void tv_grad_sparse_kernel(
 }
 
 __launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
+__global__ void surf_tv_grad_sparse_kernel(
+        const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
+        const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> density_data,
+        const int32_t* __restrict__ rand_cells,
+        int start_dim, int end_dim,
+        float scale,
+        size_t Q,
+        bool ignore_edge,
+        bool ignore_last_z,
+        float ndc_coeffx, float ndc_coeffy,
+        bool alpha_dependency,
+        // Output
+        bool* __restrict__ mask_out,
+        float* __restrict__ grad_data) {
+    CUDA_GET_THREAD_ID_U64(tid, Q);
+    const int idx = tid % (end_dim - start_dim) + start_dim;
+    const int xyz = rand_cells[tid / (end_dim - start_dim)];
+    const int z = xyz % links.size(2);
+    const int xy = xyz / links.size(2);
+    const int y = xy % links.size(1);
+    const int x = xy / links.size(1);
+    // note that this calculation of xyz doesn't seem correct for use_sphere=True case
+
+    const int32_t* __restrict__ links_ptr = &links[x][y][z];
+
+    if (ignore_edge && *links_ptr == 0) return;
+
+    float scaling[3];
+    CALCULATE_RAY_SCALE(scaling, links.size(0), links.size(1), links.size(2));
+
+    const int offx = links.stride(0), offy = links.stride(1);
+
+    const auto lnk000 = links_ptr[0];
+    const auto lnk001 = ((z + 1 < links.size(2)) &&
+                         (!ignore_last_z || z != links.size(2) - 2)) ?
+                        links_ptr[1] : 0;
+    const auto lnk010 = y + 1 < links.size(1) ? links_ptr[offy] : 0;
+    const auto lnk100 = x + 1 < links.size(0) ? links_ptr[offx] : 0;
+    if (ignore_last_z && z == links.size(2) - 2) return;
+
+    const float v000 = lnk000 >= 0 ? data[lnk000][idx] : 0.f;
+    const float null_val = (ignore_edge ? v000 : 0.f);
+    const float v001 = lnk001 >= 0 ? data[lnk001][idx] : null_val,
+                v010 = lnk010 >= 0 ? data[lnk010][idx] : null_val,
+                v100 = lnk100 >= 0 ? data[lnk100][idx] : null_val;
+
+    float dx = (v100 - v000);
+    float dy = (v010 - v000);
+    float dz = (v001 - v000);
+    float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
+
+    if (alpha_dependency){
+        const float raw_alpha = lnk000 >= 0 ? density_data[lnk000][idx] : 0.f;
+        idelta /= max((1.f-_EXP(-raw_alpha)), 1e-8);
+    }
+
+    dx *= scaling[0];
+    dy *= scaling[1];
+    dz *= scaling[2];
+
+#define MAYBE_ADD_SET(lnk, val) if (lnk >= 0 && val != 0.f) { \
+    atomicAdd(&grad_data[lnk * data.size(1) + idx], val * idelta); \
+    if (mask_out != nullptr) { \
+        mask_out[lnk] = true; \
+    } \
+} \
+
+    const float sm = -(dx + dy + dz);
+    MAYBE_ADD_SET(lnk000, sm);
+    MAYBE_ADD_SET(lnk001, dz);
+    MAYBE_ADD_SET(lnk010, dy);
+    MAYBE_ADD_SET(lnk100, dx);
+
+#undef MAYBE_ADD_SET
+}
+
+__launch_bounds__(TV_GRAD_CUDA_THREADS, MIN_BLOCKS_PER_SM)
 __global__ void surf_sign_change_grad_sparse_kernel(
         const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> links,
         const torch::PackedTensorAccessor64<float, 2, torch::RestrictPtrTraits> data,
@@ -1280,6 +1358,58 @@ void tv_grad_sparse(torch::Tensor links,
             ignore_edge,
             ignore_last_z,
             ndc_coeffx, ndc_coeffy,
+            // Output
+            (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
+            grad_data.data_ptr<float>());
+    CUDA_CHECK_ERRORS;
+}
+
+void surf_tv_grad_sparse(torch::Tensor links,
+             torch::Tensor data,
+             torch::Tensor density_data,
+             torch::Tensor rand_cells,
+             torch::Tensor mask_out,
+             int start_dim, int end_dim,
+             float scale,
+             bool ignore_edge,
+             bool ignore_last_z,
+             float ndc_coeffx,
+             float ndc_coeffy,
+             bool alpha_dependency,
+             torch::Tensor grad_data) {
+    DEVICE_GUARD(data);
+    CHECK_INPUT(data);
+    CHECK_INPUT(density_data);
+    CHECK_INPUT(links);
+    CHECK_INPUT(grad_data);
+    CHECK_INPUT(rand_cells);
+    CHECK_INPUT(mask_out);
+    TORCH_CHECK(data.is_floating_point());
+    TORCH_CHECK(density_data.is_floating_point());
+    TORCH_CHECK(grad_data.is_floating_point());
+    TORCH_CHECK(!links.is_floating_point());
+    TORCH_CHECK(data.ndimension() == 2);
+    TORCH_CHECK(links.ndimension() == 3);
+    TORCH_CHECK(grad_data.ndimension() == 2);
+
+    int nl = rand_cells.size(0);
+    size_t Q = rand_cells.size(0) * size_t(end_dim - start_dim);
+
+    const int cuda_n_threads = TV_GRAD_CUDA_THREADS;
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    device::surf_tv_grad_sparse_kernel<<<blocks, cuda_n_threads>>>(
+            links.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+            data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            density_data.packed_accessor64<float, 2, torch::RestrictPtrTraits>(),
+            rand_cells.data_ptr<int32_t>(),
+            start_dim,
+            end_dim,
+            scale / nl,
+            Q,
+            ignore_edge,
+            ignore_last_z,
+            ndc_coeffx, ndc_coeffy,
+            alpha_dependency,
             // Output
             (mask_out.dim() > 0) ? mask_out.data_ptr<bool>() : nullptr,
             grad_data.data_ptr<float>());

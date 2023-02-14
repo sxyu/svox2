@@ -537,6 +537,7 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--lambda_tv', type=float, default=1e-5)
     group.add_argument('--lambda_tv_alpha', type=float, default=1e-5)
     group.add_argument('--lambda_tv_surface', type=float, default=0)
+    group.add_argument('--surf_tv_alpha_dependency', action='store_true', default=False)
     group.add_argument('--tv_sparsity', type=float, default=0.01)
     group.add_argument('--alpha_lap_sparsity', type=float, default=0.01)
     group.add_argument('--tv_surface_sparsity', type=float, default=0.01)

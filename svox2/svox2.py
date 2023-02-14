@@ -5105,8 +5105,8 @@ class SparseGrid(nn.Module):
     def inplace_tv_surface_grad(self, grad: torch.Tensor,
                                 scaling: float = 1.0,
                                 sparse_frac: float = 0.01,
-                                logalpha: bool=False, logalpha_delta: float=2.0,
                                 ndc_coeffs: Tuple[float, float] = (-1.0, -1.0),
+                                alpha_dependency: bool = True,
                                 contiguous: bool = True
                             ):
         """
@@ -5119,18 +5119,20 @@ class SparseGrid(nn.Module):
             _C is not None and self.surface_data.is_cuda and grad.is_cuda
         ), "CUDA extension is currently required for total variation"
 
-        assert not logalpha, "No longer supported"
         rand_cells = self._get_rand_cells_non_empty(sparse_frac, contiguous=contiguous)
         if rand_cells is not None:
             if rand_cells.size(0) > 0:
-                _C.tv_grad_sparse(self.links, self.surface_data,
+                _C.surf_tv_grad_sparse(
+                        self.links, 
+                        self.surface_data,
+                        self.density_data,
                         rand_cells,
                         self._get_sparse_grad_indexer(),
                         0, 1, scaling,
-                        logalpha, logalpha_delta,
                         True,
                         self.opt.last_sample_opaque,
                         ndc_coeffs[0], ndc_coeffs[1],
+                        alpha_dependency,
                         grad)
         else:
             raise NotImplementedError
