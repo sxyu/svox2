@@ -4726,7 +4726,7 @@ class SparseGrid(nn.Module):
 
         return torch.clamp_min(
             .5 * (1. - torch.cos(torch.pi * torch.clamp_max(torch.clamp_min(self.truncated_vol_render_a-intersect_ids, 0.), 1.))),
-            1e-3
+            self.opt.trunc_vol_weight_min
         )
 
 
