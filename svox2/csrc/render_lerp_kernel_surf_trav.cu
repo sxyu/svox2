@@ -2391,7 +2391,7 @@ __device__ __inline__ void trace_ray_surf_trav_backward(
                         }
 
 
-                        if ((lambda_conv_mode_samp > 0.f) && (trunc_reweight > 1e-8f)){
+                        if ((lambda_conv_mode_samp > 0.f) && (trunc_reweight > opt.trunc_vol_weight_min)){
                             // only apply to valid intersections that are not truncated
                             // l_conv_mode_samp = |ti - t_mode|
                             float const grad_conv_mode_samp = (sample_ts[sample_i] > sample_ts[max_sample_id]) ? 1.f : \
