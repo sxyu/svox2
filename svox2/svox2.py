@@ -2977,15 +2977,15 @@ class SparseGrid(nn.Module):
                 # first set grid that never intersect with object rays
                 ray_mask = mask_pruning_rays.masks
                 # select obj rays
-                mask_pruning_rays = Rays(mask_pruning_rays.origins[ray_mask].to(self.density_data.device), 
+                rays = Rays(mask_pruning_rays.origins[ray_mask].to(self.density_data.device), 
                                          mask_pruning_rays.dirs[ray_mask].to(self.density_data.device))
 
                 grid_obj_mask = torch.zeros_like(self.density_data, dtype=torch.float32)[:, 0]
                 batch_size = 1024 * 16
-                for i in range(0, mask_pruning_rays.origins.shape[0], batch_size):
+                for i in range(0, rays.origins.shape[0], batch_size):
                     _C.sparse_grid_mask_render(
                         self._to_cpp(), 
-                        mask_pruning_rays[i:i+batch_size]._to_cpp(),
+                        rays[i:i+batch_size]._to_cpp(),
                         self.opt.near_clip,
                         grid_obj_mask
                     )
@@ -2994,22 +2994,21 @@ class SparseGrid(nn.Module):
                 # set voxels that don't contain foreground object to density 0
                 ray_mask = ~mask_pruning_rays.masks
                 # select empty rays
-                mask_pruning_rays = Rays(mask_pruning_rays.origins[ray_mask].to(self.density_data.device), 
+                rays = Rays(mask_pruning_rays.origins[ray_mask].to(self.density_data.device), 
                                          mask_pruning_rays.dirs[ray_mask].to(self.density_data.device))
 
                 grid_empty_mask = torch.zeros_like(self.density_data, dtype=torch.float32)[:, 0]
                 batch_size = 1024 * 16
-                for i in range(0, mask_pruning_rays.origins.shape[0], batch_size):
+                for i in range(0, rays.origins.shape[0], batch_size):
                     _C.sparse_grid_mask_render(
                         self._to_cpp(), 
-                        mask_pruning_rays[i:i+batch_size]._to_cpp(),
+                        rays[i:i+batch_size]._to_cpp(),
                         self.opt.near_clip,
                         grid_empty_mask
                     )
 
                 self.density_data.data *= (~grid_empty_mask.bool()).float()[:, None]
-
-
+                
 
             if self.opt.alpha_activation_type == SIGMOID_FN:
                 raise NotImplementedError

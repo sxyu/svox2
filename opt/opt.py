@@ -277,52 +277,55 @@ surf_lvs_original = None
 density_lvs = [ast.literal_eval(args.surf_init_density_lvs[i]) for i in range(len(args.surf_init_density_lvs))]
 
 if args.load_pretrain_density_sh is not None:
-    pretrained_ckpt_path = path.join(args.load_pretrain_density_sh, 'ckpt.npz') if os.path.isdir(args.load_pretrain_density_sh) else \
-        args.load_pretrain_density_sh
-    
-    print(f'Loading density & SH from ckpt: {pretrained_ckpt_path}')
+    if args.load_pretrain_density_sh.endswith('.npy'):
+        # load grid extracted from other nerf
+        print(f'Loading density other nerf: {args.load_pretrain_density_sh}')
+        density_data = np.load(args.load_pretrain_density_sh)[...,0] * args.density_load_rescale
+        density_data = torch.from_numpy(density_data.astype(np.float32)).to(device=device).view(-1,1)
 
-    z = np.load(pretrained_ckpt_path, allow_pickle=True)
-    sh_data = z.f.sh_data
-    density_data = z.f.density_data
-    links = z.f.links
-    sh_data = torch.from_numpy(sh_data.astype(np.float32)).to(device=device)
-    density_data = torch.from_numpy(density_data.astype(np.float32)).to(device=device)
-    grid.sh_data.data = sh_data
-    grid.density_data.data = density_data
+        # perform a quick prunning
+        reso = grid.links.shape
+        valid_mask = density_data > 0
+        valid_mask = valid_mask.view(reso)
 
-    grid.links = torch.from_numpy(links).to(device=device)
-    grid.capacity = grid.sh_data.size(0)
+        for _ in range(int(2)):
+            valid_mask = grid._C.dilate(valid_mask)
+
+        valid_mask = valid_mask.view(-1)
+        grid.density_data.data = density_data[valid_mask]
+        grid.sh_data.data = grid.sh_data.data[valid_mask]
+        grid.surface_data.data = grid.surface_data.data[valid_mask]
+
+        init_links = (
+            torch.cumsum(valid_mask.to(torch.int32), dim=-1).int() - 1
+        )
+        init_links[~valid_mask] = -1
+
+        grid.links = init_links.view(reso).to(device=device)
+        kept_ratio = torch.count_nonzero(valid_mask) / valid_mask.numel()
+        print(f'{kept_ratio} of the loaded grids has > 0 density')
+
+    else:
+        # load from plenoxels
+        pretrained_ckpt_path = path.join(args.load_pretrain_density_sh, 'ckpt.npz') if os.path.isdir(args.load_pretrain_density_sh) else \
+            args.load_pretrain_density_sh
+        
+        print(f'Loading density & SH from ckpt: {pretrained_ckpt_path}')
+
+        z = np.load(pretrained_ckpt_path, allow_pickle=True)
+        sh_data = z.f.sh_data
+        density_data = z.f.density_data * args.density_load_rescale
+        links = z.f.links
+        sh_data = torch.from_numpy(sh_data.astype(np.float32)).to(device=device)
+        density_data = torch.from_numpy(density_data.astype(np.float32)).to(device=device)
+        grid.sh_data.data = sh_data
+        grid.density_data.data = density_data
+
+        grid.links = torch.from_numpy(links).to(device=device)
+        grid.capacity = grid.sh_data.size(0)
+
     grid.accelerate()
 
-
-    # repeats = 10
-    # angles = np.linspace(-180, 180, (100) // repeats + 1)[:-1]
-    # angles = np.concatenate([angles for _ in range(repeats)])
-    # elevations = np.linspace(-90, 90, 100)
-    # c2ws = [
-    #     pose_spherical(
-    #         angle,
-    #         ele,
-    #         2.5,
-    #         np.array([0,0,0]),
-    #         vec_up=args.vec_up,
-    #     )
-    #     for ele, angle in zip(elevations, angles)
-    # ]
-    # # c2ws = np.stack(c2ws, axis=0)
-    # # c2ws = torch.from_numpy(c2ws).to(device=device)
-
-    # weight_init_cams = [
-    #         svox2.Camera(torch.from_numpy(c2w).to(device=device),
-    #                     dset.intrins.get('fx', i),
-    #                     dset.intrins.get('fy', i),
-    #                     dset.intrins.get('cx', i),
-    #                     dset.intrins.get('cy', i),
-    #                     width=dset.get_image_size(i)[1],
-    #                     height=dset.get_image_size(i)[0],
-    #                     ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(c2ws)
-    #     ]
     if hasattr(dset.rays, "mask"):
         batch_origins = dset.rays.origins
         batch_dirs = dset.rays.dirs
@@ -330,7 +333,7 @@ if args.load_pretrain_density_sh is not None:
         mask_pruning_rays = svox2.Rays(batch_origins, batch_dirs, batch_mask)
     else:
         mask_pruning_rays = None
-    mask_pruning_rays = None
+    # mask_pruning_rays = None
 
     # grid.opt.near_clip = 0.5
 

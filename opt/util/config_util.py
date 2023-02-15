@@ -643,6 +643,7 @@ def setup_train_conf(return_parpser=False):
                         help='resume training from ckpt in the given path if exists')
     group.add_argument('--load_pretrain_density_sh', type=str, default=None,
                         help='load density/sh from pretrained ckpt')
+    group.add_argument('--density_load_rescale', type=float, default=1)
 
     group.add_argument('--surface_init', type=str, default=None)
 
