@@ -44,6 +44,41 @@ def eval_cf(pred, gt, radius=0.001):
 
     return dist_d2s, dist_s2d
 
+
+def sample_mesh(data_mesh, thresh, nn_engine):
+    vertices = np.asarray(data_mesh.vertices)
+    triangles = np.asarray(data_mesh.triangles)
+    tri_vert = vertices[triangles]
+    v1 = tri_vert[:,1] - tri_vert[:,0]
+    v2 = tri_vert[:,2] - tri_vert[:,0]
+    l1 = np.linalg.norm(v1, axis=-1, keepdims=True)
+    l2 = np.linalg.norm(v2, axis=-1, keepdims=True)
+    area2 = np.linalg.norm(np.cross(v1, v2), axis=-1, keepdims=True)
+    non_zero_area = (area2 > 0)[:,0]
+    l1, l2, area2, v1, v2, tri_vert = [
+        arr[non_zero_area] for arr in [l1, l2, area2, v1, v2, tri_vert]
+    ]
+    thr = thresh * np.sqrt(l1 * l2 / area2)
+    n1 = np.floor(l1 / thr)
+    n2 = np.floor(l2 / thr)
+
+    with mp.Pool() as mp_pool:
+        new_pts = mp_pool.map(sample_single_tri, ((n1[i,0], n2[i,0], v1[i:i+1], v2[i:i+1], tri_vert[i:i+1,0]) for i in range(len(n1))), chunksize=1024)
+
+    new_pts = np.concatenate(new_pts, axis=0)
+    data_pcd = np.concatenate([vertices, new_pts], axis=0)
+
+    # downsample
+    nn_engine.fit(data_pcd)
+    rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
+    mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
+    for curr, idxs in enumerate(rnn_idxs):
+        if mask[curr]:
+            mask[idxs] = 0
+            mask[curr] = 1
+    data_pcd = data_pcd[mask]
+    return data_pcd
+
 if __name__ == '__main__':
     mp.freeze_support()
 
@@ -55,11 +90,15 @@ if __name__ == '__main__':
                         help='path to extracted ground turth pts')
 
     parser.add_argument('--downsample_density', type=float, default=0.001)
+    parser.add_argument('--pt_downsample', action='store_true', default=False)
     parser.add_argument('--patch_size', type=float, default=60)
-    parser.add_argument('--max_dist', type=float, default=20)
+    parser.add_argument('--max_dist', type=float, default=1.5)
     parser.add_argument('--f1_dist', type=float, default=0.01, 
                         help="the distance threshold for ac1uracy/completeness/f1 metrics")
     parser.add_argument('--visualize_threshold', type=float, default=0.1)
+    parser.add_argument('--run_alpha_shape', action='store_true', default=False,
+                        help='convert point to mesh, then eval cf')
+    parser.add_argument('--alpha_shape_alpha', type=float, default=0.003)
     parser.add_argument('--out_dir', type=str, default='./')
     # parser.add_argument('--del_ckpt', action='store_true', default=False)
     parser.add_argument('--no_pts_save', action='store_true', default=False)
@@ -81,37 +120,17 @@ if __name__ == '__main__':
     if args.input_path.endswith('.obj') or args.input_path.endswith('.ply'):
         mesh_eval = True
         # read from mesh
-        with Timing('Point Sampling'):
-            data_mesh = o3d.io.read_triangle_mesh(args.input_path)
-            vertices = np.asarray(data_mesh.vertices)
-            triangles = np.asarray(data_mesh.triangles)
-            tri_vert = vertices[triangles]
-            v1 = tri_vert[:,1] - tri_vert[:,0]
-            v2 = tri_vert[:,2] - tri_vert[:,0]
-            l1 = np.linalg.norm(v1, axis=-1, keepdims=True)
-            l2 = np.linalg.norm(v2, axis=-1, keepdims=True)
-            area2 = np.linalg.norm(np.cross(v1, v2), axis=-1, keepdims=True)
-            non_zero_area = (area2 > 0)[:,0]
-            l1, l2, area2, v1, v2, tri_vert = [
-                arr[non_zero_area] for arr in [l1, l2, area2, v1, v2, tri_vert]
-            ]
-            thr = thresh * np.sqrt(l1 * l2 / area2)
-            n1 = np.floor(l1 / thr)
-            n2 = np.floor(l2 / thr)
+        data_mesh = o3d.io.read_triangle_mesh(args.input_path)
+        data_pcd = sample_mesh(data_mesh, thresh, nn_engine)
 
-            with mp.Pool() as mp_pool:
-                new_pts = mp_pool.map(sample_single_tri, ((n1[i,0], n2[i,0], v1[i:i+1], v2[i:i+1], tri_vert[i:i+1,0]) for i in range(len(n1))), chunksize=1024)
+    else:
+        if os.path.isdir(args.input_path):
+            data_pcd = np.load(f'{args.input_path}/pts.npy')
+        else:
+            data_pcd = np.load(args.input_path)
 
-            new_pts = np.concatenate(new_pts, axis=0)
-            data_pcd = np.concatenate([vertices, new_pts], axis=0)
-
-            # mesh = trimesh.load_mesh(args.input_path)
-            # data_pcd, _ = trimesh.sample.sample_surface_even(mesh, len(stl), thresh)
-            # data_pcd = np.array(data_pcd)
-
-
-        # downsample
-        with Timing('Point Down-sampling'):
+        if args.pt_downsample:
+            # with Timing('Point Down-sampling'):
             nn_engine.fit(data_pcd)
             rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
             mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
@@ -121,19 +140,16 @@ if __name__ == '__main__':
                     mask[curr] = 1
             data_pcd = data_pcd[mask]
 
-            # pcd = o3d.geometry.PointCloud()
-            # pcd.points = o3d.utility.Vector3dVector(data_pcd)
-            # downpcd = pcd.voxel_down_sample(voxel_size=thresh)
+        if args.run_alpha_shape:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(data_pcd)
+            print('running alpha shape')
+            data_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, args.alpha_shape_alpha)
+            print('alpha shape finished')
 
-            # data_pcd = np.array(downpcd.points)
+            o3d.io.write_triangle_mesh(f'{args.out_dir}/mesh_{args.alpha_shape_alpha}.ply', data_mesh)
 
-
-
-    elif os.path.isdir(args.input_path):
-        data_pcd = np.load(f'{args.input_path}/pts.npy')
-    else:
-        data_pcd = np.load(args.input_path)
-
+            data_pcd = sample_mesh(data_mesh, thresh, nn_engine)    
 
 
     # with Timing('d2s'):
@@ -160,6 +176,7 @@ if __name__ == '__main__':
     G = np.array([[0,1,0]], dtype=np.float64)
     B = np.array([[0,0,1]], dtype=np.float64)
     W = np.array([[1,1,1]], dtype=np.float64)
+    data_pcd = data_pcd[dist_d2s[:,0] < max_dist] # remove redundent points
     data_color = np.tile(B, (data_pcd.shape[0], 1))
     data_alpha = dist_d2s.clip(max=vis_dist) / vis_dist
     data_color = R * data_alpha + W * (1-data_alpha)
@@ -212,6 +229,8 @@ if __name__ == '__main__':
             f.write(f'F1: {f1}\n')
             
             f.write(f'psnr: {psnr}\n')
+
+        print(f'Result output to {args.out_dir}/cf.txt')
 
 
 

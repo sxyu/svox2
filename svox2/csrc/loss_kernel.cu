@@ -860,8 +860,15 @@ __global__ void surf_tv_grad_sparse_kernel(
     float idelta = scale * rsqrtf(1e-9f + dx * dx + dy * dy + dz * dz);
 
     if (alpha_dependency){
-        const float raw_alpha = lnk000 >= 0 ? density_data[lnk000][idx] : 0.f;
-        idelta /= max((1.f-_EXP(-raw_alpha)), 1e-8);
+        const float raw_alpha000 = lnk000 >= 0 ? density_data[lnk000][idx] : 0.f;
+        const float raw_alpha001 = lnk001 >= 0 ? density_data[lnk001][idx] : 0.f;
+        const float raw_alpha010 = lnk010 >= 0 ? density_data[lnk010][idx] : 0.f;
+        const float raw_alpha100 = lnk100 >= 0 ? density_data[lnk100][idx] : 0.f;
+        const float max_alpha = max(raw_alpha000, max(raw_alpha001, max(raw_alpha010, raw_alpha100)));
+        // idelta /= max((1.f-_EXP(-raw_alpha)), 1e-8);
+        if (max_alpha < 0.1){
+            idelta /= max(max_alpha * 10, 1e-1);
+        }
     }
 
     dx *= scaling[0];

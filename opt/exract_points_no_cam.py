@@ -58,6 +58,12 @@ parser.add_argument(
     help="Delete ckpt after extraction"
 )
 parser.add_argument(
+    "--single_lv",
+    action='store_true', 
+    default=False,
+    help="Use only single lv set"
+)
+parser.add_argument(
     "--downsample_density",
     type=float,
     default=0.001,
@@ -89,9 +95,44 @@ else:
 if not path.isfile(args.ckpt):
     args.ckpt = path.join(args.ckpt, 'ckpt.npz')
 
+if args.ckpt.endswith('grid.npy'):
+    # better marching cube of exported density grid
+    print(f'Loading density other nerf: {args.ckpt}')
+    density_data = np.load(args.ckpt)[...,0]
 
-grid = svox2.SparseGrid.load(args.ckpt, device=device)
-print(grid.center, grid.radius)
+    grid = svox2.SparseGrid(reso=density_data.shape,
+                            use_sphere_bound=False,
+                            device=device)
+    
+    density_data = torch.from_numpy(density_data.astype(np.float32)).to(device=device).view(-1,1)
+
+    # perform a quick prunning
+    reso = grid.links.shape
+    valid_mask = density_data > 0
+    valid_mask = valid_mask.view(reso)
+
+    for _ in range(int(2)):
+        valid_mask = grid._C.dilate(valid_mask)
+
+    valid_mask = valid_mask.view(-1)
+    grid.density_data.data = density_data[valid_mask]
+    grid.sh_data.data = grid.sh_data.data[valid_mask]
+
+    init_links = (
+        torch.cumsum(valid_mask.to(torch.int32), dim=-1).int() - 1
+    )
+    init_links[~valid_mask] = -1
+
+    grid.links = init_links.view(reso).to(device=device)
+    kept_ratio = torch.count_nonzero(valid_mask) / valid_mask.numel()
+    print(f'{kept_ratio} of the loaded grids has > 0 density')
+
+    grid.surface_data = None
+    grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
+    grid.opt.backend = 'cuvol'
+else:
+    grid = svox2.SparseGrid.load(args.ckpt, device=device)
+    print(grid.center, grid.radius)
 
 
 
@@ -105,26 +146,28 @@ if args.extract_nerf:
 
 print('Render options', grid.opt)
 
-args = parser.parse_args()
-device = 'cuda:0'
+# args = parser.parse_args()
+# device = 'cuda:0'
 
 
-if not path.isfile(args.ckpt):
-    args.ckpt = path.join(args.ckpt, 'ckpt.npz')
+# if not path.isfile(args.ckpt):
+#     args.ckpt = path.join(args.ckpt, 'ckpt.npz')
 
 
-grid = svox2.SparseGrid.load(args.ckpt, device=device)
-print(grid.center, grid.radius)
+# grid = svox2.SparseGrid.load(args.ckpt, device=device)
+# print(grid.center, grid.radius)
 
 
-# config_util.setup_render_opts(grid.opt, args)
+# # config_util.setup_render_opts(grid.opt, args)
 
 
-if args.extract_nerf:
-    grid.surface_data = None
-    grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
+# if args.extract_nerf:
+#     grid.surface_data = None
+#     grid.surface_type = svox2.__dict__['SURFACE_TYPE_NONE']
 
-print('Render options', grid.opt)
+# print('Render options', grid.opt)
+
+
 
 # grid.extract_mesh(args.out_path, args.intersect_th)
 
@@ -135,6 +178,8 @@ if args.surf_lv_set is None:
         surf_lv_set = [0.]
     else:
         surf_lv_set = grid.level_set_data.cpu().detach().numpy()
+        if args.single_lv:
+            surf_lv_set = surf_lv_set[:1]
 else:
     surf_lv_set = [args.surf_lv_set]
 
@@ -147,7 +192,7 @@ for lv_set in surf_lv_set:
         # rescale for DTU
         pts = dset.world2rescale(pts)
 
-    if args.downsample_density > 0:
+    if args.downsample_density > 0 and len(pts) > 0:
         nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=args.downsample_density, algorithm='kd_tree', n_jobs=-1)
         nn_engine.fit(pts)
         rnn_idxs = nn_engine.radius_neighbors(pts, radius=args.downsample_density, return_distance=False)
@@ -161,7 +206,7 @@ for lv_set in surf_lv_set:
     all_pts.append(pts)
 
 all_pts = np.concatenate(all_pts, axis=0)
-if args.downsample_density > 0:
+if args.downsample_density > 0 and len(all_pts) > 0:
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=args.downsample_density, algorithm='kd_tree', n_jobs=-1)
     nn_engine.fit(all_pts)
     rnn_idxs = nn_engine.radius_neighbors(all_pts, radius=args.downsample_density, return_distance=False)
