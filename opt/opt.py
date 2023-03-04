@@ -486,7 +486,7 @@ while True:
     def train_step():
         print('Train step')
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
-        stats = {"mse" : 0.0, "psnr" : 0.0, 'ssim' : 0.0, 'lpips' : 0.0, "invsqr_mse" : 0.0}
+        stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
             if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
