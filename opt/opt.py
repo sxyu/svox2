@@ -437,7 +437,7 @@ while True:
                 if math.isnan(psnr):
                     print('NAN PSNR', i, img_id, mse_num)
                     assert False
-                ssim = structural_similarity_index_measure(rgb_pred_test_perm, rgb_gt_test_perm)
+                ssim = structural_similarity_index_measure(rgb_pred_test_perm, rgb_gt_test_perm).item()
                 lpips = lpips_fn(rgb_pred_test_perm, rgb_gt_test_perm, normalize=True).item()
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
@@ -517,11 +517,12 @@ while True:
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
             # Stats
+            print(rgb_pred.shape, rgb_gt.shape)
             rgb_pred_perm = rgb_pred.permute(0, 3, 1, 2)
             rgb_gt_perm = rgb_gt.permute(0, 3, 1, 2)
             mse_num : float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
-            ssim = structural_similarity_index_measure(rgb_pred_perm, rgb_gt_perm)
+            ssim = structural_similarity_index_measure(rgb_pred_perm, rgb_gt_perm).item()
             lpips = lpips_fn(rgb_pred_perm, rgb_gt_perm, normalize=True).item()
             stats['mse'] += mse_num
             stats['psnr'] += psnr
