@@ -74,6 +74,7 @@ class DTUDataset(DatasetBase):
         
         self.scene_radius = [1., 1., 1.]
         self.scene_radius = [.5, .5, .5]
+        self.scene_radius = [1., 1., 1.]
         self.device = device
         self.permutation = permutation
         self.epoch_size = epoch_size
@@ -89,7 +90,7 @@ class DTUDataset(DatasetBase):
         mask_paths = sorted(mask_path.glob('*'))
         self.n_images = len(image_paths)
 
-        cam_file_path = Path(root) / 'cameras_large.npz'
+        cam_file_path = Path(root) / 'cameras_sphere.npz'
         camera_dict = np.load(str(cam_file_path))
         scale_mats = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
         world_mats = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
