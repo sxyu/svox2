@@ -29,6 +29,9 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from typing import NamedTuple, Optional, Union
 
+import lpips
+from torchmetrics.functional import structural_similarity_index_measure
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
@@ -365,6 +368,7 @@ last_upsamp_step = args.init_iters
 if args.enable_random:
     warn("Randomness is enabled for training (normal for LLFF & scenes with background)")
 
+lpips_fn = lpips.LPIPS(net='alex').eval().to(device)
 epoch_id = -1
 while True:
     dset.shuffle_rays()
@@ -376,7 +380,7 @@ while True:
         # Put in a function to avoid memory leak
         print('Eval step')
         with torch.no_grad():
-            stats_test = {'psnr' : 0.0, 'mse' : 0.0}
+            stats_test = {'psnr' : 0.0, 'ssim' : 0.0, 'lpips' : 0.0, 'mse' : 0.0}
 
             # Standard set
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
@@ -431,8 +435,14 @@ while True:
                 if math.isnan(psnr):
                     print('NAN PSNR', i, img_id, mse_num)
                     assert False
+                rgb_pred_test_perm = rgb_pred_test.unsqueeze(0).permute(0, 3, 1, 2)
+                rgb_gt_test_perm = rgb_gt_test.unsqueeze(0).permute(0, 3, 1, 2)
+                ssim = structural_similarity_index_measure(rgb_pred_test_perm, rgb_gt_test_perm)
+                lpips = lpips_fn(rgb_pred_test_perm, rgb_gt_test_perm)
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
+                stats_test['ssim'] += ssim
+                stats_test['lpips'] += lpips
                 n_images_gen += 1
 
             if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE or \
@@ -461,6 +471,8 @@ while True:
 
             stats_test['mse'] /= n_images_gen
             stats_test['psnr'] /= n_images_gen
+            stats_test['ssim'] /= n_images_gen
+            stats_test['lpips'] /= n_images_gen
             for stat_name in stats_test:
                 summary_writer.add_scalar('test/' + stat_name,
                         stats_test[stat_name], global_step=gstep_id_base)
@@ -474,7 +486,7 @@ while True:
     def train_step():
         print('Train step')
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
-        stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
+        stats = {"mse" : 0.0, "psnr" : 0.0, 'ssim' : 0.0, 'lpips' : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
             if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
@@ -507,13 +519,19 @@ while True:
             # Stats
             mse_num : float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
+            rgb_pred_perm = rgb_pred.unsqueeze(0).permute(0, 3, 1, 2)
+            rgb_gt_perm = rgb_gt.unsqueeze(0).permute(0, 3, 1, 2)
+            ssim = structural_similarity_index_measure(rgb_pred_perm, rgb_gt_perm)
+            lpips = lpips_fn(rgb_pred_perm, rgb_gt_perm)
             stats['mse'] += mse_num
             stats['psnr'] += psnr
+            stats_test['ssim'] += ssim
+            stats_test['lpips'] += lpips
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
 
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
-                pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f}')
+                pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f} ssim={ssim:.2f} lpips={lpips:.2f}')
                 for stat_name in stats:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)

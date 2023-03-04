@@ -22,6 +22,8 @@ dependencies:
       - moviepy
       - matplotlib
       - scipy>=1.6.0
+      - lpips
+      - torchmetrics
   - pytorch=1.11.0
   - torchvision
   - cudatoolkit
