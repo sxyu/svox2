@@ -40,8 +40,11 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          help="Whether to use white background (ignored in some datasets)")
     group.add_argument('--llffhold',
                          type=int,
-                         default=8,
+                         default=100,
                          help="LLFF holdout every")
+    group.add_argument('--dtu_no_mask',
+                         action='store_true',
+                         default=False)
     group.add_argument('--normalize_by_bbox',
                          type=bool,
                          default=False,
@@ -188,7 +191,8 @@ def build_data_options(args):
         'data_bbox_scale': args.data_bbox_scale,
         'cam_scale_factor': args.cam_scale_factor,
         'normalize_by_camera': args.normalize_by_camera,
-        'permutation': args.perm
+        'permutation': args.perm,
+        'apply_mask': not args.dtu_no_mask,
     }
 
 def maybe_merge_config_file(args, allow_invalid=False):
@@ -563,6 +567,8 @@ def setup_train_conf(return_parpser=False):
     group.add_argument('--l_di_alpha_thresh', type=float, default=0.0)
     group.add_argument('--lambda_inwards_norm_loss', type=float, default=0.0)
     group.add_argument('--lambda_conv_mode_samp', type=float, default=0.0)
+    group.add_argument('--conv_mode_step', type=lambda x: int(float(x)), default=100000)
+    group.add_argument('--l_entropy_step', type=lambda x: int(float(x)), default=100000)
     group.add_argument('--lambda_sparsify_alpha', type=float, default=
                         0.0,
                         help="Weight for sparsity loss on log alpha. Used for surface optimization. Note that it works differently to plenoxel sparsity")
