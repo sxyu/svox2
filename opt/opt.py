@@ -429,14 +429,14 @@ while True:
                                 depth_img,
                                 global_step=gstep_id_base, dataformats='HWC')
 
+                rgb_pred_test_perm = rgb_pred_test.unsqueeze(0).permute(0, 3, 1, 2)
+                rgb_gt_test_perm = rgb_gt_test.unsqueeze(0).permute(0, 3, 1, 2)
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
                 psnr = -10.0 * math.log10(mse_num)
                 if math.isnan(psnr):
                     print('NAN PSNR', i, img_id, mse_num)
                     assert False
-                rgb_pred_test_perm = rgb_pred_test.unsqueeze(0).permute(0, 3, 1, 2)
-                rgb_gt_test_perm = rgb_gt_test.unsqueeze(0).permute(0, 3, 1, 2)
                 ssim = structural_similarity_index_measure(rgb_pred_test_perm, rgb_gt_test_perm)
                 lpips = lpips_fn(rgb_pred_test_perm, rgb_gt_test_perm)
                 stats_test['mse'] += mse_num
@@ -517,10 +517,10 @@ while True:
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
             # Stats
-            mse_num : float = mse.detach().item()
-            psnr = -10.0 * math.log10(mse_num)
             rgb_pred_perm = rgb_pred.unsqueeze(0).permute(0, 3, 1, 2)
             rgb_gt_perm = rgb_gt.unsqueeze(0).permute(0, 3, 1, 2)
+            mse_num : float = mse.detach().item()
+            psnr = -10.0 * math.log10(mse_num)
             ssim = structural_similarity_index_measure(rgb_pred_perm, rgb_gt_perm)
             lpips = lpips_fn(rgb_pred_perm, rgb_gt_perm)
             stats['mse'] += mse_num
