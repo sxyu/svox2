@@ -517,22 +517,15 @@ while True:
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
             # Stats
-            print(rgb_pred.shape, rgb_gt.shape)
-            rgb_pred_perm = rgb_pred.permute(0, 3, 1, 2)
-            rgb_gt_perm = rgb_gt.permute(0, 3, 1, 2)
             mse_num : float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
-            ssim = structural_similarity_index_measure(rgb_pred_perm, rgb_gt_perm).item()
-            lpips = lpips_fn(rgb_pred_perm, rgb_gt_perm, normalize=True).item()
             stats['mse'] += mse_num
             stats['psnr'] += psnr
-            stats_test['ssim'] += ssim
-            stats_test['lpips'] += lpips
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
 
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
-                pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f} ssim={ssim:.2f} lpips={lpips:.2f}')
+                pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f}')
                 for stat_name in stats:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
