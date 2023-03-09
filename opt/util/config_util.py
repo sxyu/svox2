@@ -38,6 +38,10 @@ def define_common_args(parser : configargparse.ArgumentParser):
                          type=bool,
                          default=True,
                          help="Whether to use white background (ignored in some datasets)")
+    group.add_argument('--no_white_bkgd',
+                         type=bool,
+                         default=False,
+                         help="Whether to use white background (ignored in some datasets)")
     group.add_argument('--llffhold',
                          type=int,
                          default=100,
@@ -185,7 +189,7 @@ def build_data_options(args):
         'epoch_size': args.epoch_size * args.__dict__.get('batch_size', 5000),
         'scene_scale': args.scene_scale,
         'scale': args.scale,
-        'white_bkgd': args.white_bkgd,
+        'white_bkgd': not args.no_white_bkgd,
         'hold_every': args.llffhold,
         'normalize_by_bbox': args.normalize_by_bbox,
         'data_bbox_scale': args.data_bbox_scale,
