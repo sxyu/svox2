@@ -153,6 +153,12 @@ class DTUDataset(DatasetBase):
         self.scene_scale = scene_scale
         if self.split == "train":
             self.gen_rays(factor=factor)
+            # save img for debug purpose
+            scaled_img_path = Path(root) / f'image_{scale}'
+            if not scaled_img_path.exists():
+                scaled_img_path.mkdir()
+            for i in range(self.n_images):
+                imageio.imsave(str(scaled_img_path / f'{i:05d}.png'), self.gt[i].numpy())
         else:
             # Rays are not needed for testing
             self.h, self.w = self.h_full, self.w_full
