@@ -27,3 +27,6 @@ tb.sh
 *.sh
 
 blender/
+
+zip_temp/
+paper/

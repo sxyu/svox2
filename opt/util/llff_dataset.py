@@ -50,7 +50,7 @@ class LLFFDataset(DatasetBase):
         invz : int= 0,
         transform=None,
         render_style="",
-        hold_every=8,
+        hold_every=0, #8,
         offset=250,
         **kwargs
     ):
@@ -79,14 +79,20 @@ class LLFFDataset(DatasetBase):
         assert len(self.sfm.cams) == 1, \
                 "Currently assuming 1 camera for simplicity, " \
                 "please feel free to extend"
-
         self.imgs = []
         is_train_split = split.endswith('train')
         for i, ind in enumerate(self.sfm.imgs):
             img = self.sfm.imgs[ind]
-            img_train_split = ind % hold_every > 0
-            if is_train_split == img_train_split:
-                self.imgs.append(img)
+            self.imgs.append(img)
+            # if hold_every>0:
+            #     img_train_split = ind % hold_every > 0
+            #     if is_train_split == img_train_split:
+            #         self.imgs.append(img)
+            # else:
+            #     img_train_split = ind - train_idx < 0
+            #     if is_train_split == img_train_split:
+            #         self.imgs.append(img)
+                
         self.is_train_split = is_train_split
 
         self._load_images()
@@ -339,6 +345,8 @@ class SfMData:
                 print('Using pre-scaled images from', image_dir)
             else:
                 scaled_img_dir = "images"
+        else:
+            scaled_img_dir = "images"
 
         # load R,T
         (
@@ -372,11 +380,16 @@ class SfMData:
             cy = H / 2.0
             fx = f
             fy = f
+        elif len(intrinsic) == 5:
+            H, W, f, cx, cy = intrinsic
+            fx = f
+            fy = f
+            print('our collected data intrinsic is ',H, W, fx,fy, cx, cy)
         else:
             H, W, fx, fy, cx, cy = intrinsic
-
+        print('llff dataset intrinsic is',len(intrinsic), H, W, fx,fy, cx, cy)
         self.cams = {0: buildCamera(W, H, fx, fy, cx, cy)}
-
+        print('poses,images_path',scaled_img_dir,poses.shape,len(images_path))
         # create render_poses for video render
         self.render_poses = buildNerfPoses(render_poses)
 
@@ -389,11 +402,20 @@ class SfMData:
         if ref_img == "":
             # restore image id back from reference_view_id
             # by adding missing validation index
-            image_id = reference_view_id + 1  # index 0 alway in validation set
-            image_id = image_id + (image_id // self.hold_every)  # every 8 will be validation set
-            self.ref_cam = self.cams[0]
+            # if self.hold_every>0:
+            #     print('our reference view id is',reference_view_id)
+            #     image_id = reference_view_id + 1  # index 0 alway in validation set
+            #     image_id = image_id + (image_id // self.hold_every)  # every 8 will be validation set
+            #     self.ref_cam = self.cams[0]
 
-            self.ref_img = self.imgs[image_id]  # here is reference view from train set
+            #     self.ref_img = self.imgs[image_id]  # here is reference view from train set
+            #     print('we choose imageid',image_id)
+            # else:
+            print('our reference view id is',reference_view_id)
+            image_id = reference_view_id
+            self.ref_cam = self.cams[0]
+            self.ref_img = self.imgs[image_id]
+
 
         # if not set dmin/dmax, use LLFF dmin/dmax
         if (self.dmin < 0 or self.dmax < 0) and (

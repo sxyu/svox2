@@ -83,13 +83,19 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
         shape = 4
         # h, w, fx, fy, cx, cy
         intrinsic_arr = np.load(os.path.join(basedir, "hwf_cxcy.npy"))
-
-    poses = poses_arr[:, :-2].reshape([-1, 3, shape]).transpose([1, 2, 0])
+    if poses_arr.shape[1] == 19:
+        poses = poses_arr[:, :-4].reshape([-1, 3, shape]).transpose([1,2,0])
+    else:
+        poses = poses_arr[:, :-2].reshape([-1, 3, shape]).transpose([1, 2, 0])
     bds = poses_arr[:, -2:].transpose([1, 0])
 
     if not os.path.isfile(os.path.join(basedir, "hwf_cxcy.npy")):
         intrinsic_arr = poses[:, 4, 0]
         poses = poses[:, :4, :]
+        if poses_arr.shape[1] == 19:
+            cx_cy = np.array(poses_arr[0,15:17])
+            intrinsic_arr = np.concatenate((intrinsic_arr,cx_cy),axis=-1)
+        print('our current intrinsic_arr is',intrinsic_arr)
 
     img0 = [
         os.path.join(basedir, "images", f)
@@ -304,6 +310,7 @@ def load_llff_data(
     #  path_zflat=False,
     split_train_val=8,
     render_style="",
+    train_idx = 30
 ):
 
     # poses, bds, imgs = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
@@ -394,10 +401,13 @@ def load_llff_data(
 
     render_poses = np.array(render_poses).astype(np.float32)
     # reference_view_id should stay in train set only
+    # validation_ids = np.arange(poses.shape[0])
+    # validation_ids[::split_train_val] = -1
+    # validation_ids = validation_ids < 0
+    # train_ids = np.logical_not(validation_ids)
+
+    train_ids = np.arange(poses.shape[0])
     validation_ids = np.arange(poses.shape[0])
-    validation_ids[::split_train_val] = -1
-    validation_ids = validation_ids < 0
-    train_ids = np.logical_not(validation_ids)
     train_poses = poses[train_ids]
     train_bds = bds[train_ids]
     c2w = poses_avg(train_poses)

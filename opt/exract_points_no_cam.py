@@ -80,6 +80,11 @@ parser.add_argument(
     default=10,
     help="density for downsampling the pts, set to 0 to disable"
 )
+parser.add_argument(
+    "--scene_scale",
+    type=float,
+    default=2./3.,
+)
 
 args = parser.parse_args()
 device = 'cuda:0'
@@ -90,7 +95,7 @@ if args.data_path is not None:
     dset = datasets['auto'](args.data_path, split="train")
     scene_scale = dset.scene_scale
 else:
-    scene_scale = 2./3. # assume blender
+    scene_scale = args.scene_scale # assume blender
 
 if not path.isfile(args.ckpt):
     args.ckpt = path.join(args.ckpt, 'ckpt.npz')

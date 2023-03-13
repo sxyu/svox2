@@ -31,6 +31,53 @@ def write_vis_pcd(file, points, colors):
     pcd.colors = o3d.utility.Vector3dVector(colors)
     o3d.io.write_point_cloud(file, pcd)
 
+def sample_mesh(data_mesh, thresh, nn_engine):
+    vertices = np.asarray(data_mesh.vertices)
+    triangles = np.asarray(data_mesh.triangles)
+    tri_vert = vertices[triangles]
+    v1 = tri_vert[:,1] - tri_vert[:,0]
+    v2 = tri_vert[:,2] - tri_vert[:,0]
+    l1 = np.linalg.norm(v1, axis=-1, keepdims=True)
+    l2 = np.linalg.norm(v2, axis=-1, keepdims=True)
+    area2 = np.linalg.norm(np.cross(v1, v2), axis=-1, keepdims=True)
+    non_zero_area = (area2 > 0)[:,0]
+    l1, l2, area2, v1, v2, tri_vert = [
+        arr[non_zero_area] for arr in [l1, l2, area2, v1, v2, tri_vert]
+    ]
+    thr = thresh * np.sqrt(l1 * l2 / area2)
+    n1 = np.floor(l1 / thr)
+    n2 = np.floor(l2 / thr)
+
+    with mp.Pool() as mp_pool:
+        new_pts = mp_pool.map(sample_single_tri, ((n1[i,0], n2[i,0], v1[i:i+1], v2[i:i+1], tri_vert[i:i+1,0]) for i in range(len(n1))), chunksize=1024)
+
+
+    # print("[v1, v2, l1, l2]")
+    # print([v1, v2, l1, l2])
+
+    # print("area2")
+    # print(area2)
+    # print("[n1,n2]")
+    # print([n1,n2])
+
+    # print("thr")
+    # print(thr)
+    # print("new_pts")
+    # print(new_pts)
+    new_pts = np.concatenate(new_pts, axis=0)
+    data_pcd = np.concatenate([vertices, new_pts], axis=0)
+
+    # downsample
+    nn_engine.fit(data_pcd)
+    rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
+    mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
+    for curr, idxs in enumerate(rnn_idxs):
+        if mask[curr]:
+            mask[idxs] = 0
+            mask[curr] = 1
+    data_pcd = data_pcd[mask]
+    return data_pcd
+
 if __name__ == '__main__':
     mp.freeze_support()
 
@@ -42,6 +89,9 @@ if __name__ == '__main__':
     parser.add_argument('--patch_size', type=float, default=60)
     parser.add_argument('--max_dist', type=float, default=20)
     parser.add_argument('--visualize_threshold', type=float, default=10)
+    parser.add_argument('--run_alpha_shape', action='store_true', default=False,
+                        help='convert point to mesh, then eval cf')
+    parser.add_argument('--alpha_shape_alpha', type=float, default=0.5)
     parser.add_argument('--out_dir', type=str, default=None)
     # parser.add_argument('--del_ckpt', action='store_true', default=False)
     parser.add_argument('--no_pts_save', action='store_true', default=False)
@@ -51,15 +101,33 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     thresh = args.downsample_density
+    nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=thresh, algorithm='kd_tree', n_jobs=-1)
 
     pbar = tqdm(total=8)
     pbar.set_description('read data pcd')
     if os.path.isdir(args.input_path):
         data_pcd = np.load(f'{args.input_path}/pts.npy')
     else:
-        data_pcd = np.load(args.input_path)
+        if args.input_path.endswith('.obj') or args.input_path.endswith('.ply'):
+            # read from mesh
+            data_mesh = o3d.io.read_triangle_mesh(args.input_path)
+            data_pcd = sample_mesh(data_mesh, thresh, nn_engine)
+        else:
+            data_pcd = np.load(args.input_path)
 
     summary_writer = SummaryWriter(f'{os.path.dirname(args.input_path)}/../')
+
+    if args.run_alpha_shape:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(data_pcd)
+        print('running alpha shape')
+        data_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, args.alpha_shape_alpha)
+        print('alpha shape finished')
+
+        os.makedirs(args.out_dir, exist_ok=True)
+        o3d.io.write_triangle_mesh(f'{args.out_dir}/mesh_{args.alpha_shape_alpha}.ply', data_mesh)
+
+        data_pcd = sample_mesh(data_mesh, thresh, nn_engine)    
 
 
     pbar.update(1)
@@ -69,7 +137,6 @@ if __name__ == '__main__':
 
     pbar.update(1)
     pbar.set_description('downsample pcd')
-    nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=thresh, algorithm='kd_tree', n_jobs=-1)
     # nn_engine.fit(data_pcd)
     # rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
     # mask = np.ones(data_pcd.shape[0], dtype=np.bool_)

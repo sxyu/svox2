@@ -86,7 +86,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--input_path', default='',
                         help='path to predicted pts')
-    parser.add_argument('--gt_path', default='',
+    parser.add_argument('--gt_path', default=None,
                         help='path to extracted ground turth pts')
 
     parser.add_argument('--downsample_density', type=float, default=0.001)
@@ -111,11 +111,12 @@ if __name__ == '__main__':
     nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=thresh, algorithm='kd_tree', n_jobs=-1)
     summary_writer = SummaryWriter(f'{os.path.dirname(args.input_path)}/../')
 
-    if os.path.isdir(args.gt_path):
-        stl = np.load(f'{args.gt_path}/shape.npy')
-    else:
-        stl = np.load(args.gt_path)
-    mesh_eval = False
+    if args.gt_path is not None:
+        if os.path.isdir(args.gt_path):
+            stl = np.load(f'{args.gt_path}/shape.npy')
+        else:
+            stl = np.load(args.gt_path)
+        mesh_eval = False
 
     if args.input_path.endswith('.obj') or args.input_path.endswith('.ply'):
         mesh_eval = True
@@ -147,9 +148,16 @@ if __name__ == '__main__':
             data_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, args.alpha_shape_alpha)
             print('alpha shape finished')
 
+            os.makedirs(args.out_dir, exist_ok=True)
             o3d.io.write_triangle_mesh(f'{args.out_dir}/mesh_{args.alpha_shape_alpha}.ply', data_mesh)
 
             data_pcd = sample_mesh(data_mesh, thresh, nn_engine)    
+
+    if args.gt_path is None:
+        # save points only
+        os.makedirs(args.out_dir, exist_ok=True)
+        write_vis_pcd(f'{args.out_dir}/vis_d2s.ply', data_pcd)
+        exit(0)
 
 
     # with Timing('d2s'):
@@ -177,6 +185,7 @@ if __name__ == '__main__':
     B = np.array([[0,0,1]], dtype=np.float64)
     W = np.array([[1,1,1]], dtype=np.float64)
     data_pcd = data_pcd[dist_d2s[:,0] < max_dist] # remove redundent points
+    dist_d2s = dist_d2s[dist_d2s[:,0] < max_dist] # remove redundent points
     data_color = np.tile(B, (data_pcd.shape[0], 1))
     data_alpha = dist_d2s.clip(max=vis_dist) / vis_dist
     data_color = R * data_alpha + W * (1-data_alpha)

@@ -253,7 +253,7 @@ if hasattr(dset, 'pt_rescale'):
     all_pts = dset.world2rescale(all_pts)
 
 # in general, need to reverse scene rescale
-if dset.scene_scale is not None:
+if hasattr(dset, 'scene_scale') and dset.scene_scale is not None:
     all_pts = all_pts / dset.scene_scale
 
 if args.downsample_density > 0:

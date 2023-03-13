@@ -33,6 +33,7 @@ def main():
     parser.add_argument('--out_dir', default=None)
     parser.add_argument('--dataset', type=str, default=None)
     parser.add_argument('--is_mesh', action='store_true', default=False)
+    parser.add_argument('--zoom_factor', type=float, default=0.3)
 
     args = parser.parse_args()
 
@@ -102,12 +103,12 @@ def main():
             p.camera.position = t
             p.camera.focal = focal_point
             p.camera.up = up
-            p.show(screenshot=f'{args.out_dir}/{i:05d}.png', auto_close=False, zoom=1.225)
+            p.show(screenshot=f'{args.out_dir}/{i:05d}.png', auto_close=False, zoom=args.zoom_factor)
         else:
             cpos = (t, focal_point, up)
             obj.plot(color='white', cpos=cpos, 
                     screenshot=f'{args.out_dir}/{i:05d}.png', off_screen=True, eye_dome_lighting=True,
-                    point_size=1, show_axes=False, background=background, window_size=img_size, zoom=0.35,
+                    point_size=0.01, show_axes=False, background=background, window_size=img_size, zoom=args.zoom_factor,
                     notebook=False,
                     )
 
