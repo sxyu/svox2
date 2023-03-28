@@ -54,7 +54,7 @@ module load rhel8/default-amp              # REQUIRED - loads the basic environm
 #! Insert additional module load commands after this line if needed:
 
 source /usr/local/software/archive/linux-scientific7-x86_64/gcc-9/miniconda3-4.7.12.1-rmuek6r3f6p3v6fdj7o2klyzta3qhslh/etc/profile.d/conda.sh
-conda activate plenoxel
+conda activate voxel_sdf
 
 #! Full path to application executable: 
 #! application="/rds/user/tw554/hpc-work/workspace/hypernerf/foo.sh"
@@ -65,7 +65,7 @@ conda activate plenoxel
 options=""
 
 #! Work directory (i.e. where the job will run):
-workdir="/rds/user/tw554/rds-decomposenerf-qxpdOeYWi78/plenoxels/opt"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
+workdir="/rds/project/rds-qxpdOeYWi78/plenoxels/opt"  # The value of SLURM_SUBMIT_DIR sets workdir to the directory
                              # in which sbatch is run.
 
 #! Are you using OpenMP (NB this is unrelated to OpenMPI)? If so increase this

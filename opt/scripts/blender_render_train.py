@@ -20,8 +20,11 @@ RANDOM_VIEWS = True
 UPPER_VIEWS = True
 UPPER_VIEWS = True
 
-scene_name = 'lotus'
-out_path = f'/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/train/'
+argv = sys.argv
+argv = argv[argv.index("--") + 1:]
+scene_name = argv[0]
+# out_path = f'/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/train/'
+out_path = f'/rds/project/rds-qxpdOeYWi78/plenoxels/data/nerf_synthetic/{scene_name}/train/'
 VIEWS = 100
 
 
@@ -87,8 +90,8 @@ bpy.context.scene.render.film_transparent = True
 # Create collection for objects not to render with background
 
     
-objs = [ob for ob in bpy.context.scene.objects if ob.type in ('EMPTY') and 'Empty' in ob.name]
-bpy.ops.object.delete({"selected_objects": objs})
+# objs = [ob for ob in bpy.context.scene.objects if ob.type in ('EMPTY') and 'Empty' in ob.name]
+# bpy.ops.object.delete({"selected_objects": objs})
 
 def parent_obj_to_camera(b_camera):
     origin = (0, 0, 0)
@@ -163,5 +166,5 @@ for i in range(0, VIEWS):
         b_empty.rotation_euler[2] += radians(stepsize)
 
 if not DEBUG:
-    with open(fp + '/' + 'transforms.json', 'w') as out_file:
+    with open(fp + '/../' + 'transforms_train.json', 'w') as out_file:
         json.dump(out_data, out_file, indent=4)

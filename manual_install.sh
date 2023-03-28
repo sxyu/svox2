@@ -1,4 +1,4 @@
-LIB_PATH="/home/tw554/.conda/envs/plenoxel/lib/python3.8/site-packages/svox2"
+LIB_PATH="/rds/user/tw554/hpc-work/workspace/conda/envs/voxel_sdf/lib/python3.8/site-packages/svox2"
 
 cp svox2/svox2.py $LIB_PATH/svox2.py
 cp svox2/utils.py $LIB_PATH/utils.py

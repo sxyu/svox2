@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import shutil
 import cv2
+import pdb
 
 
 parser = argparse.ArgumentParser()
@@ -15,6 +16,7 @@ parser.add_argument('--out_dir', default=None)
 parser.add_argument('--scan', type=int, default=None)
 parser.add_argument('--is_mesh', action='store_true', default=False)
 parser.add_argument('--no_color', action='store_true', default=False)
+parser.add_argument('--mask_crop', action='store_true', default=False)
 
 args = parser.parse_args()
 
@@ -26,14 +28,13 @@ Path(args.out_dir).mkdir(exist_ok=True, parents=True)
 
 obj = pv.read(args.input_path)
 
-# mask = (obj.points < 1.5).all(axis=-1) & (obj.points > -1.5).all(axis=-1)
 
-# if args.mask_crop:
-#     filter_mask = ((obj.points > np.array([[0.1, 0.1, -100]])).all(axis=-1)) & ((obj.points < np.array([[100, 100, 0.]])).all(axis=-1))
-#     mask = mask & (~filter_mask)
 
-# obj['mask'] = mask
-# obj = obj.threshold(scalars='mask', value=True)
+if args.mask_crop:
+    mask = (obj.points[:, 0] < 0)
+    # pdb.set_trace()
+    obj['mask'] = mask
+    obj = obj.threshold(scalars='mask', value=True)
 
 img_size = (800,600)
 p = pv.Plotter(off_screen=True, notebook=False, window_size=img_size)

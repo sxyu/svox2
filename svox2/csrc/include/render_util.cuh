@@ -801,29 +801,50 @@ __device__ __inline__ void surface_to_cubic_equation_01(
      *         this is done by doing new_origin - voxel_l
     */
 
-    double const a00 = surface[0b000] * (1-origin[2]) + surface[0b001] * (origin[2]);
-    double const a01 = surface[0b010] * (1-origin[2]) + surface[0b011] * (origin[2]);
-    double const a10 = surface[0b100] * (1-origin[2]) + surface[0b101] * (origin[2]);
-    double const a11 = surface[0b110] * (1-origin[2]) + surface[0b111] * (origin[2]);
+    // double const a00 = surface[0b000] * (1-origin[2]) + surface[0b001] * (origin[2]);
+    // double const a01 = surface[0b010] * (1-origin[2]) + surface[0b011] * (origin[2]);
+    // double const a10 = surface[0b100] * (1-origin[2]) + surface[0b101] * (origin[2]);
+    // double const a11 = surface[0b110] * (1-origin[2]) + surface[0b111] * (origin[2]);
 
-    double const b00 = -surface[0b000] + surface[0b001];
-    double const b01 = -surface[0b010] + surface[0b011];
-    double const b10 = -surface[0b100] + surface[0b101];
-    double const b11 = -surface[0b110] + surface[0b111];
+    // double const b00 = -surface[0b000] + surface[0b001];
+    // double const b01 = -surface[0b010] + surface[0b011];
+    // double const b10 = -surface[0b100] + surface[0b101];
+    // double const b11 = -surface[0b110] + surface[0b111];
 
-    double const c0 = a00*(1-origin[1]) + a01*(origin[1]);
-    double const c1 = a10*(1-origin[1]) + a11*(origin[1]);
+    // double const c0 = a00*(1-origin[1]) + a01*(origin[1]);
+    // double const c1 = a10*(1-origin[1]) + a11*(origin[1]);
 
-    double const d0 = -(a00*dir[1] - dir[2]*b00*(1-origin[1])) + (a01*dir[1] + dir[2]*b01*(origin[1]));
-    double const d1 = -(a10*dir[1] - dir[2]*b10*(1-origin[1])) + (a11*dir[1] + dir[2]*b11*(origin[1]));
+    // double const d0 = -(a00*dir[1] - dir[2]*b00*(1-origin[1])) + (a01*dir[1] + dir[2]*b01*(origin[1]));
+    // double const d1 = -(a10*dir[1] - dir[2]*b10*(1-origin[1])) + (a11*dir[1] + dir[2]*b11*(origin[1]));
 
-    double const e0 = -dir[1]*dir[2]*b00 + dir[1]*dir[2]*b01;
-    double const e1 = -dir[1]*dir[2]*b10 + dir[1]*dir[2]*b11;
+    // double const e0 = -dir[1]*dir[2]*b00 + dir[1]*dir[2]*b01;
+    // double const e1 = -dir[1]*dir[2]*b10 + dir[1]*dir[2]*b11;
 
-    outs[3] = -e0*dir[0] + e1*dir[0];
-    outs[2] = -d0*dir[0]+e0*(1-origin[0]) + d1*dir[0]+e1*(origin[0]);
-    outs[1] = -c0*dir[0] + d0*(1-origin[0]) + c1*dir[0] + d1*(origin[0]);
-    outs[0] = c0*(1-origin[0]) + c1*(origin[0]);
+    // outs[3] = -e0*dir[0] + e1*dir[0];
+    // outs[2] = -d0*dir[0]+e0*(1-origin[0]) + d1*dir[0]+e1*(origin[0]);
+    // outs[1] = -c0*dir[0] + d0*(1-origin[0]) + c1*dir[0] + d1*(origin[0]);
+    // outs[0] = c0*(1-origin[0]) + c1*(origin[0]);
+
+    double const m00 = surface[0b000] * (1-origin[2]) + surface[0b001] * (origin[2]);
+    double const m01 = surface[0b010] * (1-origin[2]) + surface[0b011] * (origin[2]);
+    double const m10 = surface[0b100] * (1-origin[2]) + surface[0b101] * (origin[2]);
+    double const m11 = surface[0b110] * (1-origin[2]) + surface[0b111] * (origin[2]);
+
+    // double const c0 = m00*(1-origin[1]) + m01*(origin[1]);
+    // double const c1 = m10*(1-origin[1]) + m11*(origin[1]);
+
+    double const k0 = (m01*dir[1] + dir[2]*(surface[0b011] - surface[0b010])*(origin[1])) - (m00*dir[1] - dir[2]*(surface[0b001] - surface[0b000])*(1-origin[1]));
+    double const k1 = (m11*dir[1] + dir[2]*(surface[0b111] - surface[0b110])*(origin[1])) -(m10*dir[1] - dir[2]*(surface[0b101] - surface[0b100])*(1-origin[1])) ;
+
+    double const h0 = dir[1]*dir[2]*(surface[0b011] - surface[0b010]) -dir[1]*dir[2]*(surface[0b001] - surface[0b000]);
+    double const h1 = dir[1]*dir[2]*(surface[0b111] - surface[0b110]) -dir[1]*dir[2]*(surface[0b101] - surface[0b100]);
+
+    outs[3] = h1*dir[0]-h0*dir[0];
+    outs[2] = k1*dir[0]+h1*(origin[0])-k0*dir[0]+h0*(1-origin[0]);
+    outs[1] = (m10*(1-origin[1]) + m11*(origin[1]))*dir[0] + k1*(origin[0])-(m00*(1-origin[1]) + m01*(origin[1]))*dir[0] + k0*(1-origin[0]);
+    outs[0] = (m00*(1-origin[1]) + m01*(origin[1]))*(1-origin[0]) + (m10*(1-origin[1]) + m11*(origin[1]))*(origin[0]);
+
+
 }
 
 __device__ __inline__ void calc_surface_grad_01(

@@ -6,10 +6,41 @@ lr_sigma = 3e1
 lr_sh = 1e-2
 lambda_tv = 1e-5
 lambda_tv_sh = 1e-3
-
-n_iters = 50000
 log_depth_map = True
+n_eval_test = 3
+
+# n_iters = 50000
 
 # lambda_tv = 0
 # lambda_tv_sh = 0
+
+# n_iters = 10000
+# print_every = 10
+# eval_every_iter = 500
+# save_every = 5000
+# n_eval_train = 10
+# load_ckpt = False
+# log_depth_map = True 
+
+# ### learning rates ###
+# lr_sigma = 1e-1
+# lr_sigma_final = 1e-1
+# lr_sigma_delay_steps = 0
+# lr_sigma_decay_steps = 20000
+# lr_surface = 1e-2
+# lr_surface_final = 1e-2
+# lr_surface_delay_steps = 0
+# lr_surface_decay_steps = 20000
+# # lr_surface = 3e1
+# lr_sh = 1e-3
+
+
+# ### regularization ###
+# lambda_tv = 1e-3
+# lambda_tv_sh = 1e-3
+# # lambda_tv_surface = 1
+# # lambda_udf_var_loss = 1e-2
+# # lambda_density_lap_loss = 1e-3
+# # lambda_normal_loss = 1e-3
+# # tv_surface_sparsity = 0.1
 

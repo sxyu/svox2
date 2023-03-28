@@ -7,14 +7,16 @@ import json
 from pathlib import Path
 import numpy as np
 import sklearn.neighbors as skln
+import sys
 
-scene_name = "materials"
+argv = sys.argv
+scene_name = argv[1]
 
-data_json = f'/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/depth_render/transforms.json'
+data_json = f'/rds/project/rds-qxpdOeYWi78/plenoxels/data/nerf_synthetic/{scene_name}/transforms_train.json'
 j = json.load(open(data_json, "r"))
 frames = j['frames']
-exr_dir = Path(f'/home/tw554/plenoxels/opt/scripts/home/tw554/plenoxels/data/nerf_synthetic/{scene_name}/depth_render')
-out_path = str(Path(data_json).parent.parent / 'shape.npy')
+exr_dir = Path(f'/rds/project/rds-qxpdOeYWi78/plenoxels/opt/scripts/rds/project/rds-qxpdOeYWi78/plenoxels/data/nerf_synthetic/{scene_name}/train')
+out_path = str(Path(data_json).parent / 'shape.npy')
 print('output to:')
 print(out_path)
 
@@ -54,6 +56,10 @@ for i in range(len(frames)):
     all_pts.append(pts)
 
 all_pts = np.concatenate(all_pts, axis=0)[:, :3, 0]
+
+# bounding box:
+mask = (all_pts < 2.).all(axis=-1) & (all_pts > -2.).all(axis=-1)
+all_pts = all_pts[mask]
 
 # downsample density
 nn_engine = skln.NearestNeighbors(n_neighbors=1, radius=thresh, algorithm='kd_tree', n_jobs=-1)

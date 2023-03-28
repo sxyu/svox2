@@ -89,7 +89,7 @@ bpy.context.scene.render.film_transparent = True
 
     
 objs = [ob for ob in bpy.context.scene.objects if ob.type in ('EMPTY') and 'Empty' in ob.name]
-bpy.ops.object.delete({"selected_objects": objs})
+# bpy.ops.object.delete({"selected_objects": objs})
 
 def parent_obj_to_camera(b_camera):
     origin = (0, 0, 0)
