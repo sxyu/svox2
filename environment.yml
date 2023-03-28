@@ -1,5 +1,5 @@
 # run: conda env create -f environment.yml
-name: plenoxel
+name: alphasurf
 channels:
   - pytorch
   - defaults
@@ -22,8 +22,11 @@ dependencies:
       - moviepy
       - matplotlib
       - scipy>=1.6.0
-  - pytorch
-  - torchvision
-  - cudatoolkit
+      - sympy
+      - configargparse
+      - open3d
+  # - pytorch==1.11.0
+  # - torchvision
+  # - cudatoolkit==11.3.1
   - tqdm
 

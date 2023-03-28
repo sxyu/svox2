@@ -1,0 +1,24 @@
+
+reso = [[256, 256, 256], [512, 512, 512]]
+eval_every_iter = 10000
+upsamp_every = 38400
+lr_sigma = 3e1
+lr_sh = 1e-2
+lambda_tv = 1e-5
+lambda_tv_sh = 5e-3
+log_depth_map = True
+n_eval_test = 3
+
+thresh_type = "sigma"
+density_thresh = 5
+lambda_sparsity = 1e-12
+background_brightness = 0.5
+
+last_sample_opaque = False
+
+tv_early_only = 1
+
+llffhold = 100
+
+final_render_eval = True
+

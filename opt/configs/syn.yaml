@@ -1,46 +1,117 @@
+########## Source Config ##########
+nokernel = False
+renderer_backend = 'surf_trav'
+step_size = 0.5
+sigma_thresh = -10000
+thresh_type = 'alpha'
+alpha_upsample_thresh = 1e-8
+near_clip = 0.
+stop_thresh = -10000
 
-reso = [[256, 256, 256], [512, 512, 512]]
+surface_type = 'sdf'
+reso = [[512,512,512]]
+init_sigma = 0.01
+nosphereinit = True
+
+### learning rates ###
+img_lambda_l1_ratio = 0.
+
+
+lr_alpha = 1e-2
+lr_alpha_final = 1e-3
+lr_alpha_delay_mult = 1e-2
+lr_alpha_delay_steps = 25000
+lr_alpha_decay_steps = 50000
+
+lr_surface = 1e-5
+lr_surface_final = 1e-5
+lr_surface_delay_mult = 1e-2
+lr_surface_delay_steps = 25000
+lr_surface_decay_steps = 50000
+
+lr_sh_surf = 1e-3
+lr_sh_surf_decay_steps = 50000
+lr_sh_surf_delay_mult = 1
+lr_sh_surf_delay_steps = 0
+lr_sh_surf_final = 1e-3
+
+### NeRF Init ###
+load_pretrain_density_sh = ""
+no_surface_init_iters = 0
+surf_init_density_lvs = [10, 30, 50, 70, 90]
+surf_init_alpha_rescale = 0.005
+surface_init_reset_alpha = False
+visibility_pruning_scale = 0. # disable visibility pruning
+
+
+### Regularization ###
+lambda_tv_alpha = 1e-05
+lambda_tv_sh = 0
+lambda_tv_surface = 1e-3
+tv_surface_sparsity = 1
+surf_normal_loss_lambda_type = 'const'
+lambda_normal_loss = 1e-6
+norm_surface_sparsity = 1
+no_surf_norm_con_check = True
+surf_norm_reg_ignore_empty = False
+surf_norm_reg_l1 = True
+
+lambda_l_di = 0
+l_di_alpha_thresh = 0.1
+
+lambda_sparsity = 0
+lambda_inplace_alpha_sparsify = 0
+lambda_sparsify_alpha = 1e-9
+lambda_sparsify_surf = 0
+sparsify_surf_decrease = True
+sparsify_surf_thresh = 0.15
+alpha_sparsify_bound = 0
+surf_sparsify_bound = -0.1
+alpha_surf_sparsify_sparsity = 0.1
+delay_sparsify_surf = 25000
+
+lambda_l_dist = 0
+no_fake_sample_l_dist = True
+lambda_l_entropy = 1e-4
+
+lambda_conv_mode_samp = 1e-06
+conv_mode_step = 10000
+
+
+trunc_vol_a_decay_type = 'linear'
+truncated_vol_render_a = 5
+truncated_vol_render_a_final = 2
+truncated_vol_render_a_decay_steps = 10000
+
+only_outward_intersect = True
+truncated_vol_render = True
+trunc_vol_render_lv_remove = False
+trunc_vol_weight_min = 0
+
+### Logging ###
+n_iters = 50000
+print_every = 100
 eval_every_iter = 10000
-upsamp_every = 38400
-lr_sigma = 3e1
-lr_sh = 1e-2
-lambda_tv = 1e-5
-lambda_tv_sh = 1e-3
-log_depth_map = True
+# extract_mesh_every = 10000
+# mesh_sigma_thresh = None
+save_every = -1
 n_eval_test = 3
+n_eval_train = 0
+load_ckpt = False
+log_depth_map = True
+log_normal_map = True
+log_alpha_map = False
+log_mse_image = False
+save_all_ckpt = False
+no_surface_init_debug_ckpt = False
+tune_mode = True
+log_depth_map_use_thresh = -10
+final_render_eval = True
 
-# n_iters = 50000
-
-# lambda_tv = 0
-# lambda_tv_sh = 0
-
-# n_iters = 10000
-# print_every = 10
-# eval_every_iter = 500
-# save_every = 5000
-# n_eval_train = 10
-# load_ckpt = False
-# log_depth_map = True 
-
-# ### learning rates ###
-# lr_sigma = 1e-1
-# lr_sigma_final = 1e-1
-# lr_sigma_delay_steps = 0
-# lr_sigma_decay_steps = 20000
-# lr_surface = 1e-2
-# lr_surface_final = 1e-2
-# lr_surface_delay_steps = 0
-# lr_surface_decay_steps = 20000
-# # lr_surface = 3e1
-# lr_sh = 1e-3
+log_pts = False
+eval_cf = False
+surf_eval_n_sample = 3
 
 
-# ### regularization ###
-# lambda_tv = 1e-3
-# lambda_tv_sh = 1e-3
-# # lambda_tv_surface = 1
-# # lambda_udf_var_loss = 1e-2
-# # lambda_density_lap_loss = 1e-3
-# # lambda_normal_loss = 1e-3
-# # tv_surface_sparsity = 0.1
+
 

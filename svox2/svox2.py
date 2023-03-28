@@ -13,7 +13,6 @@ import numpy as np
 import sympy
 from sympy.solvers import solve
 from sympy import Symbol
-import kaolin
 import mcubes
 
 _C = utils._get_c_extension()
@@ -595,7 +594,7 @@ class SparseGrid(nn.Module):
         device: Union[torch.device, str] = "cpu",
         surface_type: int = SURFACE_TYPE_NONE,
         surface_init: str = None, # methods used to init sdf data
-        use_octree: bool = True,
+        use_octree: bool = False,
         trainable_fake_sample_std: bool = False,
         force_alpha: bool = False, # clamp alpha to be non-trivial to force surface learning
     ):
@@ -975,6 +974,7 @@ class SparseGrid(nn.Module):
         self.use_octree = use_octree
 
         if use_octree:
+            import kaolin
             # create place holder feature grid
             # this grid is empty and is only used for ray-voxel intersection determination
             feature_grid = torch.ones(1, 1, reso[0], reso[1], reso[2]).to(device)
@@ -1524,6 +1524,7 @@ class SparseGrid(nn.Module):
         voxels_i = torch.zeros(B, device=origins.device, dtype=torch.long)
 
         if self.use_octree:
+            import kaolin
             # move camera origin to near clip
             ray_o = origins + dirs * self.opt.near_clip * self._scaling.to(device=dirs.device) * gsz_cu.mean()
             # re-scale and shift camera pos to [-1, +1]
