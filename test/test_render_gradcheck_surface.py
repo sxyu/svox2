@@ -18,13 +18,13 @@ torch.random.manual_seed(2)
 # eq.backward()
 # print(x.grad)
 
-# torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)
 
 device = 'cuda:0'
 surface_type = svox2.SURFACE_TYPE_SDF
 dtype = torch.float32
 grid = svox2.SparseGrid(
-                     reso=16,
+                     reso=128,
                      center=[0.0, 0.0, 0.0],
                      radius=[1.0, 1.0, 1.0],
                      basis_dim=9,
@@ -35,7 +35,11 @@ grid = svox2.SparseGrid(
                      surface_type=surface_type,
                      use_sphere_bound=False,
                      trainable_fake_sample_std=True,
-                     surface_init='sphere')
+                     surface_init='sphere',
+                     )
+
+
+
 # grid.opt.backend = 'surface'
 grid.opt.backend = 'surf_trav'
 grid.opt.sigma_thresh = -20
@@ -43,6 +47,12 @@ grid.opt.stop_thresh = 0.0
 grid.opt.background_brightness = 1.0
 grid.opt.near_clip = 0.0
 grid.opt.step_size = 0.01
+# grid.opt.only_outward_intersect = True
+grid.opt.truncated_vol_render = True
+grid.truncated_vol_render_a = 5
+
+# grid.level_set_data = torch.tensor([0.1, 0, -0.1], dtype=grid.surface_data.dtype, device=grid.surface_data.device)
+grid.level_set_data = torch.tensor([0.], dtype=grid.surface_data.dtype, device=grid.surface_data.device)
 
 grid.opt.surf_fake_sample = True
 # grid.fake_sample_std = 1
@@ -65,6 +75,8 @@ grid.density_data.data[:] = 10
 # grid.sh_data.data[:].normal_(std=0.1)
 grid.density_data.data[:].normal_(mean=0.5, std=0.1)
 grid.surface_data.data += torch.rand_like(grid.surface_data.data) -0.5
+
+
 if grid.use_background:
 	grid.background_data.data[..., -1] = 0.5
 	grid.background_data.data[..., :-1] = torch.randn_like(
@@ -76,7 +88,22 @@ if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
 
 
 
-pts = grid.extract_pts(density_thresh=-100)
+# pts = grid.extract_pts(density_thresh=-100)
+
+# pretrained_ckpt_path = '/home/tw554/plenoxels/opt/ckpt/nerf/lego/ckpt.npz'
+
+# z = np.load(pretrained_ckpt_path, allow_pickle=True)
+# sh_data = z.f.sh_data
+# density_data = z.f.density_data
+# links = z.f.links
+# sh_data = torch.from_numpy(sh_data.astype(np.float32)).to(device=device)
+# density_data = torch.from_numpy(density_data.astype(np.float32)).to(device=device)
+# grid.sh_data.data = sh_data
+# grid.density_data.data = density_data
+
+# grid.links = torch.from_numpy(links).to(device=device)
+# grid.capacity = grid.sh_data.size(0)
+# grid.accelerate()
 
 ENABLE_TORCH_CHECK = True
 #  N_RAYS = 5000 #200 * 200
@@ -101,6 +128,7 @@ rays = svox2.Rays(origins, dirs)
 
 
 # IDX = torch.tensor([2655], dtype=torch.long) # 
+# IDX = torch.tensor([2000], dtype=torch.long) # 
 IDX = torch.tensor([2500], dtype=torch.long) # 
 # IDX = torch.arange(0, 2500, dtype=torch.long)
 rays.origins = rays.origins[IDX, ...]
@@ -128,13 +156,23 @@ grid.requires_grad_(True)
 # with Timing("ours_backward"):
 #     s.backward()
 
-
-out = grid.volume_render_fused(rays, rgb_gt,
-        lambda_l2 = lambda_l2,
-        lambda_l1 = lambda_l1,
-        lambda_l_dist = 0.,
-        lambda_l_entropy = 1.,
-        no_surface=False)
+lambda_sparsity_loss = 0.
+lambda_l_entropy = 0.
+lambda_conv_mode_samp = 1.
+with Timing("ours"):
+    out = grid.volume_render_fused(rays, rgb_gt,
+            lambda_l2 = lambda_l2,
+            lambda_l1 = lambda_l1,
+            lambda_l_dist = 0.,
+            lambda_l_entropy = lambda_l_entropy,
+            no_norm_weight_l_entropy = True,
+            lambda_l_samp_dist = 0.,
+            sparsity_loss=lambda_sparsity_loss,
+            surf_sparse_alpha_thresh=0.1,
+            lambda_inplace_surf_sparse=0.,
+            lambda_inwards_norm_loss=0.,
+            lambda_conv_mode_samp=lambda_conv_mode_samp,
+            no_surface=False)
 
 samps = out['rgb']
 
@@ -163,7 +201,9 @@ if grid.fake_sample_std.requires_grad:
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
-        out = grid.volume_render(rays, use_kernel=False, allow_outside=False, run_backward=True)
+        out = grid.volume_render(rays, use_kernel=False, allow_outside=False, run_backward=True, 
+                                 lambda_l_dist=0, lambda_l_entropy=lambda_l_entropy, sparsity_loss=lambda_sparsity_loss,
+                                 lambda_conv_mode_samp=lambda_conv_mode_samp)
         sampt = out['rgb']
     s = F.mse_loss(sampt, rgb_gt) * lambda_l2 + torch.abs(sampt - rgb_gt).mean() * lambda_l1
     print(s)
@@ -197,7 +237,7 @@ if ENABLE_TORCH_CHECK:
     if grid.use_background:
         print('err_background_grad\n', Ebg.max())
         print(' mean\n', Ebg.mean())
-    if grid.fake_sample_std.requires_grad:
+    if grid.fake_sample_std.requires_grad and grid.fake_sample_std.grad is not None:
         fake_sample_std_grad_t = grid.fake_sample_std.grad.clone().cpu()
         
         E_fake_sample_std = torch.abs(fake_sample_std_grad_s - fake_sample_std_grad_t)

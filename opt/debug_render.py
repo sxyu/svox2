@@ -45,20 +45,18 @@ USE_KERNEL = not args.nokernel
 if args.surface_type is None:
     args.surface_type = 'none'
 
-# USE_KERNEL = False
-
 torch.manual_seed(20200823)
 np.random.seed(20200823)
 
 DATASET_TYPE = 'test'
-IMG_ID = 0
+IMG_ID = 46
 P_COORD = torch.tensor([ # matlibplot [x, y] (no reverse)
-    [450, 93],
+    [167, 315],
     ])
 
 # note that it gives rgb[P_y, P_x]
 
-P_COORD = None
+# P_COORD = None
 
 factor = 1
 dset = datasets[args.dataset_type](
@@ -101,16 +99,11 @@ elif grid.basis_type == svox2.BASIS_TYPE_MLP:
                     lr=args.lr_basis
                 )
 
+# args.step_size = 0.01
 
-if args.renderer_backend in ['surface', 'surf_trav']:
-    # convert density threshold to alpha threshold
-    args.sigma_thresh = np.log(args.sigma_thresh / (1. - args.sigma_thresh))
-
-args.step_size = 0.01
-
-grid.requires_grad_(False)
+grid.requires_grad_(True)
 config_util.setup_render_opts(grid.opt, args)
-print('Render options', grid.opt)
+
 
 resample_cameras = [
         svox2.Camera(c2w.to(device=device),
@@ -130,23 +123,25 @@ if args.enable_random:
 
 epoch_id = -1
 
-with torch.no_grad():
+grid.opt.surf_fake_sample = False
 
-    c2w = dset.c2w[IMG_ID].to(device=device)
-    cam = svox2.Camera(c2w,
-                        dset.intrins.get('fx', IMG_ID),
-                        dset.intrins.get('fy', IMG_ID),
-                        dset.intrins.get('cx', IMG_ID),
-                        dset.intrins.get('cy', IMG_ID),
-                        width=dset.get_image_size(IMG_ID)[1],
-                        height=dset.get_image_size(IMG_ID)[0],
-                        ndc_coeffs=dset.ndc_coeffs)
-    rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, debug_pixels=P_COORD)
-    rgb_pred_test = torch.clamp_max(rgb_pred_test, 1.)
-    rgb_pred_test = rgb_pred_test.cpu().detach().numpy()
+print('Render options', grid.opt)
 
-    if P_COORD is None:
-        imageio.imsave(path.join(args.train_dir, f'debug_{grid.step_id}.png'), rgb_pred_test)
+c2w = dset.c2w[IMG_ID].to(device=device)
+cam = svox2.Camera(c2w,
+                    dset.intrins.get('fx', IMG_ID),
+                    dset.intrins.get('fy', IMG_ID),
+                    dset.intrins.get('cx', IMG_ID),
+                    dset.intrins.get('cy', IMG_ID),
+                    width=dset.get_image_size(IMG_ID)[1],
+                    height=dset.get_image_size(IMG_ID)[0],
+                    ndc_coeffs=dset.ndc_coeffs)
+rgb_pred_test = grid.volume_render_image(cam, use_kernel=USE_KERNEL, debug_pixels=P_COORD)
+rgb_pred_test = torch.clamp_max(rgb_pred_test, 1.)
+rgb_pred_test = rgb_pred_test.cpu().detach().numpy()
+
+if P_COORD is None:
+    imageio.imsave(path.join(args.train_dir, f'debug_{grid.step_id}.png'), rgb_pred_test)
 
 
 

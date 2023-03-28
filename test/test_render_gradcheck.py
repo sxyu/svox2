@@ -2,6 +2,7 @@ import svox2
 import torch
 import torch.nn.functional as F
 from util import Timing
+import numpy as np
 
 torch.random.manual_seed(2)
 #  torch.random.manual_seed(8289)
@@ -9,15 +10,16 @@ torch.random.manual_seed(2)
 device = 'cuda:0'
 dtype = torch.float32
 grid = svox2.SparseGrid(
-                     reso=128,
+                     reso=64,
                      center=[0.0, 0.0, 0.0],
                      radius=[1.0, 1.0, 1.0],
                      basis_dim=9,
                      use_z_order=True,
+                     use_sphere_bound=True,
                      device=device,
                      background_nlayers=0,
                      basis_type=svox2.BASIS_TYPE_SH)
-grid.opt.backend = 'nvol'
+grid.opt.backend = 'cuvol'
 grid.opt.sigma_thresh = 0.0
 grid.opt.stop_thresh = 0.0
 grid.opt.background_brightness = 1.0
@@ -57,7 +59,23 @@ dirs /= torch.norm(dirs, dim=-1, keepdim=True)
 #  breakpoint()
 rays = svox2.Rays(origins, dirs)
 
-rgb_gt = torch.zeros((origins.size(0), 3), device=device, dtype=dtype)
+origins = torch.randn((N_RAYS, 3), device=device, dtype=dtype) * 3
+dirs = torch.randn((N_RAYS, 3), device=device, dtype=dtype)
+
+origins = torch.tensor(np.load('/home/tw554/plenoxels/test/test_origins.npy'), device=device, dtype=dtype)
+dirs = torch.tensor(np.load('/home/tw554/plenoxels/test/test_dirs.npy'), device=device, dtype=dtype)
+
+dirs /= torch.norm(dirs, dim=-1, keepdim=True)
+
+rays = svox2.Rays(origins, dirs)
+
+# IDX = torch.tensor([2655], dtype=torch.long) # 
+IDX = torch.tensor([2500], dtype=torch.long) # 
+# IDX = torch.arange(0, 2500, dtype=torch.long)
+rays.origins = rays.origins[IDX, ...]
+rays.dirs = rays.dirs[IDX, ...]
+
+rgb_gt = torch.zeros((rays.origins.size(0), 3), device=device, dtype=dtype)
 
 #  grid.requires_grad_(True)
 
@@ -65,7 +83,7 @@ rgb_gt = torch.zeros((origins.size(0), 3), device=device, dtype=dtype)
 #  sampt = grid.volume_render(grid, origins, dirs, use_kernel=False)
 
 with Timing("ours"):
-    samps = grid.volume_render(rays, use_kernel=True)
+    samps = grid.volume_render(rays, use_kernel=True)['rgb']
 s = F.mse_loss(samps, rgb_gt)
 
 print(s)
@@ -85,7 +103,7 @@ if grid.use_background:
 
 if ENABLE_TORCH_CHECK:
     with Timing("torch"):
-        sampt = grid.volume_render(rays, use_kernel=False)
+        sampt = grid.volume_render(rays, use_kernel=False)['rgb']
     s = F.mse_loss(sampt, rgb_gt)
     with Timing("torch_backward"):
         s.backward()

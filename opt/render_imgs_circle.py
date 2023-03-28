@@ -37,7 +37,7 @@ parser.add_argument(
                     "--height", "-H", type=float, default=None, help="Rendering image height (only if not --traj)"
                             )
 parser.add_argument(
-	"--num_views", "-N", type=int, default=10,
+	"--num_views", "-N", type=int, default=200,
     help="Number of frames to render"
 )
 
@@ -130,8 +130,34 @@ args.offset = np.array(list(map(float, args.offset.split(","))))
 # args.traj_type = 'front'
 # args.traj_type = 'circle'
 if args.traj_type == 'spiral':
-    angles = np.linspace(-180, 180, args.num_views + 1)[:-1]
-    elevations = np.linspace(args.elevation, args.elevation2, args.num_views)
+    # angles = np.linspace(-180, 180, args.num_views + 1)[:-1]
+    # elevations = np.linspace(args.elevation, args.elevation2, args.num_views)
+    # c2ws = [
+    #     pose_spherical(
+    #         angle,
+    #         ele,
+    #         args.radius,
+    #         args.offset,
+    #         vec_up=args.vec_up,
+    #     )
+    #     for ele, angle in zip(elevations, angles)
+    # ]
+    # c2ws += [
+    #     pose_spherical(
+    #         angle,
+    #         ele,
+    #         args.radius,
+    #         args.offset,
+    #         vec_up=args.vec_up,
+    #     )
+    #     for ele, angle in zip(reversed(elevations), angles)
+    # ]
+
+    repeats = 10
+
+    angles = np.linspace(-180, 180, (args.num_views) // repeats + 1)[:-1]
+    angles = np.concatenate([angles for _ in range(repeats)])
+    elevations = np.linspace(-90, 90, args.num_views)
     c2ws = [
         pose_spherical(
             angle,
@@ -141,16 +167,6 @@ if args.traj_type == 'spiral':
             vec_up=args.vec_up,
         )
         for ele, angle in zip(elevations, angles)
-    ]
-    c2ws += [
-        pose_spherical(
-            angle,
-            ele,
-            args.radius,
-            args.offset,
-            vec_up=args.vec_up,
-        )
-        for ele, angle in zip(reversed(elevations), angles)
     ]
 elif args.traj_type == 'front':
     args.vec_up = args.vec_up @ np.array([[-1, 0, 0],

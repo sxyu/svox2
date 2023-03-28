@@ -5,7 +5,7 @@
 # DATA_DIR="../data/dtu/dtu_scan63"
 # CONFIG="./configs/udf_dtu.yaml"
 
-EXP_NAME="surface_cuda/surf_trav_density_init_3"
+EXP_NAME="surface_cuda/256_ex_norm"
 DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/surface_cuda_syn.yaml"
 
@@ -25,5 +25,5 @@ echo CONFIG $CONFIG
 
 python opt.py -t $CKPT_DIR $DATA_DIR -c $CONFIG
 
-python exract_points.py $CKPT_DIR $DATA_DIR --renderer_backend "surf_trav" --out_path "$CKPT_DIR/pts.npy"
+# python exract_points.py $CKPT_DIR $DATA_DIR --renderer_backend "surf_trav" --out_path "$CKPT_DIR/pts.npy"
 

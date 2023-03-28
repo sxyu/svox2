@@ -1,0 +1,20 @@
+
+reso = [[256, 256, 256], [512, 512, 512]]
+eval_every_iter = 10000
+upsamp_every = 38400
+lr_sigma = 3e1
+lr_sh = 1e-2
+lambda_tv = 1e-5
+lambda_tv_sh = 1e-3
+log_depth_map = True
+n_eval_test = 3
+
+final_render_eval = True
+
+# new setting
+tv_early_only = 0
+lambda_tv = 5e-4
+lambda_tv_sh = 5e-3
+lambda_sparsity = 1e-10
+
+near_clip = 0.5

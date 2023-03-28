@@ -18,7 +18,7 @@ DATA_DIR="../data/nerf_synthetic/lego"
 CONFIG="./configs/sdf_syn.yaml"
 
 
-CKPT_DIR=ckpt/$EXP_NAME
+CKPT_DIR=ckpt/$(basename $DATA_DIR)/$EXP_NAME
 mkdir -p $CKPT_DIR
 
 echo CKPT $CKPT_DIR
