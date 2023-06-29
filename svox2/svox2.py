@@ -1664,15 +1664,18 @@ class SparseGrid(nn.Module):
         X, Y, Z = torch.meshgrid(X, Y, Z)
         points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
 
+        links_flattened = self.links.view(-1)
+        mask = links_flattened >= 0
         mask = self.links.view(-1) >= 0
         points = points[mask.to(device=device)]
         index = svox.LocalIndex(points)
         print("n_refine", n_refine)
         for i in tqdm(range(n_refine)):
             t[index].refine()
+        t[index, :-1] = self.sh_data.data[links_flattened[mask].long()].to(device=device)
+        t[index, -1:] = self.density_data.data[links_flattened[mask].long()].to(device=device)
 
-        t[index, :-1] = self.sh_data.data.to(device=device)
-        t[index, -1:] = self.density_data.data.to(device=device)
+
         return t
 
     def tv(self, logalpha: bool=False, logalpha_delta: float=2.0,
